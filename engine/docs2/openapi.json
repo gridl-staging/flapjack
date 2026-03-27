@@ -3282,7 +3282,7 @@
           "experiments"
         ],
         "summary": "Create a new A/B test experiment from an Algolia-compatible request body.",
-        "description": "Validates and converts the incoming DTO, persists the experiment via the store,\nand returns the assigned numeric ID.\n\n# Returns\n\n`201 Created` with the numeric AB test ID and index name on success,\nor an error response if the store is unavailable or validation fails.",
+        "description": "Validates and converts the incoming DTO, persists the experiment via the store,\nand returns the assigned numeric ID.\n\n# Returns\n\n`200 OK` with the numeric AB test ID and index name on success,\nor an error response if the store is unavailable or validation fails.",
         "operationId": "create_experiment",
         "requestBody": {
           "description": "A/B test creation payload",
@@ -3296,7 +3296,7 @@
           "required": true
         },
         "responses": {
-          "201": {
+          "200": {
             "description": "Experiment created",
             "content": {
               "application/json": {

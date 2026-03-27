@@ -363,7 +363,7 @@ fn experiment_crud_lifecycle_endpoints_use_concrete_schemas() {
     );
     assert_schema_ref(
         &doc,
-        "/paths/~12~1abtests/post/responses/201/content/application~1json/schema/$ref",
+        "/paths/~12~1abtests/post/responses/200/content/application~1json/schema/$ref",
         "#/components/schemas/AlgoliaCreateAbTestResponse",
     );
     assert_schema_ref(

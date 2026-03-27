@@ -17,7 +17,7 @@ Launch sign-off is still active, followed by the standing post-launch items:
 
 | # | Work Item | Status | Details |
 |---|-----------|--------|---------|
-| LAUNCH-1 | Replacement staging verification | In progress | Run `23663387346` at commit `acd5d9c` is the current gate after failed run `23660898127` exposed the first regressions and replacement run `23662728127` surfaced one more stale Stage 4 A/B smoke assertion. |
+| LAUNCH-1 | Replacement staging verification | In progress | The next staging rerun is now the real gate: review of the prelaunch fixes found that `POST /2/abtests` had drifted to `201 Created` in runtime/tests/OpenAPI even though Algolia’s current A/B testing contract is `200 OK`. The local correction is validated; staging must be re-synced and rerun from that fix. |
 | LAUNCH-2 | Launch proof pack and top-level truth-sync | In progress | Finalize verification notes, run deferred validation scripts, and align public docs with the exact staging state that ships. |
 | PR-11 | Distributed tracing (OpenTelemetry) | Not started | OTLP export behind `otel` feature flag. Structured logging groundwork shipped. |
 | PR-12 | Runbooks & incident response | Not started | Build from real production incidents. |

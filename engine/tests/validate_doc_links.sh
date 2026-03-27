@@ -1,7 +1,8 @@
 #!/bin/sh
 # validate_doc_links.sh — Check that internal markdown links resolve to real files.
 #
-# Scans README.md, ROADMAP.md, engine/README.md, and engine/docs2/FEATURES.md
+# Scans the public/root routing docs plus the linked strategy docs that act as
+# the current source of truth for launch status.
 # for relative markdown links (excluding http/https/mailto/anchors) and verifies
 # each target exists on disk.
 #
@@ -13,7 +14,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-DOCS="README.md ROADMAP.md engine/README.md engine/docs2/FEATURES.md"
+DOCS="README.md PRIORITIES.md ROADMAP.md engine/README.md engine/docs/HIGHEST_LEVEL.md engine/docs2/FEATURES.md engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md"
 FAILURE_LOG=$(mktemp "${TMPDIR:-/tmp}/flapjack-link-failures.XXXXXX")
 COUNT_LOG=$(mktemp "${TMPDIR:-/tmp}/flapjack-link-counts.XXXXXX")
 

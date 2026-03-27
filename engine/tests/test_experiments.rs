@@ -53,7 +53,7 @@ async fn create_experiment(app: &Router, index_name: &str) -> i64 {
         create_experiment_body(index_name),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     json["abTestID"]
         .as_i64()

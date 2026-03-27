@@ -139,7 +139,7 @@ fn validate_conclusion_winner(winner: Option<String>) -> Result<Option<String>, 
 ///
 /// # Returns
 ///
-/// `201 Created` with the numeric AB test ID and index name on success,
+/// `200 OK` with the numeric AB test ID and index name on success,
 /// or an error response if the store is unavailable or validation fails.
 #[utoipa::path(
     post,
@@ -147,7 +147,7 @@ fn validate_conclusion_winner(winner: Option<String>) -> Result<Option<String>, 
     tag = "experiments",
     request_body(content = AlgoliaCreateAbTestRequest, description = "A/B test creation payload"),
     responses(
-        (status = 201, description = "Experiment created", body = AlgoliaCreateAbTestResponse),
+        (status = 200, description = "Experiment created", body = AlgoliaCreateAbTestResponse),
         (status = 400, description = "Invalid experiment configuration"),
         (status = 409, description = "Experiment already exists"),
         (status = 503, description = "Experiment store unavailable")
@@ -177,7 +177,7 @@ pub async fn create_experiment(
         Ok(created) => {
             let numeric_id = store.get_numeric_id(&created.id).unwrap_or(0);
             (
-                StatusCode::CREATED,
+                StatusCode::OK,
                 Json(AlgoliaCreateAbTestResponse {
                     ab_test_id: numeric_id,
                     index: index_name,
