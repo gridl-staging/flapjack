@@ -1,9 +1,12 @@
 //! Batch-search invalid-input regressions kept separate so the main multi-index file stays below the hard size limit.
 use super::*;
 
+type SeedDoc = Vec<(&'static str, &'static str)>;
+type SeedDocs = Vec<SeedDoc>;
+
 async fn batch_validation_error_response(
     request_body: Value,
-    seeded_index: Option<(&str, Vec<Vec<(&str, &str)>>)>,
+    seeded_index: Option<(&str, SeedDocs)>,
 ) -> Value {
     let tmp = TempDir::new().unwrap();
     let state = make_basic_search_state(&tmp);

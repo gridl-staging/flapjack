@@ -831,8 +831,8 @@ fn compare_ranking_sort_value_orders_same_type_correctly() {
     );
     assert_eq!(
         compare_ranking_sort_value(
-            &RankingSortValue::Float(3.14),
-            &RankingSortValue::Float(2.71)
+            &RankingSortValue::Float(std::f64::consts::PI),
+            &RankingSortValue::Float(std::f64::consts::E)
         ),
         Ordering::Greater
     );

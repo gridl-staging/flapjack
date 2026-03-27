@@ -182,7 +182,7 @@ mod tests {
         let manager = IndexManager::new(temp_dir.path());
         manager.create_tenant("products").unwrap();
 
-        let docs = vec![
+        let docs = [
             serde_json::json!({"objectID": "a", "title": "Laptop alpha"}),
             serde_json::json!({"objectID": "b", "title": "Laptop beta"}),
             serde_json::json!({"objectID": "c", "title": "Laptop gamma"}),

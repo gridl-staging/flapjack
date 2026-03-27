@@ -1227,7 +1227,7 @@ mod tests {
             None => {} // correct — no security declared
             Some(arr) => {
                 assert!(
-                    arr.as_array().map_or(true, |a| a.is_empty()),
+                    arr.as_array().is_none_or(|a| a.is_empty()),
                     "/health must not require auth, found: {:?}",
                     arr
                 );

@@ -15,6 +15,7 @@ pub fn spawn_startup_catchup(state: Arc<AppState>) {
 }
 
 /// Legacy delayed startup catch-up path. Public for testing.
+#[allow(clippy::cognitive_complexity)]
 pub async fn run_startup_catchup(state: Arc<AppState>) {
     if state.replication_manager.is_none() {
         return; // Standalone mode — nothing to do
@@ -35,6 +36,7 @@ pub async fn run_startup_catchup(state: Arc<AppState>) {
 /// timeout. Waits for all enqueued writes to commit before returning so the
 /// node does not serve stale data. If catch-up cannot complete within the
 /// timeout, startup fails instead of serving a stale replica.
+#[allow(clippy::cognitive_complexity)]
 pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
     let has_peers = state
         .replication_manager
@@ -310,6 +312,7 @@ fn remove_path_if_exists(path: &std::path::Path) -> Result<(), String> {
 }
 
 /// TODO: Document catchup_single_tenant.
+#[allow(clippy::cognitive_complexity)]
 async fn catchup_single_tenant(
     state: &AppState,
     repl_mgr: &Arc<flapjack_replication::manager::ReplicationManager>,

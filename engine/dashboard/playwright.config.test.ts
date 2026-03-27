@@ -64,7 +64,9 @@ afterEach(() => {
 
 describe('playwright.config startup contracts', () => {
   it('uses clone-local dashboard URL and expected lifecycle projects', async () => {
-    const config = await loadPlaywrightConfig()
+    // Force the local/non-CI branch explicitly so this contract test is stable
+    // even when the Vitest process itself is running under CI=true.
+    const config = await loadPlaywrightConfig('')
 
     expect(config.use?.baseURL).toBe(mockInstance.dashboardBaseUrl)
     expect(config.webServer).toMatchObject({

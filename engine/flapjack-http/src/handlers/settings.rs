@@ -342,6 +342,7 @@ pub async fn set_settings(
 }
 
 /// TODO: Document merge_settings_payload.
+#[allow(clippy::cognitive_complexity)]
 fn merge_settings_payload(
     settings: &mut IndexSettings,
     payload: SetSettingsRequest,

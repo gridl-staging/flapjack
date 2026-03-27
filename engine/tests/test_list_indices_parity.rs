@@ -393,9 +393,8 @@ async fn test_list_indices_replica_metadata_positive() {
         "primary_idx",
         "virtual replica should expose primary"
     );
-    assert_eq!(
+    assert!(
         virt_repl["virtual"].as_bool().unwrap(),
-        true,
         "virtual replica should have virtual: true"
     );
     assert!(

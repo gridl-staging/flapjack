@@ -12,6 +12,7 @@ use crate::startup::{
 };
 
 /// TODO: Document serve.
+#[allow(clippy::cognitive_complexity)]
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let startup_start = std::time::Instant::now();
 
