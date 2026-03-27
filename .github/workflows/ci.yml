@@ -7,6 +7,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  SDK_TEST_APP_ID: test-app
+  SDK_TEST_API_KEY: test-api-key
 
 jobs:
   # Check if we're in a known repo — allow both public and dev/staging
@@ -372,6 +374,9 @@ jobs:
     needs: [check-repo, build-server]
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
+    env:
+      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
+      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -388,7 +393,7 @@ jobs:
           chmod +x /tmp/flapjack/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          FLAPJACK_ADMIN_KEY="$FLAPJACK_API_KEY" /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup PHP
@@ -408,6 +413,9 @@ jobs:
     needs: [check-repo, build-server]
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
+    env:
+      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
+      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -424,7 +432,7 @@ jobs:
           chmod +x /tmp/flapjack/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          FLAPJACK_ADMIN_KEY="$FLAPJACK_API_KEY" /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Install Poetry
@@ -487,6 +495,9 @@ jobs:
     needs: [check-repo, build-server]
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
+    env:
+      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
+      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Download server binary
@@ -499,7 +510,7 @@ jobs:
           chmod +x /tmp/flapjack/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          FLAPJACK_ADMIN_KEY="$FLAPJACK_API_KEY" /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Go
@@ -515,6 +526,9 @@ jobs:
     needs: [check-repo, build-server]
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
+    env:
+      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
+      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Download server binary
@@ -527,7 +541,7 @@ jobs:
           chmod +x /tmp/flapjack/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          FLAPJACK_ADMIN_KEY="$FLAPJACK_API_KEY" /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Ruby
@@ -545,6 +559,9 @@ jobs:
     needs: [check-repo, build-server]
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
+    env:
+      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
+      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Download server binary
@@ -557,7 +574,7 @@ jobs:
           chmod +x /tmp/flapjack/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          FLAPJACK_ADMIN_KEY="$FLAPJACK_API_KEY" /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Java
@@ -574,6 +591,9 @@ jobs:
     needs: [check-repo, build-server]
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
+    env:
+      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
+      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Download server binary
@@ -586,7 +606,7 @@ jobs:
           chmod +x /tmp/flapjack/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          FLAPJACK_ADMIN_KEY="$FLAPJACK_API_KEY" /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup .NET
