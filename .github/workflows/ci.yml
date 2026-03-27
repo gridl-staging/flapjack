@@ -7,8 +7,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  SDK_TEST_APP_ID: test-app
-  SDK_TEST_API_KEY: test-api-key
 
 jobs:
   # Check if we're in a known repo — allow both public and dev/staging
@@ -375,8 +373,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     env:
-      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
-      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
+      FLAPJACK_APP_ID: test-app
+      FLAPJACK_API_KEY: test-api-key
     strategy:
       fail-fast: false
       matrix:
@@ -414,8 +412,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     env:
-      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
-      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
+      FLAPJACK_APP_ID: test-app
+      FLAPJACK_API_KEY: test-api-key
     strategy:
       fail-fast: false
       matrix:
@@ -496,8 +494,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     env:
-      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
-      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
+      FLAPJACK_APP_ID: test-app
+      FLAPJACK_API_KEY: test-api-key
     steps:
       - uses: actions/checkout@v4
       - name: Download server binary
@@ -527,8 +525,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     env:
-      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
-      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
+      FLAPJACK_APP_ID: test-app
+      FLAPJACK_API_KEY: test-api-key
     steps:
       - uses: actions/checkout@v4
       - name: Download server binary
@@ -560,8 +558,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     env:
-      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
-      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
+      FLAPJACK_APP_ID: test-app
+      FLAPJACK_API_KEY: test-api-key
     steps:
       - uses: actions/checkout@v4
       - name: Download server binary
@@ -592,8 +590,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     env:
-      FLAPJACK_APP_ID: ${{ env.SDK_TEST_APP_ID }}
-      FLAPJACK_API_KEY: ${{ env.SDK_TEST_API_KEY }}
+      FLAPJACK_APP_ID: test-app
+      FLAPJACK_API_KEY: test-api-key
     steps:
       - uses: actions/checkout@v4
       - name: Download server binary
