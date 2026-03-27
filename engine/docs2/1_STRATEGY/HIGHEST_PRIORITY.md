@@ -1,6 +1,6 @@
 # Highest Priority: Open-Source Launch Readiness
 
-**Updated: 2026-03-27 (launch gate still open; latest staging rerun narrowed the remaining blockers to one crash-durability helper issue and one stale OpenAPI typed-schema expectation)**
+**Updated: 2026-03-27 (OSS launch gate closed on run `23671792399`; next priority is confidence completeness Stages 3-6)**
 
 ## Mission
 
@@ -39,12 +39,14 @@ Follow-up rerun [`23671047087`](https://github.com/gridl-staging/flapjack/action
 1. `flapjack-server::crash_durability_test::acknowledged_batch_write_remains_searchable_after_crash_restart`, where the task-poll helper treated transient `Resource temporarily unavailable (os error 11)` transport errors as fatal inside its own retry loop.
 2. `flapjack-http::openapi::tests::personalization_and_experiment_lifecycle_use_typed_schemas`, where the test still expected `#/components/schemas/Experiment` after the conclude-A/B-test response had been intentionally tightened to `#/components/schemas/ConcludedExperimentResponse`.
 
-## Remaining Before Launch
+Gate-closing rerun [`23671792399`](https://github.com/gridl-staging/flapjack/actions/runs/23671792399) on commit `745a059` then completed `success`, including `Rust tests (fast)`, `Rust tests (all)`, and `Dashboard full e2e tests`. The OSS launch sign-off gate is now closed.
 
-1. **Push the crash-durability/OpenAPI follow-up fixes and rerun staging** — sync the `wait_for_task_published` transient-transport retry fix and the `ConcludedExperimentResponse` OpenAPI test expectation fix, then use that replacement GitHub Actions run as the new launch gate.
-2. **Run deferred validation scripts** — execute `engine/tests/validate_doc_links.sh` and `engine/tests/readme_api_smoke.sh` against the final pre-launch tree once staging is green.
-3. **Publish the proof pack** — update the active verification notes with the exact green staging run, commit IDs, and validation evidence.
-4. **Complete source-of-truth cleanup** — keep the repo-level priority and roadmap docs aligned with the canonical launch record so the public state is no longer split across stale narratives.
+## Next Up After Launch Sign-Off
+
+1. **Stage 3: soak/load/failure handling** — sustained traffic, overload/backpressure interpretation, crash/restart, restore, and replication catch-up proof.
+2. **Stage 4: upgrade/rollback discipline** — explicit upgrade smoke, rollback semantics, and pre-release proof structure.
+3. **Stage 5: runbooks/supportability** — startup, readiness, disk/memory pressure, restore, replication, and key-rotation operator flows.
+4. **Stage 6: security confidence** — scoped public-deployment hardening review and explicit bounds on current security claims.
 
 ## Deterministic Parity Progress
 
