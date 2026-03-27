@@ -85,7 +85,7 @@ async fn seed_object(app: &axum::Router, index_name: &str, object_id: &str) {
     common::wait_for_task_local(app, common::extract_task_id(&body)).await;
 }
 
-async fn run_case(
+async fn run_key_case(
     app: &axum::Router,
     case: &flapjack_http::mutation_parity::MutationParityCase,
 ) -> MutationCaseResult {
@@ -156,6 +156,15 @@ async fn run_case(
             .await;
             MutationCaseResult { status, body }
         }
+        _ => panic!("unexpected key mutation case {}", case.id),
+    }
+}
+
+async fn run_abtest_case(
+    app: &axum::Router,
+    case: &flapjack_http::mutation_parity::MutationParityCase,
+) -> MutationCaseResult {
+    match case.id {
         "abtests.create" => {
             let (status, body) = common::send_json(
                 app,
@@ -281,6 +290,15 @@ async fn run_case(
             .await;
             MutationCaseResult { status, body }
         }
+        _ => panic!("unexpected abtest mutation case {}", case.id),
+    }
+}
+
+async fn run_index_case(
+    app: &axum::Router,
+    case: &flapjack_http::mutation_parity::MutationParityCase,
+) -> MutationCaseResult {
+    match case.id {
         "indexes.create" => {
             let (status, body) = common::send_json(
                 app,
@@ -316,6 +334,15 @@ async fn run_case(
             .await;
             MutationCaseResult { status, body }
         }
+        _ => panic!("unexpected index mutation case {}", case.id),
+    }
+}
+
+async fn run_object_case(
+    app: &axum::Router,
+    case: &flapjack_http::mutation_parity::MutationParityCase,
+) -> MutationCaseResult {
+    match case.id {
         "objects.save_auto_id" => {
             let (status, body) = common::send_json(
                 app,
@@ -367,8 +394,27 @@ async fn run_case(
             .await;
             MutationCaseResult { status, body }
         }
-        _ => panic!("unhandled mutation parity case {}", case.id),
+        _ => panic!("unexpected object mutation case {}", case.id),
     }
+}
+
+async fn run_case(
+    app: &axum::Router,
+    case: &flapjack_http::mutation_parity::MutationParityCase,
+) -> MutationCaseResult {
+    if case.id.starts_with("keys.") {
+        return run_key_case(app, case).await;
+    }
+    if case.id.starts_with("abtests.") {
+        return run_abtest_case(app, case).await;
+    }
+    if case.id.starts_with("indexes.") {
+        return run_index_case(app, case).await;
+    }
+    if case.id.starts_with("objects.") {
+        return run_object_case(app, case).await;
+    }
+    panic!("unhandled mutation parity case {}", case.id);
 }
 
 #[tokio::test]
