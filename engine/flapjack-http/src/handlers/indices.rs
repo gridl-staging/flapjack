@@ -10,7 +10,7 @@ use super::replicas::{
     has_physical_index_data, reject_writes_to_virtual_replica, standard_replicas_for_primary,
 };
 use super::AppState;
-use crate::dto::CreateIndexRequest;
+use crate::dto::{CreateIndexRequest, CreateIndexResponse, DeleteIndexResponse};
 use flapjack::error::FlapjackError;
 
 /// Recursively compute total size of all files in a directory.
@@ -82,12 +82,6 @@ fn read_optional_json_file(path: &std::path::Path) -> serde_json::Value {
         Some(value) => value,
         None => serde_json::Value::Null,
     }
-}
-
-#[derive(serde::Serialize, utoipa::ToSchema)]
-pub struct CreateIndexResponse {
-    pub uid: String,
-    pub created_at: String,
 }
 
 /// Single index entry returned by the list-indices endpoint.
@@ -163,7 +157,7 @@ pub async fn create_index(
         ("indexName" = String, Path, description = "Index name to delete")
     ),
     responses(
-        (status = 200, description = "Index deleted successfully", body = serde_json::Value),
+        (status = 200, description = "Index deleted successfully", body = DeleteIndexResponse),
         (status = 404, description = "Index not found")
     ),
     security(
@@ -173,13 +167,13 @@ pub async fn create_index(
 pub async fn delete_index(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
-) -> Result<Json<serde_json::Value>, FlapjackError> {
+) -> Result<Json<DeleteIndexResponse>, FlapjackError> {
     state.manager.delete_tenant(&index_name).await?;
     let task = state.manager.make_noop_task(&index_name)?;
-    Ok(Json(serde_json::json!({
-        "taskID": task.numeric_id,
-        "deletedAt": chrono::Utc::now().to_rfc3339()
-    })))
+    Ok(Json(DeleteIndexResponse {
+        task_id: task.numeric_id,
+        deleted_at: chrono::Utc::now().to_rfc3339(),
+    }))
 }
 
 /// List all indices

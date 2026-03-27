@@ -284,14 +284,16 @@ CI-runnable scripts that verify documentation accuracy and API completeness agai
 | Script | Purpose |
 |---|---|
 | `engine/tests/readme_api_smoke.sh` | Starts a clean server, executes every API curl example from the root README, asserts correct responses |
-| `engine/tests/validate_doc_links.sh` | Checks all internal markdown links in README, ROADMAP, engine/README, FEATURES.md resolve to real files |
+| `engine/tests/validate_doc_links.sh` | Checks all internal markdown links in the current public routing docs (`README.md`, `PRIORITIES.md`, `ROADMAP.md`, `engine/README.md`, `engine/docs/HIGHEST_LEVEL.md`, `engine/docs2/FEATURES.md`, and `engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md`) resolve to real files |
 | `engine/tests/integration_smoke.sh` | Comprehensive 513-line API integration test: 13 categories (health, index CRUD, doc CRUD, search variants, settings, synonyms, rules, analytics, API keys, dashboard, multi-index, browse, task status). Added by mar22_pm_3. |
 
 ---
 
 ## Current Production-Readiness State
 
-Production-readiness checklist organized by priority tier. Tier 1 items were launch blockers, Tier 2 items are required for production confidence, Tier 3 items can be iterated on post-launch. **All Tier 1 and Tier 2 items are complete.** Only Tier 3 (post-launch) items remain.
+Production-readiness checklist organized by priority tier. Tier 1 items were launch blockers, Tier 2 items are required for production confidence, Tier 3 items can be iterated on post-launch.
+
+The substantive Tier 1 and Tier 2 engineering work is complete, but **final open-source launch sign-off is still active** because late launch review reopened the gate for compatibility and release-surface verification. Use [`1_STRATEGY/HIGHEST_PRIORITY.md`](1_STRATEGY/HIGHEST_PRIORITY.md) for the live final-gate narrative and exact remaining sign-off steps.
 
 **Last updated: 2026-03-27**
 
@@ -332,7 +334,7 @@ Important for long-term operational maturity. Can iterate after initial release.
 
 ### Recommended Execution Order
 
-**Current focus: Open-source launch readiness.** All Tier 1 and Tier 2 items are complete. Only Tier 3 (post-launch) items remain.
+**Current focus: Open-source launch readiness.** The major Tier 1 and Tier 2 engineering tracks are complete, but the final launch gate is still active until the current compatibility and release-surface verification closes.
 
 **Pre-launch (P0):**
 1. ~~Post-merge regression validation~~ — ✅ Done (mar22_1). OpenAPI spec regenerated, Rust test suite validated, README API smoke and doc link validation scripts created.

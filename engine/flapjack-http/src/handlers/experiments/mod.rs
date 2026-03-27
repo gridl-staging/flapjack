@@ -6,7 +6,10 @@ use axum::{
     Json,
 };
 use flapjack::experiments::{
-    config::{Experiment, ExperimentConclusion, ExperimentError, PrimaryMetric, QueryOverrides},
+    config::{
+        Experiment, ExperimentArm, ExperimentConclusion, ExperimentError, ExperimentStatus,
+        PrimaryMetric, QueryOverrides,
+    },
     metrics,
     store::ExperimentStore,
 };
@@ -19,8 +22,6 @@ use super::dto_algolia::{
 };
 use super::AppState;
 use crate::error_response::json_error;
-#[cfg(test)]
-use flapjack::experiments::config::{ExperimentArm, ExperimentStatus};
 
 mod schemas;
 pub use schemas::{
@@ -129,6 +130,59 @@ fn validate_conclusion_winner(winner: Option<String>) -> Result<Option<String>, 
             "winner must be 'control' or 'variant', got '{w}'"
         ))),
         None => Ok(None),
+    }
+}
+
+/// Concrete conclude-response schema.
+///
+/// The generic `Experiment` model allows `conclusion` to be absent for draft and
+/// running states, but a successful conclude response always includes it. Keeping
+/// this as a separate DTO lets the OpenAPI contract enforce that stronger promise.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConcludedExperimentResponse {
+    pub id: String,
+    pub name: String,
+    pub index_name: String,
+    pub status: ExperimentStatus,
+    pub traffic_split: f64,
+    pub control: ExperimentArm,
+    pub variant: ExperimentArm,
+    pub primary_metric: PrimaryMetric,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub ended_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_at: Option<i64>,
+    pub minimum_days: u32,
+    pub winsorization_cap: Option<f64>,
+    pub conclusion: ExperimentConclusion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interleaving: Option<bool>,
+}
+
+impl From<Experiment> for ConcludedExperimentResponse {
+    fn from(experiment: Experiment) -> Self {
+        Self {
+            id: experiment.id,
+            name: experiment.name,
+            index_name: experiment.index_name,
+            status: experiment.status,
+            traffic_split: experiment.traffic_split,
+            control: experiment.control,
+            variant: experiment.variant,
+            primary_metric: experiment.primary_metric,
+            created_at: experiment.created_at,
+            started_at: experiment.started_at,
+            ended_at: experiment.ended_at,
+            stopped_at: experiment.stopped_at,
+            minimum_days: experiment.minimum_days,
+            winsorization_cap: experiment.winsorization_cap,
+            conclusion: experiment
+                .conclusion
+                .expect("concluded experiment response must include conclusion"),
+            interleaving: experiment.interleaving,
+        }
     }
 }
 
@@ -606,7 +660,7 @@ pub async fn stop_experiment(
     ),
     request_body(content = ConcludeExperimentRequest, description = "Conclusion summary and winner declaration"),
     responses(
-        (status = 200, description = "Experiment concluded", body = Experiment),
+        (status = 200, description = "Experiment concluded", body = ConcludedExperimentResponse),
         (status = 400, description = "Invalid conclusion payload"),
         (status = 404, description = "Experiment not found"),
         (status = 409, description = "Experiment is in an invalid status for conclude"),
@@ -661,7 +715,7 @@ pub async fn conclude_experiment(
                     // with a warning header so the caller knows promotion was partial.
                 }
             }
-            Json(experiment).into_response()
+            Json(ConcludedExperimentResponse::from(experiment)).into_response()
         }
         Err(err) => experiment_error_to_response(err),
     }

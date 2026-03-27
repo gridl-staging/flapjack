@@ -800,6 +800,50 @@
           }
         ]
       },
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Add a record with an auto-generated objectID (Algolia-compatible)",
+        "operationId": "add_record_auto_id",
+        "parameters": [
+          {
+            "name": "indexName",
+            "in": "path",
+            "description": "Index name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Object data (objectID is auto-generated)",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Object created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveObjectResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
       "delete": {
         "tags": [
           "indices"
@@ -822,7 +866,9 @@
             "description": "Index deleted successfully",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteIndexResponse"
+                }
               }
             }
           },
@@ -870,7 +916,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AddDocumentsResponse"
+                  "$ref": "#/components/schemas/BatchWriteResponse"
                 }
               }
             }
@@ -2369,7 +2415,9 @@
             "description": "Object updated successfully",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PutObjectResponse"
+                }
               }
             }
           },
@@ -2414,12 +2462,78 @@
             "description": "Object deleted successfully",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteObjectResponse"
+                }
               }
             }
           },
           "404": {
             "description": "Object not found"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/1/indexes/{indexName}/{objectID}/partial": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Partial update a record (Algolia-compatible dedicated endpoint)",
+        "operationId": "partial_update_object",
+        "parameters": [
+          {
+            "name": "indexName",
+            "in": "path",
+            "description": "Index name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "objectID",
+            "in": "path",
+            "description": "Object ID to partially update",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "createIfNotExists",
+            "in": "query",
+            "description": "Create the record if it doesn't exist (default: true)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Fields to update",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Object partially updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartialUpdateObjectResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -3548,7 +3662,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Experiment"
+                  "$ref": "#/components/schemas/ConcludedExperimentResponse"
                 }
               }
             }
@@ -6398,6 +6512,25 @@
           }
         ]
       },
+      "BatchWriteResponse": {
+        "type": "object",
+        "required": [
+          "taskID",
+          "objectIDs"
+        ],
+        "properties": {
+          "objectIDs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "taskID": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "BayesianResponse": {
         "type": "object",
         "required": [
@@ -6541,6 +6674,96 @@
           }
         }
       },
+      "ConcludedExperimentResponse": {
+        "type": "object",
+        "description": "Concrete conclude-response schema.\n\nThe generic `Experiment` model allows `conclusion` to be absent for draft and\nrunning states, but a successful conclude response always includes it. Keeping\nthis as a separate DTO lets the OpenAPI contract enforce that stronger promise.",
+        "required": [
+          "id",
+          "name",
+          "indexName",
+          "status",
+          "trafficSplit",
+          "control",
+          "variant",
+          "primaryMetric",
+          "createdAt",
+          "minimumDays",
+          "conclusion"
+        ],
+        "properties": {
+          "conclusion": {
+            "$ref": "#/components/schemas/ExperimentConclusion"
+          },
+          "control": {
+            "$ref": "#/components/schemas/ExperimentArm"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "endedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "indexName": {
+            "type": "string"
+          },
+          "interleaving": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "minimumDays": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "primaryMetric": {
+            "$ref": "#/components/schemas/PrimaryMetric"
+          },
+          "startedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExperimentStatus"
+          },
+          "stoppedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "trafficSplit": {
+            "type": "number",
+            "format": "double"
+          },
+          "variant": {
+            "$ref": "#/components/schemas/ExperimentArm"
+          },
+          "winsorizationCap": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "CreateExperimentRequest": {
         "type": "object",
         "required": [
@@ -6612,10 +6835,10 @@
         "type": "object",
         "required": [
           "uid",
-          "created_at"
+          "createdAt"
         ],
         "properties": {
-          "created_at": {
+          "createdAt": {
             "type": "string"
           },
           "uid": {
@@ -6724,6 +6947,22 @@
           }
         }
       },
+      "DeleteIndexResponse": {
+        "type": "object",
+        "required": [
+          "taskID",
+          "deletedAt"
+        ],
+        "properties": {
+          "deletedAt": {
+            "type": "string"
+          },
+          "taskID": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "DeleteKeyResponse": {
         "type": "object",
         "required": [
@@ -6732,6 +6971,22 @@
         "properties": {
           "deletedAt": {
             "type": "string"
+          }
+        }
+      },
+      "DeleteObjectResponse": {
+        "type": "object",
+        "required": [
+          "taskID",
+          "deletedAt"
+        ],
+        "properties": {
+          "deletedAt": {
+            "type": "string"
+          },
+          "taskID": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -7954,6 +8209,26 @@
           }
         }
       },
+      "PartialUpdateObjectResponse": {
+        "type": "object",
+        "required": [
+          "taskID",
+          "objectID",
+          "updatedAt"
+        ],
+        "properties": {
+          "objectID": {
+            "type": "string"
+          },
+          "taskID": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
+      },
       "PersonalizationProfile": {
         "type": "object",
         "required": [
@@ -8025,6 +8300,26 @@
           "zeroResultRate",
           "abandonmentRate"
         ]
+      },
+      "PutObjectResponse": {
+        "type": "object",
+        "required": [
+          "taskID",
+          "objectID",
+          "updatedAt"
+        ],
+        "properties": {
+          "objectID": {
+            "type": "string"
+          },
+          "taskID": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
       },
       "QsConfig": {
         "type": "object",
@@ -8499,6 +8794,26 @@
           },
           "variant": {
             "$ref": "#/components/schemas/ArmResponse"
+          }
+        }
+      },
+      "SaveObjectResponse": {
+        "type": "object",
+        "required": [
+          "taskID",
+          "objectID",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "objectID": {
+            "type": "string"
+          },
+          "taskID": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

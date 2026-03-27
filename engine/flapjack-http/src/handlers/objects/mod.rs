@@ -15,8 +15,9 @@ use super::replicas::{
 };
 use super::AppState;
 use crate::dto::{
-    AddDocumentsRequest, AddDocumentsResponse, DeleteByQueryRequest, GetObjectsRequest,
-    GetObjectsResponse,
+    AddDocumentsRequest, AddDocumentsResponse, BatchWriteResponse, DeleteByQueryRequest,
+    DeleteObjectResponse, GetObjectsRequest, GetObjectsResponse, PartialUpdateObjectResponse,
+    PutObjectResponse, SaveObjectResponse,
 };
 use crate::filter_parser::parse_filter;
 use crate::pause_registry::check_not_paused;
@@ -231,7 +232,7 @@ pub(super) fn merge_partial_update(
     ),
     request_body(content = serde_json::Value, description = "Batch operations or single document"),
     responses(
-        (status = 200, description = "Documents added successfully", body = AddDocumentsResponse),
+        (status = 200, description = "Documents added successfully", body = BatchWriteResponse),
         (status = 400, description = "Invalid request")
     ),
     security(
@@ -367,7 +368,7 @@ pub async fn get_object(
         ("objectID" = String, Path, description = "Object ID to delete")
     ),
     responses(
-        (status = 200, description = "Object deleted successfully", body = serde_json::Value),
+        (status = 200, description = "Object deleted successfully", body = DeleteObjectResponse),
         (status = 404, description = "Object not found")
     ),
     security(
@@ -377,7 +378,7 @@ pub async fn get_object(
 pub async fn delete_object(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, FlapjackError> {
+) -> Result<Json<DeleteObjectResponse>, FlapjackError> {
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     let delete_ids = vec![object_id];
@@ -402,10 +403,10 @@ pub async fn delete_object(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let task = state.manager.make_noop_task(&index_name)?;
-    Ok(Json(serde_json::json!({
-        "taskID": task.numeric_id,
-        "deletedAt": chrono::Utc::now().to_rfc3339()
-    })))
+    Ok(Json(DeleteObjectResponse {
+        task_id: task.numeric_id,
+        deleted_at: chrono::Utc::now().to_rfc3339(),
+    }))
 }
 
 /// Update or create an object
@@ -419,7 +420,7 @@ pub async fn delete_object(
     ),
     request_body(content = serde_json::Value, description = "Object data"),
     responses(
-        (status = 200, description = "Object updated successfully", body = serde_json::Value),
+        (status = 200, description = "Object updated successfully", body = PutObjectResponse),
         (status = 400, description = "Invalid request")
     ),
     security(
@@ -430,7 +431,7 @@ pub async fn put_object(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
     Json(mut body): Json<serde_json::Map<String, serde_json::Value>>,
-) -> Result<Json<serde_json::Value>, FlapjackError> {
+) -> Result<Json<PutObjectResponse>, FlapjackError> {
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     state.manager.create_tenant(&index_name)?;
@@ -476,11 +477,11 @@ pub async fn put_object(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let task = state.manager.make_noop_task(&index_name)?;
-    Ok(Json(serde_json::json!({
-        "taskID": task.numeric_id,
-        "objectID": object_id,
-        "updatedAt": chrono::Utc::now().to_rfc3339()
-    })))
+    Ok(Json(PutObjectResponse {
+        task_id: task.numeric_id,
+        object_id,
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    }))
 }
 
 /// Get multiple objects by ID in batch
@@ -656,7 +657,7 @@ pub async fn delete_by_query(
     ),
     request_body(content = serde_json::Value, description = "Object data (objectID is auto-generated)"),
     responses(
-        (status = 200, description = "Object created successfully", body = serde_json::Value)
+        (status = 201, description = "Object created successfully", body = SaveObjectResponse)
     ),
     security(
         ("api_key" = [])
@@ -666,7 +667,7 @@ pub async fn add_record_auto_id(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
     Json(mut body): Json<serde_json::Map<String, serde_json::Value>>,
-) -> Result<Json<serde_json::Value>, FlapjackError> {
+) -> Result<(axum::http::StatusCode, Json<SaveObjectResponse>), FlapjackError> {
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     state.manager.create_tenant(&index_name)?;
@@ -706,11 +707,14 @@ pub async fn add_record_auto_id(
         .documents_indexed_total
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    Ok(Json(serde_json::json!({
-        "taskID": task.numeric_id,
-        "objectID": generated_id,
-        "createdAt": chrono::Utc::now().to_rfc3339()
-    })))
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(SaveObjectResponse {
+            task_id: task.numeric_id,
+            object_id: generated_id,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }),
+    ))
 }
 
 /// Partial update a record (Algolia-compatible dedicated endpoint)
@@ -725,7 +729,7 @@ pub async fn add_record_auto_id(
     ),
     request_body(content = serde_json::Value, description = "Fields to update"),
     responses(
-        (status = 200, description = "Object partially updated", body = serde_json::Value)
+        (status = 200, description = "Object partially updated", body = PartialUpdateObjectResponse)
     ),
     security(
         ("api_key" = [])
@@ -736,7 +740,7 @@ pub async fn partial_update_object(
     Path((index_name, object_id)): Path<(String, String)>,
     Query(params): Query<PartialUpdateParams>,
     Json(body): Json<serde_json::Map<String, serde_json::Value>>,
-) -> Result<Json<serde_json::Value>, FlapjackError> {
+) -> Result<Json<PartialUpdateObjectResponse>, FlapjackError> {
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     state.manager.create_tenant(&index_name)?;
@@ -774,11 +778,11 @@ pub async fn partial_update_object(
     batch::trigger_replication(&state, &index_name, pre_seq, false);
 
     let task = state.manager.make_noop_task(&index_name)?;
-    Ok(Json(serde_json::json!({
-        "taskID": task.numeric_id,
-        "objectID": object_id,
-        "updatedAt": chrono::Utc::now().to_rfc3339()
-    })))
+    Ok(Json(PartialUpdateObjectResponse {
+        task_id: task.numeric_id,
+        object_id,
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    }))
 }
 
 #[derive(Debug, serde::Deserialize)]

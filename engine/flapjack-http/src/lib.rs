@@ -10,6 +10,7 @@ pub mod handlers;
 pub mod latency_middleware;
 pub mod memory_middleware;
 pub mod middleware;
+pub mod mutation_parity;
 pub mod notifications;
 pub mod openapi;
 pub mod openapi_export;

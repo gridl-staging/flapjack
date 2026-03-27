@@ -1,9 +1,65 @@
 use super::*;
 
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateIndexResponse {
     pub uid: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteIndexResponse {
+    #[serde(rename = "taskID")]
+    pub task_id: i64,
+    pub deleted_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveObjectResponse {
+    #[serde(rename = "taskID")]
+    pub task_id: i64,
+    #[serde(rename = "objectID")]
+    pub object_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PutObjectResponse {
+    #[serde(rename = "taskID")]
+    pub task_id: i64,
+    #[serde(rename = "objectID")]
+    pub object_id: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteObjectResponse {
+    #[serde(rename = "taskID")]
+    pub task_id: i64,
+    pub deleted_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialUpdateObjectResponse {
+    #[serde(rename = "taskID")]
+    pub task_id: i64,
+    #[serde(rename = "objectID")]
+    pub object_id: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchWriteResponse {
+    #[serde(rename = "taskID")]
+    pub task_id: i64,
+    #[serde(rename = "objectIDs")]
+    pub object_ids: Vec<String>,
 }
 
 /// Response variants for document ingestion endpoints.

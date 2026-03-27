@@ -30,7 +30,7 @@ async fn create_via_add_object_returns_algolia_envelope() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "unexpected status: {body}");
+    assert_eq!(status, StatusCode::CREATED, "unexpected status: {body}");
 
     // objectID must be a non-empty string
     let object_id = body["objectID"]
@@ -69,7 +69,7 @@ async fn list_indices_returns_algolia_shape() {
         Some(json!({ "objectID": "doc1", "title": "Test" })),
     )
     .await;
-    assert_eq!(seed_status, StatusCode::OK);
+    assert_eq!(seed_status, StatusCode::CREATED);
     common::wait_for_task_local(&app, common::extract_task_id(&seed_body)).await;
 
     let (status, body) = common::send_json(&app, Method::GET, "/1/indexes", ADMIN_KEY, None).await;
@@ -135,7 +135,7 @@ async fn delete_index_returns_task_id_and_deleted_at() {
         Some(json!({ "objectID": "d1", "v": 1 })),
     )
     .await;
-    assert_eq!(seed_status, StatusCode::OK);
+    assert_eq!(seed_status, StatusCode::CREATED);
     common::wait_for_task_local(&app, common::extract_task_id(&seed_body)).await;
 
     let (status, body) = common::send_json(
@@ -171,7 +171,7 @@ async fn clear_index_returns_task_id_and_updated_at() {
         Some(json!({ "objectID": "c1", "v": 1 })),
     )
     .await;
-    assert_eq!(seed_status, StatusCode::OK);
+    assert_eq!(seed_status, StatusCode::CREATED);
     common::wait_for_task_local(&app, common::extract_task_id(&seed_body)).await;
 
     let (status, body) = common::send_json(
@@ -396,7 +396,7 @@ async fn multi_index_get_objects_returns_results_array() {
         Some(json!({ "label": "Alpha" })),
     )
     .await;
-    assert_eq!(s1_status, StatusCode::OK);
+    assert_eq!(s1_status, StatusCode::CREATED);
 
     let (s2_status, s2_body) = common::send_json(
         &app,
@@ -406,7 +406,7 @@ async fn multi_index_get_objects_returns_results_array() {
         Some(json!({ "label": "Beta" })),
     )
     .await;
-    assert_eq!(s2_status, StatusCode::OK);
+    assert_eq!(s2_status, StatusCode::CREATED);
 
     common::wait_for_task_local(&app, common::extract_task_id(&s1_body)).await;
     common::wait_for_task_local(&app, common::extract_task_id(&s2_body)).await;

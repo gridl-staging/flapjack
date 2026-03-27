@@ -27,9 +27,11 @@ use utoipa::OpenApi;
         crate::handlers::search::search_get,
         crate::handlers::search::batch_search,
         crate::handlers::objects::add_documents,
+        crate::handlers::objects::add_record_auto_id,
         crate::handlers::objects::get_object,
         crate::handlers::objects::delete_object,
         crate::handlers::objects::put_object,
+        crate::handlers::objects::partial_update_object,
         crate::handlers::objects::get_objects,
         crate::handlers::objects::delete_by_query,
         crate::handlers::browse::browse_index,
@@ -148,7 +150,8 @@ use utoipa::OpenApi;
         schemas(
             crate::dto::CreateIndexRequest,
             crate::dto::IndexSchema,
-            crate::handlers::indices::CreateIndexResponse,
+            crate::dto::CreateIndexResponse,
+            crate::dto::DeleteIndexResponse,
             crate::handlers::indices::ListIndexItem,
             crate::handlers::indices::ListIndicesResponse,
             crate::handlers::indices::OperationIndexRequest,
@@ -169,6 +172,11 @@ use utoipa::OpenApi;
             crate::dto::AddDocumentsRequest,
             crate::dto::BatchOperation,
             crate::dto::AddDocumentsResponse,
+            crate::dto::BatchWriteResponse,
+            crate::dto::SaveObjectResponse,
+            crate::dto::PutObjectResponse,
+            crate::dto::DeleteObjectResponse,
+            crate::dto::PartialUpdateObjectResponse,
             crate::dto::GetObjectsRequest,
             crate::dto::GetObjectRequest,
             crate::dto::GetObjectsResponse,
@@ -224,6 +232,7 @@ use utoipa::OpenApi;
             crate::handlers::dto_algolia::AlgoliaEstimateResponse,
             crate::handlers::experiments::CreateExperimentRequest,
             crate::handlers::experiments::ConcludeExperimentRequest,
+            crate::handlers::experiments::ConcludedExperimentResponse,
             crate::handlers::experiments::ResultsResponse,
             crate::handlers::experiments::InterleavingResponse,
             crate::handlers::experiments::GuardRailAlertResponse,
@@ -384,10 +393,46 @@ impl utoipa::Modify for ChatSseAddon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutation_parity::HIGH_RISK_MUTATION_PARITY_CASES;
     use crate::openapi_test_helpers::{schema_composition_refs, schema_ref};
 
     fn openapi_json() -> serde_json::Value {
         serde_json::to_value(ApiDoc::openapi()).unwrap()
+    }
+
+    fn schema_at<'a>(doc: &'a serde_json::Value, pointer: &str) -> &'a serde_json::Value {
+        doc.pointer(pointer)
+            .unwrap_or_else(|| panic!("expected schema pointer {pointer}"))
+    }
+
+    fn deref_schema<'a>(
+        doc: &'a serde_json::Value,
+        response_pointer: &str,
+    ) -> &'a serde_json::Value {
+        let schema_ref = doc
+            .pointer(response_pointer)
+            .and_then(|value| value.as_str())
+            .unwrap_or_else(|| panic!("expected schema ref at {response_pointer}"));
+        let schema_pointer = schema_ref.trim_start_matches('#');
+        schema_at(doc, schema_pointer)
+    }
+
+    fn assert_schema_required_fields(
+        doc: &serde_json::Value,
+        response_pointer: &str,
+        expected_fields: &[&str],
+    ) {
+        let schema = deref_schema(doc, response_pointer);
+        let required = schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .unwrap_or_else(|| panic!("expected required fields for {response_pointer}"));
+        for field in expected_fields {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(*field)),
+                "expected {response_pointer} to require field {field}"
+            );
+        }
     }
 
     /// Verify that all key-management endpoints reference concrete `$ref` schema components rather than inline definitions.
@@ -578,6 +623,30 @@ mod tests {
         // Results
         assert_path_exists(&doc, "/2/abtests/{id}/results");
         assert_path_method(&doc, "/2/abtests/{id}/results", "get");
+    }
+
+    #[test]
+    fn high_risk_mutation_openapi_contracts_match_shared_matrix() {
+        let doc = openapi_json();
+
+        for case in HIGH_RISK_MUTATION_PARITY_CASES {
+            let method = case.method.to_ascii_lowercase();
+
+            assert_path_exists(&doc, case.path);
+            assert_path_method(&doc, case.path, &method);
+            assert!(
+                doc.pointer(case.openapi_response_pointer).is_some(),
+                "expected OpenAPI response schema for {} {} at {}",
+                case.method,
+                case.path,
+                case.openapi_response_pointer
+            );
+            assert_schema_required_fields(
+                &doc,
+                case.openapi_response_pointer,
+                case.required_fields,
+            );
+        }
     }
 
     /// Stage 7: Verify SearchRequest schema includes vector/hybrid fields.

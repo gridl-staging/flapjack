@@ -196,7 +196,7 @@ fn update_experiment_body() -> serde_json::Value {
 /// * `body` - JSON payload serialized into the request body.
 async fn create_experiment_and_get_id(app: &Router) -> i64 {
     let resp = send_json_request(app, Method::POST, "/2/abtests", create_experiment_body()).await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     json["abTestID"].as_i64().unwrap()
 }
@@ -221,7 +221,7 @@ async fn create_algolia_experiment_and_get_numeric_id(app: &Router) -> i64 {
         create_algolia_experiment_body("products"),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     json["abTestID"]
         .as_i64()
@@ -370,13 +370,13 @@ fn normalize_algolia_abtest_snapshot(mut json: serde_json::Value) -> serde_json:
 }
 
 #[tokio::test]
-async fn create_experiment_returns_201() {
+async fn create_experiment_returns_200() {
     let tmp = TempDir::new().unwrap();
     let state = make_experiments_state(&tmp);
     let app = app_router(state.clone());
 
     let resp = send_json_request(&app, Method::POST, "/2/abtests", create_experiment_body()).await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     let id = json["abTestID"]
         .as_i64()
@@ -561,7 +561,7 @@ async fn list_experiments_filters_by_index_prefix_and_suffix() {
         create_algolia_experiment_body("prod_alpha_v1"),
     )
     .await;
-    assert_eq!(first.status(), StatusCode::CREATED);
+    assert_eq!(first.status(), StatusCode::OK);
 
     let second = send_json_request(
         &app,
@@ -570,7 +570,7 @@ async fn list_experiments_filters_by_index_prefix_and_suffix() {
         create_algolia_experiment_body("prod_beta_v2"),
     )
     .await;
-    assert_eq!(second.status(), StatusCode::CREATED);
+    assert_eq!(second.status(), StatusCode::OK);
 
     let resp = send_empty_request(
         &app,
@@ -599,7 +599,7 @@ async fn algolia_lifecycle_create_get_stop_get_matches_wire_schema() {
         create_algolia_experiment_body("products"),
     )
     .await;
-    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    assert_eq!(create_resp.status(), StatusCode::OK);
     let create_json = body_json(create_resp).await;
     let ab_test_id = create_json["abTestID"]
         .as_i64()
@@ -641,7 +641,7 @@ async fn stop_preserves_scheduled_end_at_and_sets_distinct_stopped_at() {
         create_algolia_experiment_body("products"),
     )
     .await;
-    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    assert_eq!(create_resp.status(), StatusCode::OK);
     let create_json = body_json(create_resp).await;
     let ab_test_id = create_json["abTestID"]
         .as_i64()
@@ -683,7 +683,7 @@ async fn stopped_experiment_releases_active_slot_for_same_index() {
         create_algolia_experiment_body("products"),
     )
     .await;
-    assert_eq!(create_a.status(), StatusCode::CREATED);
+    assert_eq!(create_a.status(), StatusCode::OK);
     let id_a = body_json(create_a).await["abTestID"].as_i64().unwrap();
 
     let start_a = send_empty_request(&app, Method::POST, &format!("/2/abtests/{id_a}/start")).await;
@@ -701,7 +701,7 @@ async fn stopped_experiment_releases_active_slot_for_same_index() {
         create_algolia_experiment_body("products"),
     )
     .await;
-    assert_eq!(create_b.status(), StatusCode::CREATED);
+    assert_eq!(create_b.status(), StatusCode::OK);
     let id_b = body_json(create_b).await["abTestID"].as_i64().unwrap();
 
     let start_b = send_empty_request(&app, Method::POST, &format!("/2/abtests/{id_b}/start")).await;
@@ -1129,7 +1129,7 @@ async fn create_experiment_default_minimum_days() {
     body.as_object_mut().unwrap().remove("metrics");
 
     let resp = send_json_request(&app, Method::POST, "/2/abtests", body).await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let create_json = body_json(resp).await;
     let id = create_json["abTestID"].as_i64().unwrap();
     let store = state.experiment_store.as_ref().unwrap();
@@ -1500,7 +1500,7 @@ async fn list_experiments_default_limit_is_ten() {
         let mut body = create_experiment_body();
         body["name"] = serde_json::json!(format!("Experiment {i}"));
         let resp = send_json_request(&app, Method::POST, "/2/abtests", body).await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     let resp = send_empty_request(&app, Method::GET, "/2/abtests").await;
@@ -1590,7 +1590,7 @@ async fn list_experiments_pagination_slices_ordered_list() {
         let mut body = create_algolia_experiment_body("products");
         body["name"] = serde_json::json!(name);
         let resp = send_json_request(&app, Method::POST, "/2/abtests", body).await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
         ids.push(json["abTestID"].as_i64().unwrap());
     }
@@ -1689,7 +1689,7 @@ async fn list_experiments_filter_applied_before_pagination() {
     for idx in &test_indices {
         let body = create_algolia_experiment_body(idx);
         let resp = send_json_request(&app, Method::POST, "/2/abtests", body).await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
         let id = json["abTestID"].as_i64().unwrap();
         if idx.starts_with("prod_") {
@@ -1760,7 +1760,7 @@ async fn list_experiments_count_equals_page_size_total_equals_filtered() {
     for idx in &test_indices {
         let body = create_algolia_experiment_body(idx);
         let resp = send_json_request(&app, Method::POST, "/2/abtests", body).await;
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     // No filter: total=6, limit=3 → count=3
@@ -1823,7 +1823,7 @@ async fn start_second_experiment_on_same_index_returns_409() {
     let mut second_body = create_experiment_body_for_index("products");
     second_body["name"] = serde_json::json!("Ranking test 2");
     let second_resp = send_json_request(&app, Method::POST, "/2/abtests", second_body).await;
-    assert_eq!(second_resp.status(), StatusCode::CREATED);
+    assert_eq!(second_resp.status(), StatusCode::OK);
     let second_json = body_json(second_resp).await;
     let second_id = second_json["abTestID"].as_i64().unwrap();
 
@@ -3546,9 +3546,9 @@ fn build_results_response_skips_cuped_when_one_arm_has_insufficient_coverage() {
     );
 }
 
-/// Verify that creating a Mode B experiment (control and variant on different indexes, no `customSearchParameters`) returns 201 with correct variant index names.
+/// Verify that creating a Mode B experiment (control and variant on different indexes, no `customSearchParameters`) returns 200 with correct variant index names.
 #[tokio::test]
-async fn create_mode_b_experiment_returns_201() {
+async fn create_mode_b_experiment_returns_200() {
     let tmp = TempDir::new().unwrap();
     let state = make_experiments_state(&tmp);
     let app = app_router(state);
@@ -3564,7 +3564,7 @@ async fn create_mode_b_experiment_returns_201() {
     });
 
     let resp = send_json_request(&app, Method::POST, "/2/abtests", body).await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let create_json = body_json(resp).await;
     let id = create_json["abTestID"].as_i64().unwrap();
     let get_resp = send_empty_request(&app, Method::GET, &format!("/2/abtests/{id}")).await;
@@ -3676,7 +3676,7 @@ async fn create_start_conclude_mode_b(
         "metrics": [{ "name": "clickThroughRate" }]
     });
     let resp = send_json_request(app, Method::POST, "/2/abtests", body).await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let id = body_json(resp).await["abTestID"].as_i64().unwrap();
 
     // Start
@@ -3822,7 +3822,7 @@ async fn promote_mode_a_applies_custom_ranking_to_main_index() {
         "metrics": [{ "name": "clickThroughRate" }]
     });
     let resp = send_json_request(&app, Method::POST, "/2/abtests", body).await;
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let id = body_json(resp).await["abTestID"].as_i64().unwrap();
 
     // Start
