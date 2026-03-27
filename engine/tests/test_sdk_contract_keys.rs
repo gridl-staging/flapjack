@@ -39,7 +39,7 @@ async fn create_key_returns_camelcase_envelope() {
 
     assert_eq!(
         status,
-        StatusCode::CREATED,
+        StatusCode::OK,
         "create key should return 201: {body}"
     );
 
@@ -86,7 +86,7 @@ async fn list_keys_returns_wrapped_camelcase_array() {
         })),
     )
     .await;
-    assert_eq!(create_status, StatusCode::CREATED);
+    assert_eq!(create_status, StatusCode::OK);
     let key_value = create_body["key"].as_str().unwrap().to_string();
 
     // List keys
@@ -188,7 +188,7 @@ async fn get_key_returns_full_camelcase_dto() {
         })),
     )
     .await;
-    assert_eq!(create_status, StatusCode::CREATED);
+    assert_eq!(create_status, StatusCode::OK);
     let key_value = create_body["key"].as_str().unwrap().to_string();
 
     // Get the key
@@ -257,7 +257,7 @@ async fn update_key_returns_camelcase_envelope() {
         })),
     )
     .await;
-    assert_eq!(create_status, StatusCode::CREATED);
+    assert_eq!(create_status, StatusCode::OK);
     let key_value = create_body["key"].as_str().unwrap().to_string();
 
     // Update the key
@@ -341,7 +341,7 @@ async fn delete_key_returns_camelcase_envelope() {
         })),
     )
     .await;
-    assert_eq!(create_status, StatusCode::CREATED);
+    assert_eq!(create_status, StatusCode::OK);
     let key_value = create_body["key"].as_str().unwrap().to_string();
 
     // Delete the key
@@ -413,7 +413,7 @@ async fn restore_key_returns_camelcase_envelope() {
         })),
     )
     .await;
-    assert_eq!(create_status, StatusCode::CREATED);
+    assert_eq!(create_status, StatusCode::OK);
     let key_value = create_body["key"].as_str().unwrap().to_string();
 
     // Delete the key first
@@ -657,7 +657,7 @@ async fn update_key_with_invalid_acl_returns_400() {
         })),
     )
     .await;
-    assert_eq!(create_status, StatusCode::CREATED);
+    assert_eq!(create_status, StatusCode::OK);
     let key_value = create_body["key"].as_str().unwrap().to_string();
 
     // Try to update with invalid ACL

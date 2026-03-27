@@ -31,7 +31,7 @@ async fn batch_search_restricted_key_rejects_mixed_allowed_and_forbidden_indexes
         })),
     );
     let create_resp = app.clone().oneshot(create_req).await.unwrap();
-    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    assert_eq!(create_resp.status(), StatusCode::OK);
     let key_value = body_json(create_resp).await["key"]
         .as_str()
         .expect("create key response must include key")

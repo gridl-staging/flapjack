@@ -33,7 +33,7 @@ mod created_at {
             Some(json!({ "acl": ["search"], "description": "wire-format test key" })),
         );
         let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::OK);
         common::body_json(resp).await
     }
 

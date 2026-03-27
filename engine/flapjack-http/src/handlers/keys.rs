@@ -103,7 +103,7 @@ pub struct GenerateSecuredKeyResponse {
     tag = "keys",
     request_body(content = CreateKeyRequest, description = "Key configuration"),
     responses(
-        (status = 201, description = "Key created", body = CreateKeyResponse)
+        (status = 200, description = "Key created", body = CreateKeyResponse)
     ),
     security(
         ("api_key" = [])
@@ -130,7 +130,7 @@ pub async fn create_key(
         created_at,
     };
 
-    (StatusCode::CREATED, Json(response)).into_response()
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 /// List all API keys
@@ -504,7 +504,7 @@ mod tests {
 
     /// Send a POST /1/keys request with a representative key payload and return the parsed JSON response.
     ///
-    /// Asserts that the response status is 201 CREATED before returning.
+    /// Asserts that the response status is 200 OK before returning.
     async fn create_test_key(app: &Router) -> Value {
         let resp = app
             .clone()
@@ -530,7 +530,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::OK);
         body_json(resp).await
     }
 
@@ -848,7 +848,7 @@ mod tests {
 
         assert_eq!(
             resp.status(),
-            StatusCode::CREATED,
+            StatusCode::OK,
             "With middleware, text/plain should be normalized to application/json"
         );
     }
@@ -875,7 +875,7 @@ mod tests {
 
         assert_eq!(
             resp.status(),
-            StatusCode::CREATED,
+            StatusCode::OK,
             "application/json; charset=utf-8 must be accepted with middleware"
         );
     }
@@ -901,7 +901,7 @@ mod tests {
 
         assert_eq!(
             resp.status(),
-            StatusCode::CREATED,
+            StatusCode::OK,
             "Missing Content-Type must be accepted with middleware"
         );
     }
@@ -933,7 +933,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::OK);
         let created = body_json(resp).await;
         let key_value = created["key"].as_str().unwrap();
 

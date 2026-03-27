@@ -60,7 +60,7 @@ async fn bug5_created_at_shapes_for_key_endpoints() {
         })),
     )
     .await;
-    assert_eq!(create_status, StatusCode::CREATED);
+    assert_eq!(create_status, StatusCode::OK);
 
     let key_value = create_body["key"]
         .as_str()

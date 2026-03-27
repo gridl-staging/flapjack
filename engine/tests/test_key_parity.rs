@@ -28,7 +28,7 @@ async fn get_key_returns_dto_shape_without_internal_fields() {
         Some(json!({"acl": ["search"], "description": "DTO test key"})),
     );
     let resp = app.clone().oneshot(create_req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let create_body = body_json(resp).await;
     let key_value = create_body["key"].as_str().unwrap().to_string();
 
@@ -196,7 +196,7 @@ async fn create_key_returns_key_and_rfc3339_created_at() {
         Some(json!({"acl": ["search"], "description": "POST shape test"})),
     );
     let resp = app.clone().oneshot(create_req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
 
     // POST /1/keys returns { "key": "...", "createdAt": "<RFC3339>" }
@@ -347,7 +347,7 @@ async fn create_key_accepts_all_valid_acls() {
     let resp = app.clone().oneshot(create_req).await.unwrap();
     assert_eq!(
         resp.status(),
-        StatusCode::CREATED,
+        StatusCode::OK,
         "all 15 valid ACLs should be accepted"
     );
 }
@@ -659,7 +659,7 @@ async fn secured_key_restrictions_compose_with_parent_key_restrictions() {
         })),
     );
     let resp = app.clone().oneshot(parent_req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let parent_key = body_json(resp).await["key"].as_str().unwrap().to_string();
 
     // Secured key narrows index access and adds a stricter hitsPerPage cap of 2.
@@ -726,7 +726,7 @@ async fn updated_key_preserves_value_in_list_response() {
         Some(json!({"acl": ["search"], "description": "Before update"})),
     );
     let resp = app.clone().oneshot(create_req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::OK);
     let key_value = body_json(resp).await["key"].as_str().unwrap().to_string();
 
     // Update the key (change description)
