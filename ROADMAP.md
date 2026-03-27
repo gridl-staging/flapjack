@@ -17,8 +17,8 @@ Launch sign-off is still active, followed by the standing post-launch items:
 
 | # | Work Item | Status | Details |
 |---|-----------|--------|---------|
-| LAUNCH-1 | Replacement staging verification | In progress | The next staging rerun is now the real gate. The locally validated parity bundle now includes the corrected `POST /2/abtests` `200 OK` contract, the corrected `POST /1/indexes/{indexName}` `201 Created` contract, and the matching high-risk mutation OpenAPI fixes. None of that is proven on staging until the next sync/push and rerun. |
-| LAUNCH-2 | Launch proof pack and top-level truth-sync | In progress | Finalize verification notes, run deferred validation scripts, and align public docs with the exact staging state that ships. |
+| LAUNCH-1 | Replacement staging verification | In progress | Staging rerun `23670478503` already validated the parity bundle far enough to clear dashboard, OpenAPI-sync, Clippy, integration smoke, and the cross-language/sdk matrix. The only remaining blocker is one stale CRUD setup assertion in `engine/tests/test_sdk_contract_crud.rs::multi_index_get_objects_returns_results_array`, now fixed locally and pending the next rerun. |
+| LAUNCH-2 | Launch proof pack and top-level truth-sync | In progress | Keep the proof notes and routing docs aligned with the real gate: latest rerun `23670478503` failed only on the stale CRUD setup assertion above, and the next rerun needs to be captured as the final launch proof. |
 | CONF-1 | Confidence-completeness hardening | In progress | Stage 1 deterministic parity hardening and Stage 2 public-source-of-truth checks are now green locally. Remaining confidence-completeness work is the heavier operational block: soak/load interpretation, failure-mode proof, upgrade/rollback guidance, runbooks, and security confidence. |
 | PR-11 | Distributed tracing (OpenTelemetry) | Not started | OTLP export behind `otel` feature flag. Structured logging groundwork shipped. |
 | PR-12 | Runbooks & incident response | Not started | Build from real production incidents. |

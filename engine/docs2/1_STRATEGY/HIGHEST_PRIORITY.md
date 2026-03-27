@@ -1,6 +1,6 @@
 # Highest Priority: Open-Source Launch Readiness
 
-**Updated: 2026-03-27 (launch gate still open; deterministic parity hardening added more locally-fixed mutation/OpenAPI drift beyond `/2/abtests`)**
+**Updated: 2026-03-27 (launch gate still open; post-parity staging rerun narrowed the remaining blocker to one stale CRUD setup assertion)**
 
 ## Mission
 
@@ -30,15 +30,16 @@ Replacement run `23662728127` then cleared the dashboard full e2e failure but ex
 
 Replacement run `23663387346` then cleared the dashboard full e2e and Rust fast-test failures but exposed one more release-surface gap: the staged/public mirror did not include the committed `engine/docs2/openapi.json` artifact, so `flapjack-http::openapi_export_tests::committed_docs2_openapi_matches_export_output` failed in CI. That sync fix was committed in dev as `db928f89`, synced to staging, and pushed there as `1accd59`.
 
-The pre-review staging run [`23664621314`](https://github.com/gridl-staging/flapjack/actions/runs/23664621314) completed `success` on staging commit `1accd59`, so it is useful evidence for the dashboard and OpenAPI-sync fixes. It is still not sufficient as the final launch gate because it predates the corrected `/2/abtests` `200 OK` compatibility fix and the later deterministic-parity hardening that also corrected `POST /1/indexes/{indexName}` to `201 Created` and restored missing OpenAPI mutation-path coverage.
+The pre-review staging run [`23664621314`](https://github.com/gridl-staging/flapjack/actions/runs/23664621314) completed `success` on staging commit `1accd59`, so it remains useful evidence for the dashboard and OpenAPI-sync fixes. It is not the final launch gate because it predates the corrected `/2/abtests` `200 OK` compatibility fix and the later deterministic-parity hardening that also corrected `POST /1/indexes/{indexName}` to `201 Created` and restored missing OpenAPI mutation-path coverage.
+
+That parity bundle did reach staging in rerun [`23670478503`](https://github.com/gridl-staging/flapjack/actions/runs/23670478503) on commit `ed0b64f`. That run cleared `Dashboard full e2e tests`, `Clippy`, `Integration smoke`, the dashboard matrix, and the language/SDK jobs. The only remaining failures were `Rust tests (fast)` and `Rust tests (all)`, both caused by the same stale assertion in `engine/tests/test_sdk_contract_crud.rs::multi_index_get_objects_returns_results_array`: its setup still expected `201 Created` while seeding with `PUT /1/indexes/{index}/{objectID}`, even though the runtime and neighboring CRUD tests correctly return `200 OK`.
 
 ## Remaining Before Launch
 
-1. **Push the corrected mutation-parity bundle and rerun staging** — sync the `/2/abtests` `200 OK` fix, the `POST /1/indexes/{indexName}` `201 Created` fix, and the matching OpenAPI parity hardening to staging/public, then use that replacement GitHub Actions run as the new launch gate.
+1. **Push the stale CRUD setup-expectation fix and rerun staging** — sync the `test_sdk_contract_crud.rs` correction for `PUT /1/indexes/{index}/{objectID}` and use that replacement GitHub Actions run as the new launch gate.
 2. **Run deferred validation scripts** — execute `engine/tests/validate_doc_links.sh` and `engine/tests/readme_api_smoke.sh` against the final pre-launch tree once staging is green.
 3. **Publish the proof pack** — update the active verification notes with the exact green staging run, commit IDs, and validation evidence.
 4. **Complete source-of-truth cleanup** — keep the repo-level priority and roadmap docs aligned with the canonical launch record so the public state is no longer split across stale narratives.
-5. **Verify identity rewrite behavior** — confirm the debbie staging sync still applies the expected staging/public replacements after the latest push.
 
 ## Deterministic Parity Progress
 
@@ -55,6 +56,12 @@ That work already paid off by catching and fixing additional local drift that st
 - `/1/indexes/{indexName}` auto-ID save was not exported in OpenAPI
 - `/1/indexes/{indexName}/{objectID}/partial` was not exported in OpenAPI
 - `/2/abtests/{id}/conclude` was documented with a weaker response schema than the runtime guarantees
+
+Debbie identity-rewrite verification is now also complete for this staging tree:
+
+- staging README badges/releases URLs point at `gridl-staging/flapjack`
+- staging install commands point at `https://staging.flapjack.foo`
+- `.github/workflows/ci.yml` intentionally keeps the three-repo guard unchanged and is correctly excluded from rewrite transforms
 
 ## Recently Resolved Launch Blockers
 

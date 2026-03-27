@@ -396,7 +396,7 @@ async fn multi_index_get_objects_returns_results_array() {
         Some(json!({ "label": "Alpha" })),
     )
     .await;
-    assert_eq!(s1_status, StatusCode::CREATED);
+    assert_eq!(s1_status, StatusCode::OK);
 
     let (s2_status, s2_body) = common::send_json(
         &app,
@@ -406,7 +406,7 @@ async fn multi_index_get_objects_returns_results_array() {
         Some(json!({ "label": "Beta" })),
     )
     .await;
-    assert_eq!(s2_status, StatusCode::CREATED);
+    assert_eq!(s2_status, StatusCode::OK);
 
     common::wait_for_task_local(&app, common::extract_task_id(&s1_body)).await;
     common::wait_for_task_local(&app, common::extract_task_id(&s2_body)).await;
