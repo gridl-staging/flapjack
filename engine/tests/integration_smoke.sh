@@ -439,7 +439,7 @@ main() {
 
   request_json api_request POST '/1/keys' '{"acl":["search","browse"],"indexes":["smoke_test"],"description":"Smoke restricted key"}'
   CREATED_API_KEY="$(printf '%s\n' "$LAST_BODY" | jq -r '.key // empty' 2>/dev/null || true)"
-  if [ "$LAST_HTTP" = '201' ] && [ -n "$CREATED_API_KEY" ]; then
+  if [ "$LAST_HTTP" = '200' ] && [ -n "$CREATED_API_KEY" ]; then
     pass 'POST /1/keys creates restricted key'
   else
     fail 'POST /1/keys creates restricted key' "HTTP ${LAST_HTTP} — ${LAST_BODY}"
