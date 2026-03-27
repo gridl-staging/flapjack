@@ -1086,7 +1086,7 @@ mod tests {
         assert_eq!(
             doc.pointer("/paths/~12~1abtests~1{id}~1conclude/post/responses/200/content/application~1json/schema/$ref")
                 .and_then(|v| v.as_str()),
-            Some("#/components/schemas/Experiment")
+            Some("#/components/schemas/ConcludedExperimentResponse")
         );
         assert_eq!(
             doc.pointer("/paths/~12~1abtests~1{id}~1results/get/responses/200/content/application~1json/schema/$ref")

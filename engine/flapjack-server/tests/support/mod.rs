@@ -48,8 +48,8 @@ fn strip_flapjack_ambient_env_from_process_command(command: &mut std::process::C
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_task_poll_response, with_each_flapjack_ambient_env_var, TaskPollOutcome,
-        FLAPJACK_AMBIENT_ENV_VARS,
+        classify_task_poll_response, is_transient_task_poll_transport_error,
+        with_each_flapjack_ambient_env_var, TaskPollOutcome, FLAPJACK_AMBIENT_ENV_VARS,
     };
     use serde_json::json;
 
@@ -112,6 +112,19 @@ mod tests {
             }
             other => panic!("expected terminal failure outcome, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn transient_task_poll_transport_errors_are_retryable() {
+        assert!(is_transient_task_poll_transport_error(
+            "failed reading response from 127.0.0.1:44051: Resource temporarily unavailable (os error 11)"
+        ));
+        assert!(is_transient_task_poll_transport_error(
+            "failed to connect to 127.0.0.1:44051: Connection refused (os error 61)"
+        ));
+        assert!(!is_transient_task_poll_transport_error(
+            "invalid HTTP response from 127.0.0.1: garbage"
+        ));
     }
 }
 
@@ -220,8 +233,17 @@ impl RunningServer {
                 last_body
             );
 
-            let response = http_request(self.bind_addr(), "GET", &path, None)
-                .unwrap_or_else(|error| panic!("task polling request should succeed: {error}"));
+            let response = match http_request(self.bind_addr(), "GET", &path, None) {
+                Ok(response) => response,
+                // Crash/restart tests can briefly observe socket-level EAGAIN/timeout/refused
+                // while the task-polling loop is still within its overall retry window.
+                Err(error) if is_transient_task_poll_transport_error(&error) => {
+                    last_body = serde_json::json!({ "transientTransportError": error });
+                    thread::sleep(Duration::from_millis(25));
+                    continue;
+                }
+                Err(error) => panic!("task polling request should succeed: {error}"),
+            };
             assert_eq!(
                 response.status, 200,
                 "task polling should return HTTP 200, got {} for task {} with body {}",
@@ -468,6 +490,13 @@ fn classify_task_poll_response(task_id: i64, body: &Value) -> TaskPollOutcome {
     }
 
     TaskPollOutcome::Pending
+}
+
+fn is_transient_task_poll_transport_error(error: &str) -> bool {
+    error.contains("Resource temporarily unavailable")
+        || error.contains("timed out")
+        || error.contains("Connection refused")
+        || error.contains("Connection reset")
 }
 
 struct JsonResponse {

@@ -1,6 +1,6 @@
 # Highest Priority: Open-Source Launch Readiness
 
-**Updated: 2026-03-27 (launch gate still open; post-parity staging rerun narrowed the remaining blocker to one stale CRUD setup assertion)**
+**Updated: 2026-03-27 (launch gate still open; latest staging rerun narrowed the remaining blockers to one crash-durability helper issue and one stale OpenAPI typed-schema expectation)**
 
 ## Mission
 
@@ -34,9 +34,14 @@ The pre-review staging run [`23664621314`](https://github.com/gridl-staging/flap
 
 That parity bundle did reach staging in rerun [`23670478503`](https://github.com/gridl-staging/flapjack/actions/runs/23670478503) on commit `ed0b64f`. That run cleared `Dashboard full e2e tests`, `Clippy`, `Integration smoke`, the dashboard matrix, and the language/SDK jobs. The only remaining failures were `Rust tests (fast)` and `Rust tests (all)`, both caused by the same stale assertion in `engine/tests/test_sdk_contract_crud.rs::multi_index_get_objects_returns_results_array`: its setup still expected `201 Created` while seeding with `PUT /1/indexes/{index}/{objectID}`, even though the runtime and neighboring CRUD tests correctly return `200 OK`.
 
+Follow-up rerun [`23671047087`](https://github.com/gridl-staging/flapjack/actions/runs/23671047087) on commit `18e168d` cleared that CRUD issue and again passed dashboard, Clippy, integration smoke, and the cross-language/sdk matrix. The only remaining failures were:
+
+1. `flapjack-server::crash_durability_test::acknowledged_batch_write_remains_searchable_after_crash_restart`, where the task-poll helper treated transient `Resource temporarily unavailable (os error 11)` transport errors as fatal inside its own retry loop.
+2. `flapjack-http::openapi::tests::personalization_and_experiment_lifecycle_use_typed_schemas`, where the test still expected `#/components/schemas/Experiment` after the conclude-A/B-test response had been intentionally tightened to `#/components/schemas/ConcludedExperimentResponse`.
+
 ## Remaining Before Launch
 
-1. **Push the stale CRUD setup-expectation fix and rerun staging** — sync the `test_sdk_contract_crud.rs` correction for `PUT /1/indexes/{index}/{objectID}` and use that replacement GitHub Actions run as the new launch gate.
+1. **Push the crash-durability/OpenAPI follow-up fixes and rerun staging** — sync the `wait_for_task_published` transient-transport retry fix and the `ConcludedExperimentResponse` OpenAPI test expectation fix, then use that replacement GitHub Actions run as the new launch gate.
 2. **Run deferred validation scripts** — execute `engine/tests/validate_doc_links.sh` and `engine/tests/readme_api_smoke.sh` against the final pre-launch tree once staging is green.
 3. **Publish the proof pack** — update the active verification notes with the exact green staging run, commit IDs, and validation evidence.
 4. **Complete source-of-truth cleanup** — keep the repo-level priority and roadmap docs aligned with the canonical launch record so the public state is no longer split across stale narratives.
