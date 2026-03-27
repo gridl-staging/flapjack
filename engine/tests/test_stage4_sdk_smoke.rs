@@ -479,7 +479,7 @@ async fn ab_lifecycle_smoke_populates_variant_metrics_and_honors_stop_side_effec
         })),
     )
     .await;
-    assert_eq!(create_resp.status(), StatusCode::OK);
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
     let create_body = body_json(create_resp).await;
     assert_eq!(
         sorted_object_keys(&create_body),
