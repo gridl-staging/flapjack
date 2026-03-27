@@ -821,7 +821,7 @@ mod tests {
         // Axum Json<> extractor rejects non-application/json content types
         assert_ne!(
             resp.status(),
-            StatusCode::CREATED,
+            StatusCode::OK,
             "Without middleware, text/plain should be rejected by Json<> extractor"
         );
     }

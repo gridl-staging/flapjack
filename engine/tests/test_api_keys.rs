@@ -245,7 +245,7 @@ async fn test_create_and_use_scoped_key() {
     let resp = authed(&client, "POST", &format!("http://{}/1/keys", addr), ADMIN_KEY)
         .json(&json!({"acl": ["search", "addObject"], "indexes": ["products"], "description": "Scoped key"}))
         .send().await.unwrap();
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let scoped_key = body["key"].as_str().unwrap().to_string();
     assert!(!scoped_key.is_empty(), "created key should have a value");
@@ -334,7 +334,7 @@ async fn test_wildcard_index_patterns() {
     .send()
     .await
     .unwrap();
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let dev_key = resp.json::<serde_json::Value>().await.unwrap()["key"]
         .as_str()
         .unwrap()
@@ -451,7 +451,7 @@ async fn test_key_ttl_expiry() {
     .send()
     .await
     .unwrap();
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let expiring_key = resp.json::<serde_json::Value>().await.unwrap()["key"]
         .as_str()
         .unwrap()
@@ -501,7 +501,7 @@ async fn test_key_crud_lifecycle() {
     .send()
     .await
     .unwrap();
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let key_val = body["key"].as_str().unwrap().to_string();
     assert!(
@@ -966,7 +966,7 @@ async fn test_concurrent_key_creation() {
     let mut created_keys = vec![];
     for handle in handles {
         let resp = handle.await.unwrap();
-        assert_eq!(resp.status(), 201, "Concurrent key creation should succeed");
+        assert_eq!(resp.status(), 200, "Concurrent key creation should succeed");
         let body: serde_json::Value = resp.json().await.unwrap();
         created_keys.push(body["key"].as_str().unwrap().to_string());
     }

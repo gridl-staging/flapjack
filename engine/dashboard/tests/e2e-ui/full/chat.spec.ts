@@ -7,6 +7,7 @@ import {
   isVectorSearchEnabled,
 } from '../../fixtures/api-helpers';
 import {
+  setChatReadySettings,
   setChatStubProvider,
   setChatSearchMode,
   addDocumentsAndWaitForSearchable,
@@ -36,7 +37,7 @@ async function prepareChatIndex(
   request: APIRequestContext,
   indexName: string = CHAT_INDEX,
 ) {
-  await setChatStubProvider(request, indexName);
+  await setChatReadySettings(request, indexName);
   await addDocumentsAndWaitForSearchable(
     request,
     indexName,
@@ -210,7 +211,7 @@ test.describe('Chat / RAG', () => {
     try {
       await deleteIndex(request, emptyIndex);
       await createIndex(request, emptyIndex);
-      await setChatStubProvider(request, emptyIndex);
+      await setChatReadySettings(request, emptyIndex);
 
       // Act: navigate and send query against empty index
       await page.goto(emptyChatUrl);

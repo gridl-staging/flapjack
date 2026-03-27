@@ -3,6 +3,7 @@
 import { expect, type APIRequestContext } from '@playwright/test';
 import type { ChatRequest, ChatResponse } from '../../src/lib/types';
 import { API_HEADERS } from './local-instance';
+import { configureEmbedder, waitForEmbedder } from './api-helpers';
 import {
   addDocuments,
   buildIndexPath,
@@ -70,6 +71,19 @@ export async function setChatStubProvider(
     const settings = await getSettings(request, indexName);
     expect(hasStubAiProvider(settings)).toBe(true);
   }).toPass({ timeout: 15_000 });
+}
+
+/** Configure the minimum persisted settings required for the chat UI to render. */
+export async function setChatReadySettings(
+  request: APIRequestContext,
+  indexName: string,
+): Promise<void> {
+  await setChatStubProvider(request, indexName);
+  await configureEmbedder(request, indexName, 'default', {
+    source: 'userProvided',
+    dimensions: 384,
+  });
+  await waitForEmbedder(request, indexName, 'default');
 }
 
 /** Add documents, then poll until the index reports the expected query hits. */

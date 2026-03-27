@@ -414,7 +414,7 @@ mod tests {
         );
         assert_eq!(
             doc.pointer(
-                "/paths/~11~1keys/post/responses/201/content/application~1json/schema/$ref"
+                "/paths/~11~1keys/post/responses/200/content/application~1json/schema/$ref"
             )
             .and_then(|v| v.as_str()),
             Some("#/components/schemas/CreateKeyResponse")

@@ -136,7 +136,7 @@ fn key_endpoints_use_concrete_schema_components() {
     );
     assert_schema_ref(
         &doc,
-        "/paths/~11~1keys/post/responses/201/content/application~1json/schema/$ref",
+        "/paths/~11~1keys/post/responses/200/content/application~1json/schema/$ref",
         "#/components/schemas/CreateKeyResponse",
     );
     assert_schema_ref(

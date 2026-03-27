@@ -28,7 +28,7 @@ import {
   addDocuments,
   isVectorSearchEnabled,
 } from '../../fixtures/api-helpers';
-import { setChatStubProvider } from '../../fixtures/chat-api-helpers';
+import { setChatReadySettings } from '../../fixtures/chat-api-helpers';
 
 test.describe('Navigation & Layout', () => {
 
@@ -321,7 +321,7 @@ test.describe('Navigation & Layout', () => {
       await addDocuments(request, chatIndex, [
         { objectID: 'chat-nav-1', name: 'Nav Chat Product', category: 'Test' },
       ]);
-      await setChatStubProvider(request, chatIndex);
+      await setChatReadySettings(request, chatIndex);
 
       await gotoIndexPage(page, chatIndex);
 

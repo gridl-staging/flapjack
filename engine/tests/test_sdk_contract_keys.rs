@@ -40,7 +40,7 @@ async fn create_key_returns_camelcase_envelope() {
     assert_eq!(
         status,
         StatusCode::OK,
-        "create key should return 201: {body}"
+        "create key should return 200: {body}"
     );
 
     // Must have camelCase fields
