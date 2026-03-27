@@ -1,3 +1,5 @@
+"""
+"""
 import time
 from typing import List
 
@@ -12,6 +14,7 @@ class RetryOutcome:
 
 
 class RetryStrategy:
+    """TODO: Document RetryStrategy."""
     def valid_hosts(self, hosts: List[Host]) -> List[Host]:
         for host in hosts:
             if not host.up and time.time() - host.last_use > Host.TTL:
@@ -23,6 +26,7 @@ class RetryStrategy:
         return time.time()
 
     def decide(self, host: Host, response: ApiResponse) -> str:
+        """TODO: Document RetryStrategy.decide."""
         host.last_use = time.time()
 
         if response.is_timed_out_error:

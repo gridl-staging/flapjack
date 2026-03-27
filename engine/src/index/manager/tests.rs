@@ -1,0 +1,4032 @@
+use super::*;
+use crate::index::rules::GeneratedFacetFilter;
+use tempfile::TempDir;
+
+#[test]
+fn manager_mod_stays_under_hard_line_limit() {
+    const MANAGER_MOD_HARD_LIMIT: usize = 800;
+
+    let line_count = include_str!("mod.rs").lines().count();
+    assert!(
+        line_count <= MANAGER_MOD_HARD_LIMIT,
+        "engine/src/index/manager/mod.rs must stay at or below {} lines (found {})",
+        MANAGER_MOD_HARD_LIMIT,
+        line_count
+    );
+}
+
+/// TODO: Document reserve_numeric_task_id_skips_existing_alias_keys.
+#[tokio::test]
+async fn reserve_numeric_task_id_skips_existing_alias_keys() {
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+
+    let seed = 4242_i64;
+    let task_a = TaskInfo::new("task_alias_a".to_string(), seed, 0);
+    let task_b = TaskInfo::new("task_alias_b".to_string(), seed + 1, 0);
+
+    manager.tasks.insert(task_a.id.clone(), task_a.clone());
+    manager.tasks.insert(task_a.numeric_id.to_string(), task_a);
+    manager.tasks.insert(task_b.id.clone(), task_b.clone());
+    manager.tasks.insert(task_b.numeric_id.to_string(), task_b);
+
+    let reserved = manager.reserve_numeric_task_id(seed);
+    assert_eq!(reserved, seed + 2);
+}
+
+#[tokio::test]
+async fn make_noop_task_registers_numeric_alias_lookup() {
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+
+    let task = manager.make_noop_task("noop_task_alias").unwrap();
+    let by_numeric_id = manager.get_task(&task.numeric_id.to_string()).unwrap();
+
+    assert_eq!(by_numeric_id.id, task.id);
+    assert!(matches!(by_numeric_id.status, TaskStatus::Succeeded));
+}
+
+/// TODO: Document recovery_phase_helpers_are_callable.
+#[tokio::test]
+async fn recovery_phase_helpers_are_callable() {
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+    manager.create_tenant("recovery_helpers").unwrap();
+
+    let tenant_path = temp_dir.path().join("recovery_helpers");
+    let oplog = manager.get_or_create_oplog("recovery_helpers").unwrap();
+    let ops = oplog.read_since(0).unwrap();
+    let index = manager.get_or_load("recovery_helpers").unwrap();
+
+    manager.rebuild_lww_map("recovery_helpers", &oplog).unwrap();
+    manager
+        .replay_config_ops("recovery_helpers", &tenant_path, &ops)
+        .unwrap();
+    let settings = manager
+        .load_settings_after_config("recovery_helpers", &tenant_path)
+        .unwrap();
+    manager
+        .replay_document_ops(
+            "recovery_helpers",
+            &index,
+            &tenant_path,
+            &ops,
+            super::recovery::RecoverySeqWindow {
+                committed_seq: 0,
+                final_seq: ops.last().map(|entry| entry.seq).unwrap_or(0),
+            },
+            settings.as_ref(),
+        )
+        .unwrap();
+    #[cfg(feature = "vector-search")]
+    manager.rebuild_vector_index("recovery_helpers", &tenant_path, &ops);
+}
+
+/// TODO: Document replay_config_ops_surfaces_settings_write_failures.
+#[tokio::test]
+async fn replay_config_ops_surfaces_settings_write_failures() {
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+    let tenant_path = temp_dir.path().join("missing_recovery_settings_path");
+
+    let oplog_dir = temp_dir.path().join("replay_config_ops_oplog");
+    let oplog = OpLog::open(&oplog_dir, "missing_recovery_settings_path", "test_node").unwrap();
+    oplog
+        .append(
+            "settings",
+            serde_json::json!({
+                "searchableAttributes": ["title"]
+            }),
+        )
+        .unwrap();
+    let ops = oplog.read_since(0).unwrap();
+
+    let result = manager.replay_config_ops("missing_recovery_settings_path", &tenant_path, &ops);
+    assert!(
+        result.is_err(),
+        "settings replay should fail when tenant path does not exist"
+    );
+}
+
+/// TODO: Document read_committed_seq_does_not_require_tenant_load.
+#[tokio::test]
+async fn read_committed_seq_does_not_require_tenant_load() {
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+    let tenant_path = temp_dir.path().join("persisted_seq_only");
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    crate::index::oplog::write_committed_seq(&tenant_path, 17).unwrap();
+
+    assert!(
+        manager.loaded.get("persisted_seq_only").is_none(),
+        "test precondition: tenant must not be loaded"
+    );
+
+    let committed_seq = crate::index::oplog::read_committed_seq(&tenant_path);
+    assert_eq!(committed_seq, 17);
+
+    assert!(
+        manager.loaded.get("persisted_seq_only").is_none(),
+        "reading committed_seq from disk must not load tenant into memory"
+    );
+}
+
+/// TODO: Document setup_tenant_with_pending_document_recovery.
+fn setup_tenant_with_pending_document_recovery(base_path: &Path, tenant_id: &str) {
+    let tenant_path = base_path.join(tenant_id);
+    std::fs::create_dir_all(&tenant_path).unwrap();
+
+    let schema = crate::index::schema::Schema::builder().build();
+    let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+
+    crate::index::settings::IndexSettings::default()
+        .save(tenant_path.join("settings.json"))
+        .unwrap();
+
+    let oplog_dir = tenant_path.join("oplog");
+    let oplog = OpLog::open(&oplog_dir, tenant_id, "test_node").unwrap();
+    oplog
+        .append(
+            "upsert",
+            serde_json::json!({
+                "objectID": "doc1",
+                "body": {
+                    "objectID": "doc1",
+                    "title": "Concurrent recovery fixture"
+                }
+            }),
+        )
+        .unwrap();
+
+    std::fs::write(tenant_path.join("committed_seq"), "0").unwrap();
+}
+
+/// TODO: Document get_or_load_serializes_concurrent_recovery_for_same_tenant.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_or_load_serializes_concurrent_recovery_for_same_tenant() {
+    let temp_dir = TempDir::new().unwrap();
+    let tenant_id = "concurrent_recovery";
+    setup_tenant_with_pending_document_recovery(temp_dir.path(), tenant_id);
+
+    let manager = IndexManager::new(temp_dir.path());
+    let barrier = Arc::new(std::sync::Barrier::new(5));
+    let mut handles = Vec::new();
+
+    for _ in 0..4 {
+        let manager = Arc::clone(&manager);
+        let barrier = Arc::clone(&barrier);
+        handles.push(tokio::task::spawn_blocking(move || {
+            barrier.wait();
+            manager.get_or_load(tenant_id).map(|index| {
+                let reader = index.reader();
+                reader.searcher().num_docs()
+            })
+        }));
+    }
+
+    barrier.wait();
+
+    for handle in handles {
+        let load_result = handle.await.unwrap();
+        assert!(
+            load_result.is_ok(),
+            "concurrent get_or_load should not race recovery: {:?}",
+            load_result
+        );
+        assert_eq!(load_result.unwrap(), 1);
+    }
+
+    assert_eq!(
+        crate::index::oplog::read_committed_seq(&temp_dir.path().join(tenant_id)),
+        1,
+        "successful recovery should advance committed_seq exactly once"
+    );
+    assert_eq!(
+        manager.loaded_count(),
+        1,
+        "tenant should only be loaded once"
+    );
+    assert!(
+        manager.get_document(tenant_id, "doc1").unwrap().is_some(),
+        "recovered document should remain queryable after concurrent loads"
+    );
+}
+
+/// TODO: Document build_effective_search_params_errors_on_invalid_generated_facet_filter.
+#[test]
+fn build_effective_search_params_errors_on_invalid_generated_facet_filter() {
+    let configured_facets = std::collections::HashSet::from([String::from("genre")]);
+    let effects = RuleEffects {
+        generated_facet_filters: vec![GeneratedFacetFilter {
+            expression: "genre:".to_string(),
+            disjunctive: false,
+        }],
+        ..Default::default()
+    };
+
+    let result = build_effective_search_params(&SearchParamsInput {
+        request_filter: None,
+        request_limit: 10,
+        request_offset: 0,
+        request_restrict_searchable_attrs: None,
+        request_optional_filter_specs: None,
+        sum_or_filters_scores: false,
+        exact_on_single_word_query_override: None,
+        disable_exact_on_attributes_override: None,
+        configured_facet_set: Some(&configured_facets),
+        rule_effects: Some(&effects),
+        hits_per_page_cap: None,
+    });
+    assert!(result.is_err());
+    let err = result.err().unwrap().to_string();
+    assert!(err.contains("Invalid generated automatic facet filter expression"));
+}
+
+/// TODO: Document build_effective_search_params_ignores_generated_optional_facet_filter_without_faceting.
+#[test]
+fn build_effective_search_params_ignores_generated_optional_facet_filter_without_faceting() {
+    let configured_facets = std::collections::HashSet::from([String::from("brand")]);
+    let effects = RuleEffects {
+        generated_optional_facet_filters: vec![("genre".to_string(), "comedy".to_string(), 42)],
+        ..Default::default()
+    };
+
+    let result = build_effective_search_params(&SearchParamsInput {
+        request_filter: None,
+        request_limit: 10,
+        request_offset: 0,
+        request_restrict_searchable_attrs: None,
+        request_optional_filter_specs: None,
+        sum_or_filters_scores: false,
+        exact_on_single_word_query_override: None,
+        disable_exact_on_attributes_override: None,
+        configured_facet_set: Some(&configured_facets),
+        rule_effects: Some(&effects),
+        hits_per_page_cap: None,
+    })
+    .expect("optional facet filters on non-faceted attributes should be ignored");
+
+    assert!(
+        result.optional_filter_specs.is_none(),
+        "non-configured generated optional facet filters must not be appended"
+    );
+}
+
+/// TODO: Document bm25_short_field_correction_factor_has_expected_directionality.
+#[test]
+fn bm25_short_field_correction_factor_has_expected_directionality() {
+    let avg_doc_len_tokens = 4.0;
+
+    let short_factor = bm25_short_field_correction_factor(2, avg_doc_len_tokens);
+    let avg_factor = bm25_short_field_correction_factor(4, avg_doc_len_tokens);
+    let long_factor = bm25_short_field_correction_factor(6, avg_doc_len_tokens);
+
+    assert!(
+        short_factor < 1.0,
+        "short docs should be penalized when lowering b"
+    );
+    assert!(
+        (avg_factor - 1.0).abs() < 1e-6,
+        "avg-length docs should keep nearly identical score"
+    );
+    assert!(
+        long_factor > 1.0,
+        "long docs should be boosted when lowering b"
+    );
+}
+
+#[test]
+fn typo_distance_strict_disables_prefix_shortcut_when_not_allowed() {
+    assert_eq!(
+        typo_distance_strict("red", "redness", true),
+        0,
+        "allow_prefix=true should keep existing prefix-as-zero behavior"
+    );
+    assert!(
+        typo_distance_strict("red", "redness", false) > 0,
+        "allow_prefix=false must not treat prefix-only matches as distance 0"
+    );
+}
+
+/// TODO: Document compute_best_attribute_index_respects_prefix_eligibility.
+#[test]
+fn compute_best_attribute_index_respects_prefix_eligibility() {
+    let query_terms = vec!["red".to_string(), "shoe".to_string()];
+    let prefix_eligible = vec![false, true]; // prefixLast for "red shoe"
+    let tokens_by_path = vec![
+        (0usize, vec!["redness".to_string()]),
+        (1usize, vec!["shoe".to_string()]),
+    ];
+
+    assert_eq!(
+        compute_best_attribute_index(
+            &query_terms,
+            &tokens_by_path,
+            &AttributeRankingConfig {
+                prefix_eligible: &prefix_eligible,
+                min_word_size_for_1_typo: 4,
+                min_word_size_for_2_typos: 8,
+                attribute_criteria_computed_by_min_proximity: false,
+                min_proximity: 1,
+                unordered_path_indexes: &std::collections::HashSet::new(),
+            },
+        ),
+        1,
+        "Non-prefix term 'red' should not match title token 'redness' under prefixLast"
+    );
+}
+
+#[test]
+fn compute_typo_bucket_rejects_short_word_typos() {
+    let query_terms = vec!["cat".to_string()];
+    let doc_tokens = vec!["cut".to_string()];
+    let prefix_eligible = vec![false];
+
+    assert_eq!(
+        compute_typo_bucket_from_tokens(&query_terms, &doc_tokens, &prefix_eligible, 4, 8),
+        3,
+        "Length-3 terms must not be treated as typo-tolerant matches in bucket recomputation"
+    );
+}
+
+/// TODO: Document compute_best_attribute_index_rejects_short_word_typos.
+#[test]
+fn compute_best_attribute_index_rejects_short_word_typos() {
+    let query_terms = vec!["cat".to_string()];
+    let prefix_eligible = vec![false];
+    let tokens_by_path = vec![
+        (0usize, vec!["cut".to_string()]),
+        (1usize, vec!["cat".to_string()]),
+    ];
+
+    assert_eq!(
+        compute_best_attribute_index(
+            &query_terms,
+            &tokens_by_path,
+            &AttributeRankingConfig {
+                prefix_eligible: &prefix_eligible,
+                min_word_size_for_1_typo: 4,
+                min_word_size_for_2_typos: 8,
+                attribute_criteria_computed_by_min_proximity: false,
+                min_proximity: 1,
+                unordered_path_indexes: &std::collections::HashSet::new(),
+            },
+        ),
+        1,
+        "Length-3 term typo in higher-priority attribute must not outrank exact match in lower attribute"
+    );
+}
+
+/// TODO: Document compute_best_attribute_index_preserves_unordered_attribute_priority.
+#[test]
+fn compute_best_attribute_index_preserves_unordered_attribute_priority() {
+    let query_terms = vec!["apple".to_string()];
+    let prefix_eligible = vec![false];
+    let unordered_path_indexes = std::collections::HashSet::from([1usize, 2usize]);
+    let tokens_by_path = vec![
+        // Matching unordered path should keep its configured attribute priority.
+        (2usize, vec!["apple".to_string()]),
+        (3usize, vec!["apple".to_string()]),
+    ];
+
+    assert_eq!(
+        compute_best_attribute_index(
+            &query_terms,
+            &tokens_by_path,
+            &AttributeRankingConfig {
+                prefix_eligible: &prefix_eligible,
+                min_word_size_for_1_typo: 4,
+                min_word_size_for_2_typos: 8,
+                attribute_criteria_computed_by_min_proximity: false,
+                min_proximity: 1,
+                unordered_path_indexes: &unordered_path_indexes,
+            },
+        ),
+        2,
+        "unordered() must not rewrite attribute priority to the first unordered slot"
+    );
+}
+
+/// TODO: Document compute_best_attribute_by_proximity_single_term_preserves_raw_attribute_priority.
+#[test]
+fn compute_best_attribute_by_proximity_single_term_preserves_raw_attribute_priority() {
+    let query_terms = vec!["apple".to_string()];
+    let prefix_eligible = vec![false];
+    let unordered_path_indexes = std::collections::HashSet::from([1usize, 4usize]);
+    let tokens_by_path = vec![
+        // Matching unordered path should keep path index 4, not normalize to 1.
+        (4usize, vec!["apple".to_string()]),
+        (6usize, vec!["apple".to_string()]),
+    ];
+
+    assert_eq!(
+        compute_best_attribute_by_proximity(
+            &query_terms,
+            &tokens_by_path,
+            &prefix_eligible,
+            1,
+            &unordered_path_indexes,
+        ),
+        4,
+        "single-term min-proximity attribute criterion must preserve unordered attribute priority"
+    );
+}
+
+/// TODO: Document compute_best_attribute_by_proximity_unordered_paths_ignore_position_penalty.
+#[test]
+fn compute_best_attribute_by_proximity_unordered_paths_ignore_position_penalty() {
+    let query_terms = vec!["hello".to_string(), "world".to_string()];
+    let prefix_eligible = vec![false, false];
+    let unordered_path_indexes = std::collections::HashSet::from([0usize]);
+    let tokens_by_path = vec![
+        // Earlier unordered attribute should tie at neutral min-proximity even with a gap.
+        (
+            0usize,
+            vec![
+                "hello".to_string(),
+                "alpha".to_string(),
+                "world".to_string(),
+            ],
+        ),
+        // Later ordered attribute has better literal proximity but lower attribute priority.
+        (1usize, vec!["hello".to_string(), "world".to_string()]),
+    ];
+
+    assert_eq!(
+        compute_best_attribute_by_proximity(
+            &query_terms,
+            &tokens_by_path,
+            &prefix_eligible,
+            1,
+            &unordered_path_indexes,
+        ),
+        0,
+        "unordered() should neutralize position penalty when attribute criteria are computed by min proximity"
+    );
+}
+
+/// TODO: Document searchable_attribute_duplicate_entries_do_not_change_unique_rank_weights.
+#[test]
+fn searchable_attribute_duplicate_entries_do_not_change_unique_rank_weights() {
+    fn weight_for_path(paths: &[String], weights: &[f32], target: &str) -> f32 {
+        let path_index = paths
+            .iter()
+            .position(|path| path == target)
+            .expect("expected path in weighted searchable paths");
+        weights[path_index]
+    }
+
+    let all_searchable_paths = vec![
+        "title".to_string(),
+        "subtitle".to_string(),
+        "body".to_string(),
+    ];
+    let unique_config = vec!["title".to_string(), "body".to_string()];
+    let duplicate_config = vec!["title".to_string(), "title".to_string(), "body".to_string()];
+
+    let (unique_paths, unique_weights) = super::search_phases::build_searchable_paths_with_weights(
+        &all_searchable_paths,
+        Some(unique_config.as_slice()),
+    );
+    let (duplicate_paths, duplicate_weights) =
+        super::search_phases::build_searchable_paths_with_weights(
+            &all_searchable_paths,
+            Some(duplicate_config.as_slice()),
+        );
+
+    let unique_body_weight = weight_for_path(&unique_paths, &unique_weights, "body");
+    let duplicate_body_weight = weight_for_path(&duplicate_paths, &duplicate_weights, "body");
+
+    assert!(
+        (unique_body_weight - duplicate_body_weight).abs() < f32::EPSILON,
+        "duplicate configured attributes must not consume rank slots and demote later fields"
+    );
+}
+
+fn make_optional_filter_test_doc(id: &str, brand: &str, color: &str) -> Document {
+    let mut fields = HashMap::new();
+    fields.insert("brand".to_string(), FieldValue::Text(brand.to_string()));
+    fields.insert("color".to_string(), FieldValue::Text(color.to_string()));
+    Document {
+        id: id.to_string(),
+        fields,
+    }
+}
+
+#[test]
+fn optional_filter_score_max_per_group_default() {
+    let doc = make_optional_filter_test_doc("d1", "Apple", "Red");
+    let groups = vec![
+        vec![
+            ("brand".to_string(), "Apple".to_string(), 2.0),
+            ("color".to_string(), "Red".to_string(), 2.0),
+        ],
+        vec![("color".to_string(), "Green".to_string(), 3.0)],
+    ];
+    let score = compute_optional_filter_score(&doc, &groups, false);
+    assert_eq!(score, 2.0);
+}
+
+#[test]
+fn optional_filter_score_max_per_group_other_doc() {
+    let doc = make_optional_filter_test_doc("d2", "Samsung", "Green");
+    let groups = vec![
+        vec![
+            ("brand".to_string(), "Apple".to_string(), 2.0),
+            ("color".to_string(), "Red".to_string(), 2.0),
+        ],
+        vec![("color".to_string(), "Green".to_string(), 3.0)],
+    ];
+    let score = compute_optional_filter_score(&doc, &groups, false);
+    assert_eq!(score, 3.0);
+}
+
+#[test]
+fn optional_filter_score_sum_mode() {
+    let doc = make_optional_filter_test_doc("d1", "Apple", "Red");
+    let groups = vec![
+        vec![
+            ("brand".to_string(), "Apple".to_string(), 2.0),
+            ("color".to_string(), "Red".to_string(), 2.0),
+        ],
+        vec![("color".to_string(), "Green".to_string(), 3.0)],
+    ];
+    let score = compute_optional_filter_score(&doc, &groups, true);
+    assert_eq!(score, 4.0);
+}
+
+#[test]
+fn optional_filter_score_sum_mode_other_doc() {
+    let doc = make_optional_filter_test_doc("d2", "Samsung", "Green");
+    let groups = vec![
+        vec![
+            ("brand".to_string(), "Apple".to_string(), 2.0),
+            ("color".to_string(), "Red".to_string(), 2.0),
+        ],
+        vec![("color".to_string(), "Green".to_string(), 3.0)],
+    ];
+    let score = compute_optional_filter_score(&doc, &groups, true);
+    assert_eq!(score, 3.0);
+}
+
+#[test]
+fn optional_filter_score_no_match() {
+    let doc = make_optional_filter_test_doc("d3", "Nokia", "Blue");
+    let groups = vec![
+        vec![
+            ("brand".to_string(), "Apple".to_string(), 2.0),
+            ("color".to_string(), "Red".to_string(), 2.0),
+        ],
+        vec![("color".to_string(), "Green".to_string(), 3.0)],
+    ];
+    let score = compute_optional_filter_score(&doc, &groups, false);
+    assert_eq!(score, 0.0);
+}
+
+#[test]
+fn optional_filter_score_case_insensitive() {
+    let doc = make_optional_filter_test_doc("d1", "Apple", "Red");
+    let groups = vec![vec![("brand".to_string(), "apple".to_string(), 2.0)]];
+    let score = compute_optional_filter_score(&doc, &groups, false);
+    assert_eq!(score, 2.0);
+}
+
+#[test]
+fn optional_filter_score_negative_not_clamped_to_zero() {
+    // A group where the only matching filter has a negative score (e.g., from `-brand:Apple`)
+    // Default (max-per-group) mode must NOT clamp negative scores to 0.0.
+    let doc = make_optional_filter_test_doc("d1", "Apple", "Red");
+    let groups = vec![vec![("brand".to_string(), "Apple".to_string(), -1.0)]];
+    let score = compute_optional_filter_score(&doc, &groups, false);
+    assert_eq!(
+        score, -1.0,
+        "negative score must not be clamped to 0.0 in max-per-group mode"
+    );
+}
+
+#[test]
+fn optional_filter_score_negative_in_sum_mode() {
+    // Sum mode: negative scores should contribute negative values.
+    let doc = make_optional_filter_test_doc("d1", "Apple", "Red");
+    let groups = vec![
+        vec![("brand".to_string(), "Apple".to_string(), -1.0)],
+        vec![("color".to_string(), "Red".to_string(), 3.0)],
+    ];
+    let score = compute_optional_filter_score(&doc, &groups, true);
+    assert_eq!(score, 2.0, "sum mode: -1.0 + 3.0 = 2.0");
+}
+
+#[test]
+fn optional_filter_score_negative_mixed_group() {
+    // Group with both positive and negative matching filters: max should pick the highest.
+    let doc = make_optional_filter_test_doc("d1", "Apple", "Red");
+    let groups = vec![vec![
+        ("brand".to_string(), "Apple".to_string(), -2.0),
+        ("color".to_string(), "Red".to_string(), 3.0),
+    ]];
+    let score = compute_optional_filter_score(&doc, &groups, false);
+    assert_eq!(score, 3.0, "max of -2.0 and 3.0 should be 3.0");
+}
+
+#[test]
+fn optional_filter_score_no_match_group_contributes_zero() {
+    // A group with no matching filters should contribute 0.0, not affect total.
+    let doc = make_optional_filter_test_doc("d1", "Apple", "Red");
+    let groups = vec![
+        vec![("brand".to_string(), "Samsung".to_string(), 5.0)], // no match
+        vec![("color".to_string(), "Red".to_string(), 2.0)],     // matches
+    ];
+    let score = compute_optional_filter_score(&doc, &groups, false);
+    assert_eq!(
+        score, 2.0,
+        "no-match group contributes 0.0, match group contributes 2.0"
+    );
+}
+
+/// TODO: Document parse_custom_ranking_specs_ignores_unknown_entries_and_preserves_order.
+#[test]
+fn parse_custom_ranking_specs_ignores_unknown_entries_and_preserves_order() {
+    let settings = IndexSettings {
+        custom_ranking: Some(vec![
+            "desc(priority)".to_string(),
+            "unknown(field)".to_string(),
+            "asc(name)".to_string(),
+            "desc(created_at)".to_string(),
+        ]),
+        ..Default::default()
+    };
+
+    let specs = parse_custom_ranking_specs(Some(&settings));
+
+    assert_eq!(specs.len(), 3, "only asc()/desc() entries should be kept");
+    assert_eq!(specs[0].field, "priority");
+    assert!(!specs[0].asc, "desc() must set asc=false");
+    assert_eq!(specs[1].field, "name");
+    assert!(specs[1].asc, "asc() must set asc=true");
+    assert_eq!(
+        specs[2].field, "created_at",
+        "parser must preserve input ordering for stable ranking behavior"
+    );
+    assert!(!specs[2].asc);
+}
+
+/// TODO: Document extract_custom_ranking_value_handles_nested_numeric_text_and_missing_paths.
+#[test]
+fn extract_custom_ranking_value_handles_nested_numeric_text_and_missing_paths() {
+    let document = Document {
+        id: "d1".to_string(),
+        fields: HashMap::from([
+            (
+                "meta".to_string(),
+                FieldValue::Object(HashMap::from([
+                    ("priority".to_string(), FieldValue::Text("42".to_string())),
+                    ("score".to_string(), FieldValue::Float(9.5)),
+                    ("label".to_string(), FieldValue::Text("XL".to_string())),
+                ])),
+            ),
+            (
+                "published_at".to_string(),
+                FieldValue::Date(1_720_000_000_000),
+            ),
+        ]),
+    };
+
+    assert_eq!(
+        extract_custom_ranking_value(&document, "meta.priority"),
+        RankingSortValue::Integer(42),
+        "numeric text must be parsed as integer for custom ranking comparisons"
+    );
+    assert_eq!(
+        extract_custom_ranking_value(&document, "meta.score"),
+        RankingSortValue::Float(9.5)
+    );
+    assert_eq!(
+        extract_custom_ranking_value(&document, "meta.label"),
+        RankingSortValue::Text("XL".to_string()),
+        "non-numeric text must remain textual"
+    );
+    assert_eq!(
+        extract_custom_ranking_value(&document, "published_at"),
+        RankingSortValue::Integer(1_720_000_000_000),
+        "dates are ranked as integer timestamps"
+    );
+    assert_eq!(
+        extract_custom_ranking_value(&document, "meta.missing"),
+        RankingSortValue::Missing
+    );
+    assert_eq!(
+        extract_custom_ranking_value(&document, "missing.root"),
+        RankingSortValue::Missing
+    );
+}
+
+/// TODO: Document compare_custom_values_keeps_missing_values_last_for_asc_and_desc.
+#[test]
+fn compare_custom_values_keeps_missing_values_last_for_asc_and_desc() {
+    let specs = vec![CustomRankingSpec {
+        field: "priority".to_string(),
+        asc: false,
+    }];
+
+    let missing = vec![RankingSortValue::Missing];
+    let present = vec![RankingSortValue::Integer(10)];
+
+    assert_eq!(
+        compare_custom_values(&missing, &present, &specs),
+        Ordering::Greater,
+        "missing value must rank after present value even for desc()"
+    );
+    assert_eq!(
+        compare_custom_values(&present, &missing, &specs),
+        Ordering::Less,
+        "present value must rank before missing value even for desc()"
+    );
+
+    let asc_specs = vec![CustomRankingSpec {
+        field: "priority".to_string(),
+        asc: true,
+    }];
+    assert_eq!(
+        compare_custom_values(&missing, &present, &asc_specs),
+        Ordering::Greater,
+        "missing value must also rank after present value for asc()"
+    );
+}
+
+/// TODO: Document optional_filter_path_matching_supports_nested_object_arrays_and_scalar_arrays.
+#[test]
+fn optional_filter_path_matching_supports_nested_object_arrays_and_scalar_arrays() {
+    let document = Document {
+        id: "d1".to_string(),
+        fields: HashMap::from([
+            (
+                "variants".to_string(),
+                FieldValue::Array(vec![
+                    FieldValue::Object(HashMap::from([
+                        ("color".to_string(), FieldValue::Text("Red".to_string())),
+                        ("size".to_string(), FieldValue::Integer(42)),
+                    ])),
+                    FieldValue::Object(HashMap::from([(
+                        "color".to_string(),
+                        FieldValue::Text("Blue".to_string()),
+                    )])),
+                ]),
+            ),
+            (
+                "tags".to_string(),
+                FieldValue::Array(vec![
+                    FieldValue::Text("Sale".to_string()),
+                    FieldValue::Text("Featured".to_string()),
+                ]),
+            ),
+        ]),
+    };
+
+    assert!(
+        doc_matches_optional_filter_spec(&document, "variants.color", "blue"),
+        "array-of-object traversal should match nested string values case-insensitively"
+    );
+    assert!(
+        doc_matches_optional_filter_spec(&document, "variants.size", "42"),
+        "numeric comparisons should parse string expected values"
+    );
+    assert!(
+        doc_matches_optional_filter_spec(&document, "tags", "sale"),
+        "direct array field path should recurse into scalar arrays"
+    );
+    assert!(
+        !doc_matches_optional_filter_spec(&document, "variants.color", "green"),
+        "non-existent optional filter values must not match"
+    );
+}
+
+#[test]
+fn count_matched_query_words_deduplicates_query_terms() {
+    let query_terms = vec![
+        "red".to_string(),
+        "red".to_string(),
+        "shoes".to_string(),
+        "shoes".to_string(),
+    ];
+    let doc_tokens = vec!["red".to_string(), "shoes".to_string(), "sale".to_string()];
+
+    assert_eq!(
+        count_matched_query_words(&query_terms, &doc_tokens),
+        2,
+        "duplicate query terms should not inflate `words` ranking criterion"
+    );
+}
+
+// --- Ranking criteria utility coverage (s40 test-audit, batch 2) ---
+
+/// TODO: Document compare_ranking_sort_value_orders_same_type_correctly.
+#[test]
+fn compare_ranking_sort_value_orders_same_type_correctly() {
+    assert_eq!(
+        compare_ranking_sort_value(
+            &RankingSortValue::Integer(10),
+            &RankingSortValue::Integer(20)
+        ),
+        Ordering::Less
+    );
+    assert_eq!(
+        compare_ranking_sort_value(
+            &RankingSortValue::Float(3.14),
+            &RankingSortValue::Float(2.71)
+        ),
+        Ordering::Greater
+    );
+    assert_eq!(
+        compare_ranking_sort_value(
+            &RankingSortValue::Text("apple".to_string()),
+            &RankingSortValue::Text("banana".to_string())
+        ),
+        Ordering::Less
+    );
+}
+
+#[test]
+fn compare_ranking_sort_value_missing_sorts_below_all_present() {
+    assert_eq!(
+        compare_ranking_sort_value(&RankingSortValue::Missing, &RankingSortValue::Integer(0)),
+        Ordering::Less,
+        "Missing must sort below Integer in raw value comparison"
+    );
+    assert_eq!(
+        compare_ranking_sort_value(&RankingSortValue::Missing, &RankingSortValue::Missing),
+        Ordering::Equal
+    );
+}
+
+/// TODO: Document compare_ranking_sort_value_cross_type_ordering_is_deterministic.
+#[test]
+fn compare_ranking_sort_value_cross_type_ordering_is_deterministic() {
+    // Integer < Float < Text (when comparing across types)
+    assert_eq!(
+        compare_ranking_sort_value(
+            &RankingSortValue::Integer(100),
+            &RankingSortValue::Float(1.0)
+        ),
+        Ordering::Less,
+        "Integer sorts before Float in cross-type comparison"
+    );
+    assert_eq!(
+        compare_ranking_sort_value(
+            &RankingSortValue::Float(1.0),
+            &RankingSortValue::Text("z".to_string())
+        ),
+        Ordering::Less,
+        "Float sorts before Text in cross-type comparison"
+    );
+    assert_eq!(
+        compare_ranking_sort_value(
+            &RankingSortValue::Integer(100),
+            &RankingSortValue::Text("a".to_string())
+        ),
+        Ordering::Less,
+        "Integer sorts before Text in cross-type comparison"
+    );
+}
+
+#[test]
+fn min_distance_sorted_returns_minimum_gap_between_two_sorted_lists() {
+    assert_eq!(
+        min_distance_sorted(&[0, 5, 10], &[3, 7, 12]),
+        2,
+        "closest pair is (5,3) with distance 2"
+    );
+    assert_eq!(
+        min_distance_sorted(&[0, 10], &[1, 11]),
+        1,
+        "adjacent positions yield distance 1"
+    );
+}
+
+#[test]
+fn min_distance_sorted_empty_input_returns_max() {
+    assert_eq!(min_distance_sorted(&[], &[1, 2, 3]), u32::MAX);
+    assert_eq!(min_distance_sorted(&[1], &[]), u32::MAX);
+}
+
+/// TODO: Document contains_contiguous_subsequence_detects_exact_window_matches.
+#[test]
+fn contains_contiguous_subsequence_detects_exact_window_matches() {
+    let tokens: Vec<String> = vec!["the", "red", "fox", "jumps"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+    assert!(contains_contiguous_subsequence(
+        &tokens,
+        &["red", "fox"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    ));
+    assert!(!contains_contiguous_subsequence(
+        &tokens,
+        &["red", "jumps"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    ));
+    assert!(
+        !contains_contiguous_subsequence(&tokens, &[]),
+        "empty subsequence should return false"
+    );
+}
+
+#[test]
+fn max_allowed_typos_for_term_len_respects_thresholds() {
+    // Default Algolia thresholds: 1 typo at 4 chars, 2 typos at 8 chars
+    assert_eq!(max_allowed_typos_for_term_len(3, 4, 8), 0);
+    assert_eq!(max_allowed_typos_for_term_len(4, 4, 8), 1);
+    assert_eq!(max_allowed_typos_for_term_len(7, 4, 8), 1);
+    assert_eq!(max_allowed_typos_for_term_len(8, 4, 8), 2);
+    assert_eq!(max_allowed_typos_for_term_len(20, 4, 8), 2);
+}
+
+#[test]
+fn str_prefix_by_chars_handles_unicode_boundaries() {
+    assert_eq!(str_prefix_by_chars("hello", 3), "hel");
+    assert_eq!(str_prefix_by_chars("café", 3), "caf");
+    assert_eq!(str_prefix_by_chars("日本語テスト", 2), "日本");
+    assert_eq!(
+        str_prefix_by_chars("hi", 10),
+        "hi",
+        "shorter than char_count returns full string"
+    );
+}
+
+#[test]
+fn classify_match_distinguishes_exact_prefix_and_fuzzy() {
+    let (dist, is_prefix) = classify_match("red", "red");
+    assert_eq!(dist, 0);
+    assert!(!is_prefix, "identical strings are exact, not prefix");
+
+    let (dist, is_prefix) = classify_match("red", "redwood");
+    assert_eq!(dist, 0);
+    assert!(is_prefix, "candidate starting with query is a prefix match");
+
+    let (dist, is_prefix) = classify_match("red", "rod");
+    assert!(dist > 0);
+    assert!(!is_prefix, "edit-distance match is not prefix");
+}
+
+/// TODO: Document find_term_positions_exact_vs_prefix_mode.
+#[test]
+fn find_term_positions_exact_vs_prefix_mode() {
+    let tokens: Vec<String> = vec!["apple", "app", "application", "banana"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+    assert_eq!(
+        find_term_positions(&tokens, "app", false),
+        vec![1],
+        "exact mode should only match 'app'"
+    );
+    assert_eq!(
+        find_term_positions(&tokens, "app", true),
+        vec![0, 1, 2],
+        "prefix mode should match 'apple', 'app', and 'application'"
+    );
+}
+
+/// TODO: Document compute_prefix_eligible_modes.
+#[test]
+fn compute_prefix_eligible_modes() {
+    assert_eq!(
+        compute_prefix_eligible("prefixAll", 3, "red fox "),
+        vec![true, true, true]
+    );
+    assert_eq!(
+        compute_prefix_eligible("prefixNone", 3, "red fox"),
+        vec![false, false, false]
+    );
+    assert_eq!(
+        compute_prefix_eligible("prefixLast", 3, "red fox j"),
+        vec![false, false, true],
+        "prefixLast enables only the final term"
+    );
+    assert_eq!(
+        compute_prefix_eligible("prefixLast", 3, "red fox j "),
+        vec![false, false, false],
+        "trailing space disables prefix on last term"
+    );
+}
+
+// --- A4: exactOnSingleWordQuery unit tests ---
+
+/// TODO: Document exact_vs_prefix_attribute_mode_single_token_attribute_is_exact.
+#[test]
+fn exact_vs_prefix_attribute_mode_single_token_attribute_is_exact() {
+    // "attribute" mode: single-word query "red" against doc with title:"Red" (1 token → exact attribute match)
+    let query_terms = vec!["red".to_string()];
+    let tokens_by_path = vec![(0usize, vec!["red".to_string()])];
+    let searchable_paths = vec!["title".to_string()];
+    let prefix_eligible = vec![true];
+    let result = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &[],
+        "attribute",
+        &[],
+    );
+    assert_eq!(
+        result, 0,
+        "single-token attribute match should be exact (0) in 'attribute' mode"
+    );
+}
+
+/// TODO: Document exact_vs_prefix_attribute_mode_multi_token_attribute_is_prefix.
+#[test]
+fn exact_vs_prefix_attribute_mode_multi_token_attribute_is_prefix() {
+    // "attribute" mode: single-word query "red" against doc with title:"Red Shoes" (2 tokens → not full attribute)
+    let query_terms = vec!["red".to_string()];
+    let tokens_by_path = vec![(0usize, vec!["red".to_string(), "shoes".to_string()])];
+    let searchable_paths = vec!["title".to_string()];
+    let prefix_eligible = vec![true];
+    let result = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &[],
+        "attribute",
+        &[],
+    );
+    assert_eq!(
+        result, 1,
+        "multi-token attribute should not count as exact in 'attribute' mode → prefix tier (1)"
+    );
+}
+
+/// TODO: Document exact_vs_prefix_word_mode_any_token_match_is_exact.
+#[test]
+fn exact_vs_prefix_word_mode_any_token_match_is_exact() {
+    // "word" mode: single-word query "red" — any token match is exact, including in multi-token attributes
+    let query_terms = vec!["red".to_string()];
+    let tokens_by_path = vec![(0usize, vec!["red".to_string(), "shoes".to_string()])];
+    let searchable_paths = vec!["title".to_string()];
+    let prefix_eligible = vec![true];
+    let result = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &[],
+        "word",
+        &[],
+    );
+    assert_eq!(
+        result, 0,
+        "'word' mode: any matching token counts as exact → 0"
+    );
+}
+
+/// TODO: Document exact_vs_prefix_none_mode_always_exact_for_single_word.
+#[test]
+fn exact_vs_prefix_none_mode_always_exact_for_single_word() {
+    // "none" mode: exact tier disabled for single-word queries → always return 0
+    let query_terms = vec!["red".to_string()];
+    let tokens_by_path = vec![(0usize, vec!["red".to_string(), "shoes".to_string()])];
+    let searchable_paths = vec!["title".to_string()];
+    let prefix_eligible = vec![true];
+    let result = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &[],
+        "none",
+        &[],
+    );
+    assert_eq!(
+        result, 0,
+        "'none' mode disables exact distinction for single-word queries → always 0"
+    );
+}
+
+/// TODO: Document exact_vs_prefix_multi_word_query_unaffected_by_exact_on_single_word_setting.
+#[test]
+fn exact_vs_prefix_multi_word_query_unaffected_by_exact_on_single_word_setting() {
+    // Multi-word query: "attribute" setting has no effect — uses word semantics
+    // query "red shoes", doc has both tokens → exact for "shoes" (prefix-eligible last term)
+    let query_terms = vec!["red".to_string(), "shoes".to_string()];
+    let tokens_by_path = vec![(0usize, vec!["red".to_string(), "shoes".to_string()])];
+    let searchable_paths = vec!["title".to_string()];
+    let prefix_eligible = vec![false, true];
+    let result = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &[],
+        "attribute",
+        &[],
+    );
+    assert_eq!(
+        result, 0,
+        "multi-word query uses word semantics regardless of exactOnSingleWordQuery"
+    );
+}
+
+// --- A3: disableExactOnAttributes unit tests ---
+
+/// TODO: Document exact_vs_prefix_disable_exact_on_attributes_excludes_disabled_from_exact_check.
+#[test]
+fn exact_vs_prefix_disable_exact_on_attributes_excludes_disabled_from_exact_check() {
+    // Exact match only in disabled attribute (title), description only has prefix match → prefix tier
+    let query_terms = vec!["red".to_string()];
+    let tokens_by_path = vec![
+        (0usize, vec!["red".to_string()]), // title (disabled) — 1 token, exact attribute match if not disabled
+        (1usize, vec!["red".to_string(), "shoes".to_string()]), // description (enabled) — 2 tokens, not exact in attribute mode
+    ];
+    let searchable_paths = vec!["title".to_string(), "description".to_string()];
+    let prefix_eligible = vec![true];
+    let result = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &[],
+        "attribute",
+        &["title".to_string()],
+    );
+    assert_eq!(
+        result, 1,
+        "title disabled: only description counts; description has prefix-only → tier 1"
+    );
+}
+
+/// TODO: Document exact_vs_prefix_without_disable_title_gives_exact.
+#[test]
+fn exact_vs_prefix_without_disable_title_gives_exact() {
+    // Same doc, same settings, but title NOT disabled → exact via single-token title
+    let query_terms = vec!["red".to_string()];
+    let tokens_by_path = vec![
+        (0usize, vec!["red".to_string()]),
+        (1usize, vec!["red".to_string(), "shoes".to_string()]),
+    ];
+    let searchable_paths = vec!["title".to_string(), "description".to_string()];
+    let prefix_eligible = vec![true];
+    let result = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &[],
+        "attribute",
+        &[],
+    );
+    assert_eq!(
+        result, 0,
+        "title enabled: single-token exact match in title → exact tier (0)"
+    );
+}
+
+/// TODO: Document exact_vs_prefix_disabled_attr_only_match_returns_non_exact.
+#[test]
+fn exact_vs_prefix_disabled_attr_only_match_returns_non_exact() {
+    // Doc matches "red" ONLY on disabled attribute (description), title has no match
+    let query_terms = vec!["red".to_string()];
+    let tokens_by_path = vec![
+        (0usize, vec!["blue".to_string()]), // title (enabled) — no match
+        (1usize, vec!["red".to_string()]),  // description (disabled) — match
+    ];
+    let searchable_paths = vec!["title".to_string(), "description".to_string()];
+    let prefix_eligible = vec![true];
+    let result = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &[],
+        "attribute",
+        &["description".to_string()],
+    );
+    assert_eq!(
+        result, 1,
+        "match only on disabled attribute should NOT get exact tier credit"
+    );
+}
+
+/// TODO: Document alternatives_as_exact_ignore_plurals_counts_plural_as_exact.
+#[test]
+fn alternatives_as_exact_ignore_plurals_counts_plural_as_exact() {
+    let query_terms = vec!["shoe".to_string()];
+    let tokens_by_path = vec![(0usize, vec!["shoes".to_string()])];
+    let searchable_paths = vec!["title".to_string()];
+    let prefix_eligible = vec![true];
+    let plural_map = HashMap::from([(
+        "shoe".to_string(),
+        vec!["shoe".to_string(), "shoes".to_string()],
+    )]);
+
+    let no_alternatives = build_term_alternatives(&query_terms, &[], None, Some(&plural_map));
+    let with_ignore_plurals = build_term_alternatives(
+        &query_terms,
+        &["ignorePlurals".to_string()],
+        None,
+        Some(&plural_map),
+    );
+
+    let no_alternatives_bucket = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &no_alternatives,
+        "word",
+        &[],
+    );
+    let with_ignore_plurals_bucket = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &with_ignore_plurals,
+        "word",
+        &[],
+    );
+
+    assert_eq!(
+        no_alternatives_bucket, 1,
+        "without alternativesAsExact, plural-only hit should stay non-exact"
+    );
+    assert_eq!(
+        with_ignore_plurals_bucket, 0,
+        "ignorePlurals should promote plural form to exact"
+    );
+}
+
+/// TODO: Document alternatives_as_exact_single_word_synonym_counts_synonym_as_exact.
+#[test]
+fn alternatives_as_exact_single_word_synonym_counts_synonym_as_exact() {
+    let query_terms = vec!["trousers".to_string()];
+    let tokens_by_path = vec![(0usize, vec!["pants".to_string(), "trousersly".to_string()])];
+    let searchable_paths = vec!["title".to_string()];
+    let prefix_eligible = vec![true];
+    let mut synonym_store = SynonymStore::new();
+    synonym_store.insert(Synonym::Regular {
+        object_id: "syn-1".to_string(),
+        synonyms: vec!["pants".to_string(), "trousers".to_string()],
+    });
+
+    let no_alternatives = build_term_alternatives(&query_terms, &[], Some(&synonym_store), None);
+    let with_single_word_synonym = build_term_alternatives(
+        &query_terms,
+        &["singleWordSynonym".to_string()],
+        Some(&synonym_store),
+        None,
+    );
+
+    let no_alternatives_bucket = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &no_alternatives,
+        "word",
+        &[],
+    );
+    let with_single_word_synonym_bucket = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &with_single_word_synonym,
+        "word",
+        &[],
+    );
+
+    assert_eq!(
+        no_alternatives_bucket, 1,
+        "without alternativesAsExact, only prefix-quality signal should be non-exact"
+    );
+    assert_eq!(
+        with_single_word_synonym_bucket, 0,
+        "singleWordSynonym should promote synonym token hit to exact"
+    );
+}
+
+/// TODO: Document alternatives_as_exact_multi_word_synonym_counts_contiguous_sequence_as_exact.
+#[test]
+fn alternatives_as_exact_multi_word_synonym_counts_contiguous_sequence_as_exact() {
+    let query_terms = vec!["ny".to_string()];
+    let tokens_by_path = vec![(
+        0usize,
+        vec!["new".to_string(), "york".to_string(), "nyc".to_string()],
+    )];
+    let searchable_paths = vec!["title".to_string()];
+    let prefix_eligible = vec![true];
+    let mut synonym_store = SynonymStore::new();
+    synonym_store.insert(Synonym::OneWay {
+        object_id: "syn-2".to_string(),
+        input: "ny".to_string(),
+        synonyms: vec!["new york".to_string()],
+    });
+
+    let no_alternatives = build_term_alternatives(&query_terms, &[], Some(&synonym_store), None);
+    let with_multi_word_synonym = build_term_alternatives(
+        &query_terms,
+        &["multiWordsSynonym".to_string()],
+        Some(&synonym_store),
+        None,
+    );
+
+    let no_alternatives_bucket = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &no_alternatives,
+        "word",
+        &[],
+    );
+    let with_multi_word_synonym_bucket = compute_exact_vs_prefix_bucket(
+        &query_terms,
+        &tokens_by_path,
+        &searchable_paths,
+        &prefix_eligible,
+        &with_multi_word_synonym,
+        "word",
+        &[],
+    );
+
+    assert_eq!(
+        no_alternatives_bucket, 1,
+        "without alternativesAsExact, this should remain a non-exact prefix scenario"
+    );
+    assert_eq!(
+        with_multi_word_synonym_bucket, 0,
+        "multiWordsSynonym should treat contiguous 'new york' sequence as exact"
+    );
+}
+
+/// TODO: Document ranking_attribute_before_exact_per_algolia_default.
+#[test]
+fn ranking_attribute_before_exact_per_algolia_default() {
+    let mut all_results = vec![
+        ScoredDocument {
+            // Prefix-only match in higher-priority attribute (title, index 0)
+            document: Document {
+                id: "doc_attribute".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("reddish".to_string())),
+                    (
+                        "description".to_string(),
+                        FieldValue::Text("blue".to_string()),
+                    ),
+                ]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            // Exact match in lower-priority attribute (description, index 1)
+            document: Document {
+                id: "doc_exact".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("blue".to_string())),
+                    (
+                        "description".to_string(),
+                        FieldValue::Text("red".to_string()),
+                    ),
+                ]),
+            },
+            score: 10.0,
+        },
+    ];
+
+    sort_results_with_stage2_ranking(
+        &mut all_results,
+        Stage2RankingContext {
+            query_text: "red",
+            searchable_paths: &["title".to_string(), "description".to_string()],
+            settings: None,
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixLast",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: None,
+        },
+    );
+
+    assert_eq!(
+        all_results[0].document.id, "doc_attribute",
+        "attribute criterion must outrank exact criterion (Algolia default order)"
+    );
+}
+
+/// TODO: Document ranking_setting_can_put_exact_before_attribute.
+#[test]
+fn ranking_setting_can_put_exact_before_attribute() {
+    let mut all_results = vec![
+        ScoredDocument {
+            document: Document {
+                id: "doc_attribute".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("reddish".to_string())),
+                    (
+                        "description".to_string(),
+                        FieldValue::Text("blue".to_string()),
+                    ),
+                ]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "doc_exact".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("blue".to_string())),
+                    (
+                        "description".to_string(),
+                        FieldValue::Text("red".to_string()),
+                    ),
+                ]),
+            },
+            score: 10.0,
+        },
+    ];
+    let settings = IndexSettings {
+        ranking: Some(vec![
+            "typo".to_string(),
+            "geo".to_string(),
+            "words".to_string(),
+            "filters".to_string(),
+            "proximity".to_string(),
+            "exact".to_string(),
+            "attribute".to_string(),
+            "custom".to_string(),
+        ]),
+        ..Default::default()
+    };
+
+    sort_results_with_stage2_ranking(
+        &mut all_results,
+        Stage2RankingContext {
+            query_text: "red",
+            searchable_paths: &["title".to_string(), "description".to_string()],
+            settings: Some(&settings),
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixLast",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: None,
+        },
+    );
+
+    assert_eq!(
+        all_results[0].document.id, "doc_exact",
+        "ranking setting should allow exact to outrank attribute when reordered"
+    );
+}
+
+/// TODO: Document attribute_criteria_computed_by_min_proximity_changes_attribute_winner.
+#[test]
+fn attribute_criteria_computed_by_min_proximity_changes_attribute_winner() {
+    // Keep proximity/effectively all earlier tiers tied via minProximity clamp and equal doc lengths.
+    // Doc A defaults to attribute 0 (title) due first-match behavior, but has the full term pair
+    // only in attribute 1 with a worse distance. Doc B matches only in attribute 1.
+    let base_results = vec![
+        ScoredDocument {
+            document: Document {
+                id: "z_doc_a".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("red".to_string())),
+                    (
+                        "description".to_string(),
+                        FieldValue::Text("red x x x shoes".to_string()),
+                    ),
+                ]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "a_doc_b".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("blue".to_string())),
+                    (
+                        "description".to_string(),
+                        FieldValue::Text("red shoes x x x".to_string()),
+                    ),
+                ]),
+            },
+            score: 10.0,
+        },
+    ];
+
+    let mut default_ranked = base_results.clone();
+    sort_results_with_stage2_ranking(
+        &mut default_ranked,
+        Stage2RankingContext {
+            query_text: "red shoes",
+            searchable_paths: &["title".to_string(), "description".to_string()],
+            settings: None,
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixNone",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: Some(10),
+        },
+    );
+    assert_eq!(
+        default_ranked[0].document.id, "z_doc_a",
+        "default behavior uses first matching attribute index (attribute 0 beats attribute 1)"
+    );
+
+    let mut min_proximity_ranked = base_results;
+    let settings = IndexSettings {
+        attribute_criteria_computed_by_min_proximity: Some(true),
+        ..Default::default()
+    };
+    sort_results_with_stage2_ranking(
+        &mut min_proximity_ranked,
+        Stage2RankingContext {
+            query_text: "red shoes",
+            searchable_paths: &["title".to_string(), "description".to_string()],
+            settings: Some(&settings),
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixNone",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: Some(10),
+        },
+    );
+    assert_eq!(
+        min_proximity_ranked[0].document.id, "a_doc_b",
+        "min-proximity attribute mode should demote doc A's attribute-0 single-term match"
+    );
+}
+
+/// TODO: Document attribute_criteria_computed_by_min_proximity_single_term_no_effect.
+#[test]
+fn attribute_criteria_computed_by_min_proximity_single_term_no_effect() {
+    let base_results = vec![
+        ScoredDocument {
+            document: Document {
+                id: "doc_a".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("red".to_string())),
+                    (
+                        "description".to_string(),
+                        FieldValue::Text("blue".to_string()),
+                    ),
+                ]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "doc_b".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("blue".to_string())),
+                    (
+                        "description".to_string(),
+                        FieldValue::Text("red".to_string()),
+                    ),
+                ]),
+            },
+            score: 10.0,
+        },
+    ];
+
+    let mut default_ranked = base_results.clone();
+    sort_results_with_stage2_ranking(
+        &mut default_ranked,
+        Stage2RankingContext {
+            query_text: "red",
+            searchable_paths: &["title".to_string(), "description".to_string()],
+            settings: None,
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixNone",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: None,
+        },
+    );
+
+    let settings = IndexSettings {
+        attribute_criteria_computed_by_min_proximity: Some(true),
+        ..Default::default()
+    };
+    let mut min_proximity_ranked = base_results;
+    sort_results_with_stage2_ranking(
+        &mut min_proximity_ranked,
+        Stage2RankingContext {
+            query_text: "red",
+            searchable_paths: &["title".to_string(), "description".to_string()],
+            settings: Some(&settings),
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixNone",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: None,
+        },
+    );
+
+    assert_eq!(
+        default_ranked
+            .iter()
+            .map(|doc| doc.document.id.as_str())
+            .collect::<Vec<_>>(),
+        min_proximity_ranked
+            .iter()
+            .map(|doc| doc.document.id.as_str())
+            .collect::<Vec<_>>(),
+        "single-term queries should not change attribute ordering under min-proximity mode"
+    );
+}
+
+/// TODO: Document sort_results_with_stage2_ranking_filters_below_relevancy_strictness_threshold.
+#[test]
+fn sort_results_with_stage2_ranking_filters_below_relevancy_strictness_threshold() {
+    let mut all_results = vec![
+        ScoredDocument {
+            document: Document {
+                id: "high_relevance".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("foo".to_string())),
+                    ("priority".to_string(), FieldValue::Integer(100)),
+                ]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "mid_relevance".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("foo".to_string())),
+                    ("priority".to_string(), FieldValue::Integer(50)),
+                ]),
+            },
+            score: 7.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "low_relevance".to_string(),
+                fields: HashMap::from([
+                    ("title".to_string(), FieldValue::Text("foo".to_string())),
+                    ("priority".to_string(), FieldValue::Integer(10)),
+                ]),
+            },
+            score: 1.0,
+        },
+    ];
+
+    let settings = IndexSettings {
+        custom_ranking: Some(vec!["desc(priority)".to_string()]),
+        ..Default::default()
+    };
+
+    sort_results_with_stage2_ranking(
+        &mut all_results,
+        Stage2RankingContext {
+            query_text: "foo",
+            searchable_paths: &["title".to_string()],
+            settings: Some(&settings),
+            synonym_store: None,
+            plural_map: None,
+            query_type: "attribute",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: Some(50),
+            min_proximity: None,
+        },
+    );
+
+    assert_eq!(
+        all_results.len(),
+        2,
+        "relevancyStrictness=50 should filter out low-scoring docs"
+    );
+    assert_eq!(
+        all_results[0].document.id, "high_relevance",
+        "highest scoring/priority doc should remain first"
+    );
+    assert_eq!(
+        all_results[1].document.id, "mid_relevance",
+        "remaining docs should stay sorted by custom ranking"
+    );
+}
+
+/// TODO: Document proximity_two_word_query_closer_doc_ranks_first.
+#[test]
+fn proximity_two_word_query_closer_doc_ranks_first() {
+    let mut all_results = vec![
+        ScoredDocument {
+            document: Document {
+                id: "far".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("red big leather shoes".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "close".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("red shoes".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+    ];
+
+    sort_results_with_stage2_ranking(
+        &mut all_results,
+        Stage2RankingContext {
+            query_text: "red shoes",
+            searchable_paths: &["title".to_string()],
+            settings: None,
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixNone",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: None,
+        },
+    );
+
+    assert_eq!(
+        all_results[0].document.id, "close",
+        "closer proximity (adjacent terms) must rank before farther proximity"
+    );
+}
+
+/// TODO: Document proximity_single_term_query_both_docs_equal_bucket.
+#[test]
+fn proximity_single_term_query_both_docs_equal_bucket() {
+    // Both docs have the same structure/length so BM25 scores are equal
+    let mut all_results = vec![
+        ScoredDocument {
+            document: Document {
+                id: "doc_b".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("shoes blue".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "doc_a".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("shoes pink".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+    ];
+
+    sort_results_with_stage2_ranking(
+        &mut all_results,
+        Stage2RankingContext {
+            query_text: "shoes",
+            searchable_paths: &["title".to_string()],
+            settings: None,
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixNone",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: None,
+        },
+    );
+
+    // Single-term: proximity bucket = 0 for both. Falls through to doc_id tiebreaker.
+    assert_eq!(
+        all_results[0].document.id, "doc_a",
+        "single-term query: proximity is 0 for both, should fall through to tiebreaker"
+    );
+}
+
+/// TODO: Document proximity_three_term_query_sum_of_adjacent_pairs.
+#[test]
+fn proximity_three_term_query_sum_of_adjacent_pairs() {
+    // Query "a b c"
+    // Doc1: "a b x x x x c" → dist(a,b)=1, dist(b,c)=5 → sum=6
+    // Doc2: "a x x b x c"   → dist(a,b)=3, dist(b,c)=2 → sum=5
+    // Doc2 should rank first (lower sum)
+    let mut all_results = vec![
+        ScoredDocument {
+            document: Document {
+                id: "doc1".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("a b x x x x c".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "doc2".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("a x x b x c".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+    ];
+
+    sort_results_with_stage2_ranking(
+        &mut all_results,
+        Stage2RankingContext {
+            query_text: "a b c",
+            searchable_paths: &["title".to_string()],
+            settings: None,
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixNone",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: None,
+        },
+    );
+
+    assert_eq!(
+        all_results[0].document.id, "doc2",
+        "three-term query: sum of adjacent-pair distances should determine ordering (5 < 6)"
+    );
+}
+
+/// TODO: Document proximity_min_proximity_clamps_pair_distances.
+#[test]
+fn proximity_min_proximity_clamps_pair_distances() {
+    // With minProximity=3:
+    // All docs have 5 tokens to equalize BM25 scores.
+    // Doc1: "red shoes x x x"     → raw dist=1, clamped to 3 → sum=3
+    // Doc2: "red x shoes x x"     → raw dist=2, clamped to 3 → sum=3 (tied with doc1)
+    // Doc3: "red x x x shoes"     → raw dist=4, stays 4      → sum=4 (ranks last)
+    let mut all_results = vec![
+        ScoredDocument {
+            document: Document {
+                id: "doc3_far".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("red x x x shoes".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "doc1_close".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("red shoes x x x".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+        ScoredDocument {
+            document: Document {
+                id: "doc2_medium".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    FieldValue::Text("red x shoes x x".to_string()),
+                )]),
+            },
+            score: 10.0,
+        },
+    ];
+
+    sort_results_with_stage2_ranking(
+        &mut all_results,
+        Stage2RankingContext {
+            query_text: "red shoes",
+            searchable_paths: &["title".to_string()],
+            settings: None,
+            synonym_store: None,
+            plural_map: None,
+            query_type: "prefixNone",
+            optional_filter_groups: None,
+            sum_or_filters_scores: false,
+            exact_on_single_word_query: "attribute",
+            disable_exact_on_attributes: &[],
+            custom_normalization: &[],
+            keep_diacritics_on_characters: "",
+            camel_case_attributes: &[],
+            all_query_words_optional: false,
+            relevancy_strictness: None,
+            min_proximity: Some(3),
+        },
+    );
+
+    // doc1 and doc2 should be tied (both clamped to 3) — tiebroken by doc_id
+    assert_eq!(
+        all_results[0].document.id, "doc1_close",
+        "minProximity=3: docs with raw dist 1 and 2 both clamp to 3, tiebroken by id"
+    );
+    assert_eq!(
+        all_results[1].document.id, "doc2_medium",
+        "minProximity=3: doc2 also clamped to 3, tied with doc1"
+    );
+    assert_eq!(
+        all_results[2].document.id, "doc3_far",
+        "minProximity=3: doc3 has raw dist 4 > 3, ranks last"
+    );
+}
+
+/// TODO: Document tenant_doc_count_returns_correct_count.
+#[tokio::test]
+async fn tenant_doc_count_returns_correct_count() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    manager.create_tenant("t1").unwrap();
+
+    let docs = vec![
+        Document {
+            id: "d1".to_string(),
+            fields: HashMap::from([(
+                "name".to_string(),
+                crate::types::FieldValue::Text("Alice".to_string()),
+            )]),
+        },
+        Document {
+            id: "d2".to_string(),
+            fields: HashMap::from([(
+                "name".to_string(),
+                crate::types::FieldValue::Text("Bob".to_string()),
+            )]),
+        },
+        Document {
+            id: "d3".to_string(),
+            fields: HashMap::from([(
+                "name".to_string(),
+                crate::types::FieldValue::Text("Carol".to_string()),
+            )]),
+        },
+    ];
+    manager.add_documents_sync("t1", docs).await.unwrap();
+
+    let count = manager.tenant_doc_count("t1");
+    assert_eq!(count, Some(3), "should have 3 docs after adding 3");
+}
+
+#[tokio::test]
+async fn tenant_doc_count_returns_none_for_unloaded() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    assert_eq!(manager.tenant_doc_count("nonexistent"), None);
+}
+
+#[tokio::test]
+async fn loaded_tenant_ids_returns_correct_ids() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    manager.create_tenant("alpha").unwrap();
+    manager.create_tenant("beta").unwrap();
+
+    let mut ids = manager.loaded_tenant_ids();
+    ids.sort();
+    assert_eq!(ids, vec!["alpha", "beta"]);
+}
+
+#[tokio::test]
+async fn loaded_tenant_ids_empty_when_no_tenants() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    assert!(manager.loaded_tenant_ids().is_empty());
+}
+
+/// TODO: Document all_tenant_oplog_seqs_returns_seqs_after_writes.
+#[tokio::test]
+async fn all_tenant_oplog_seqs_returns_seqs_after_writes() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    manager.create_tenant("t1").unwrap();
+
+    let docs = vec![Document {
+        id: "d1".to_string(),
+        fields: HashMap::from([(
+            "name".to_string(),
+            crate::types::FieldValue::Text("Alice".to_string()),
+        )]),
+    }];
+    manager.add_documents_sync("t1", docs).await.unwrap();
+
+    let seqs = manager.all_tenant_oplog_seqs();
+    assert!(!seqs.is_empty(), "should have at least one entry");
+    let (tid, seq) = &seqs[0];
+    assert_eq!(tid, "t1");
+    assert!(*seq > 0, "seq should be > 0 after a write");
+}
+
+// ── Vector index store tests (6.11) ──
+
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_vector_index_store_and_retrieve() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+
+    let vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    manager.set_vector_index("tenant1", vi);
+
+    let retrieved = manager.get_vector_index("tenant1");
+    assert!(retrieved.is_some());
+    let lock = retrieved.unwrap();
+    let guard = lock.read().unwrap();
+    assert_eq!(guard.dimensions(), 3);
+}
+
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_vector_index_missing_returns_none() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    assert!(manager.get_vector_index("nonexistent").is_none());
+}
+
+/// TODO: Document test_vector_index_search_through_manager.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_vector_index_search_through_manager() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+
+    let mut vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi.add("doc2", &[0.0, 1.0, 0.0]).unwrap();
+    vi.add("doc3", &[0.0, 0.0, 1.0]).unwrap();
+    manager.set_vector_index("t1", vi);
+
+    let lock = manager.get_vector_index("t1").unwrap();
+    let guard = lock.read().unwrap();
+    let results = guard.search(&[1.0, 0.0, 0.0], 2).unwrap();
+    assert!(!results.is_empty());
+    assert_eq!(results[0].doc_id, "doc1");
+}
+
+// ── Multi-tenant vector isolation test ──
+
+/// TODO: Document test_vector_tenant_isolation.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_vector_tenant_isolation() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+
+    // Tenant A: 3-dim vectors about "cats"
+    let mut vi_a = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi_a.add("cat1", &[1.0, 0.0, 0.0]).unwrap();
+    vi_a.add("cat2", &[0.9, 0.1, 0.0]).unwrap();
+    vi_a.add("cat3", &[0.8, 0.2, 0.0]).unwrap();
+    manager.set_vector_index("tenant_a", vi_a);
+
+    // Tenant B: 3-dim vectors about "dogs" (orthogonal direction)
+    let mut vi_b = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi_b.add("dog1", &[0.0, 0.0, 1.0]).unwrap();
+    vi_b.add("dog2", &[0.0, 0.1, 0.9]).unwrap();
+    manager.set_vector_index("tenant_b", vi_b);
+
+    // Search tenant A — must only return tenant A's docs
+    {
+        let lock = manager.get_vector_index("tenant_a").unwrap();
+        let guard = lock.read().unwrap();
+        let results = guard.search(&[1.0, 0.0, 0.0], 10).unwrap();
+        assert_eq!(results.len(), 3, "tenant_a should have exactly 3 vectors");
+        for r in &results {
+            assert!(
+                r.doc_id.starts_with("cat"),
+                "tenant_a search returned '{}' which belongs to tenant_b",
+                r.doc_id
+            );
+        }
+    }
+
+    // Search tenant B — must only return tenant B's docs
+    {
+        let lock = manager.get_vector_index("tenant_b").unwrap();
+        let guard = lock.read().unwrap();
+        let results = guard.search(&[0.0, 0.0, 1.0], 10).unwrap();
+        assert_eq!(results.len(), 2, "tenant_b should have exactly 2 vectors");
+        for r in &results {
+            assert!(
+                r.doc_id.starts_with("dog"),
+                "tenant_b search returned '{}' which belongs to tenant_a",
+                r.doc_id
+            );
+        }
+    }
+
+    // Verify tenant C (nonexistent) returns None
+    assert!(
+        manager.get_vector_index("tenant_c").is_none(),
+        "nonexistent tenant should return None"
+    );
+
+    // Delete tenant A's index, verify tenant B is unaffected
+    manager.vector_indices.remove("tenant_a");
+    assert!(manager.get_vector_index("tenant_a").is_none());
+    {
+        let lock = manager.get_vector_index("tenant_b").unwrap();
+        let guard = lock.read().unwrap();
+        assert_eq!(
+            guard.len(),
+            2,
+            "tenant_b should be unaffected by tenant_a removal"
+        );
+    }
+}
+
+#[tokio::test]
+async fn all_tenant_oplog_seqs_empty_when_no_oplogs() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    // Create tenant but don't write anything (no oplog created)
+    manager.create_tenant("t1").unwrap();
+    let seqs = manager.all_tenant_oplog_seqs();
+    assert!(seqs.is_empty(), "no oplog loaded means empty result");
+}
+
+// ── Vector index load-on-open tests (8.4) ──
+
+/// TODO: Document test_load_vector_index_on_get_or_load.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_load_vector_index_on_get_or_load() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "load_vec_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    // Create a Tantivy index on disk
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    // Save settings with an embedder so load_vector_index proceeds past the
+    // "no embedders configured" guard (added in 8.19).
+    let settings = crate::index::settings::IndexSettings {
+        embedders: Some(std::collections::HashMap::from([(
+            "default".to_string(),
+            serde_json::json!({
+                "source": "userProvided",
+                "dimensions": 3
+            }),
+        )])),
+        ..Default::default()
+    };
+    settings.save(tenant_path.join("settings.json")).unwrap();
+
+    // Manually save a VectorIndex with 3 docs (no fingerprint file → backward compat load)
+    let mut vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi.add("doc2", &[0.0, 1.0, 0.0]).unwrap();
+    vi.add("doc3", &[0.0, 0.0, 1.0]).unwrap();
+    vi.save(&tenant_path.join("vectors")).unwrap();
+
+    // Create IndexManager and get_or_load
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    // Verify VectorIndex was loaded from disk
+    let vi_arc = manager.get_vector_index(tenant_id);
+    assert!(vi_arc.is_some(), "VectorIndex should be loaded from disk");
+    let vi_arc = vi_arc.unwrap();
+    let guard = vi_arc.read().unwrap();
+    assert_eq!(guard.len(), 3);
+    assert_eq!(guard.dimensions(), 3);
+
+    // Verify it's searchable
+    let results = guard.search(&[1.0, 0.0, 0.0], 1).unwrap();
+    assert_eq!(results[0].doc_id, "doc1");
+}
+
+/// TODO: Document test_load_no_vectors_dir_ok.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_load_no_vectors_dir_ok() {
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "novecdir_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    // No VectorIndex should be loaded
+    assert!(
+        manager.get_vector_index(tenant_id).is_none(),
+        "get_vector_index should return None when no vectors/ dir exists"
+    );
+}
+
+/// TODO: Document test_load_corrupted_vector_index_logs_warning.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_load_corrupted_vector_index_logs_warning() {
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "corrupt_vec_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    // Save settings with an embedder so load_vector_index actually attempts
+    // VectorIndex::load (without this it returns early at the "no embedders
+    // configured" guard, making the test a false positive).
+    let settings = crate::index::settings::IndexSettings {
+        embedders: Some(std::collections::HashMap::from([(
+            "default".to_string(),
+            serde_json::json!({
+                "source": "userProvided",
+                "dimensions": 3
+            }),
+        )])),
+        ..Default::default()
+    };
+    settings.save(tenant_path.join("settings.json")).unwrap();
+
+    // Write garbage to id_map.json (no fingerprint → backward compat, proceeds to load)
+    let vectors_dir = tenant_path.join("vectors");
+    std::fs::create_dir_all(&vectors_dir).unwrap();
+    std::fs::write(vectors_dir.join("id_map.json"), "not valid json!!!").unwrap();
+
+    let manager = IndexManager::new(tmp.path());
+    // Should not error — gracefully skip corrupted vectors
+    manager.get_or_load(tenant_id).unwrap();
+
+    // VectorIndex should not be loaded
+    assert!(
+        manager.get_vector_index(tenant_id).is_none(),
+        "corrupted vector index should not be loaded"
+    );
+}
+
+/// TODO: Document test_create_tenant_loads_existing_vectors.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_create_tenant_loads_existing_vectors() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "create_load_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    // Create tenant dir with Tantivy index
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    // Save settings with an embedder so load_vector_index proceeds past the
+    // "no embedders configured" guard (added in 8.19).
+    let settings = crate::index::settings::IndexSettings {
+        embedders: Some(std::collections::HashMap::from([(
+            "default".to_string(),
+            serde_json::json!({
+                "source": "userProvided",
+                "dimensions": 3
+            }),
+        )])),
+        ..Default::default()
+    };
+    settings.save(tenant_path.join("settings.json")).unwrap();
+
+    // Save VectorIndex (no fingerprint file → backward compat load)
+    let mut vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi.add("doc2", &[0.0, 1.0, 0.0]).unwrap();
+    vi.save(&tenant_path.join("vectors")).unwrap();
+
+    let manager = IndexManager::new(tmp.path());
+    manager.create_tenant(tenant_id).unwrap();
+
+    let vi_arc = manager.get_vector_index(tenant_id);
+    assert!(
+        vi_arc.is_some(),
+        "VectorIndex should be loaded on create_tenant"
+    );
+    let vi_arc = vi_arc.unwrap();
+    let guard = vi_arc.read().unwrap();
+    assert_eq!(guard.len(), 2);
+}
+
+// ── Vector recovery from oplog tests (8.10) ──
+
+/// Helper: create a tenant dir with a Tantivy index and an oplog, then write oplog entries
+/// with `_vectors` in the body. Returns the tenant path.
+#[cfg(feature = "vector-search")]
+fn setup_tenant_with_oplog_vectors(
+    base_path: &Path,
+    tenant_id: &str,
+    ops: &[(String, serde_json::Value)],
+) -> PathBuf {
+    let tenant_path = base_path.join(tenant_id);
+    std::fs::create_dir_all(&tenant_path).unwrap();
+
+    // Create a Tantivy index
+    let schema = crate::index::schema::Schema::builder().build();
+    let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+
+    // Write default settings
+    let settings = crate::index::settings::IndexSettings::default();
+    settings.save(tenant_path.join("settings.json")).unwrap();
+
+    // Create oplog and write entries
+    let oplog_dir = tenant_path.join("oplog");
+    let oplog = OpLog::open(&oplog_dir, tenant_id, "test_node").unwrap();
+    oplog.append_batch(ops).unwrap();
+
+    // Write committed_seq=0 to force full replay
+    std::fs::write(tenant_path.join("committed_seq"), "0").unwrap();
+
+    tenant_path
+}
+
+/// TODO: Document test_recover_vectors_from_oplog.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_recover_vectors_from_oplog() {
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "rec_vec_t";
+
+    let ops = vec![
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc1",
+                "body": {
+                    "objectID": "doc1",
+                    "title": "first",
+                    "_vectors": {"default": [1.0, 0.0, 0.0]}
+                }
+            }),
+        ),
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc2",
+                "body": {
+                    "objectID": "doc2",
+                    "title": "second",
+                    "_vectors": {"default": [0.0, 1.0, 0.0]}
+                }
+            }),
+        ),
+    ];
+
+    setup_tenant_with_oplog_vectors(tmp.path(), tenant_id, &ops);
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    // Verify VectorIndex was rebuilt from oplog
+    let vi_arc = manager.get_vector_index(tenant_id);
+    assert!(vi_arc.is_some(), "VectorIndex should be rebuilt from oplog");
+    let vi_arc = vi_arc.unwrap();
+    let guard = vi_arc.read().unwrap();
+    assert_eq!(guard.len(), 2);
+
+    let results = guard.search(&[1.0, 0.0, 0.0], 1).unwrap();
+    assert_eq!(results[0].doc_id, "doc1");
+}
+
+/// TODO: Document test_recover_vectors_with_deletes.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_recover_vectors_with_deletes() {
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "rec_del_t";
+
+    let ops = vec![
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc1",
+                "body": {
+                    "objectID": "doc1",
+                    "title": "first",
+                    "_vectors": {"default": [1.0, 0.0, 0.0]}
+                }
+            }),
+        ),
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc2",
+                "body": {
+                    "objectID": "doc2",
+                    "title": "second",
+                    "_vectors": {"default": [0.0, 1.0, 0.0]}
+                }
+            }),
+        ),
+        (
+            "delete".to_string(),
+            serde_json::json!({"objectID": "doc1"}),
+        ),
+    ];
+
+    setup_tenant_with_oplog_vectors(tmp.path(), tenant_id, &ops);
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    let vi_arc = manager.get_vector_index(tenant_id);
+    assert!(vi_arc.is_some(), "VectorIndex should exist after recovery");
+    let vi_lock = vi_arc.unwrap();
+    let guard = vi_lock.read().unwrap();
+    assert_eq!(guard.len(), 1, "only doc2 should remain after delete");
+
+    let results = guard.search(&[0.0, 1.0, 0.0], 1).unwrap();
+    assert_eq!(results[0].doc_id, "doc2");
+}
+
+/// TODO: Document test_recover_no_vectors_in_old_oplog.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_recover_no_vectors_in_old_oplog() {
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "rec_novec_t";
+
+    // Oplog entries without _vectors (pre-stage-8 format)
+    let ops = vec![(
+        "upsert".to_string(),
+        serde_json::json!({
+            "objectID": "doc1",
+            "body": {"objectID": "doc1", "title": "old format doc"}
+        }),
+    )];
+
+    setup_tenant_with_oplog_vectors(tmp.path(), tenant_id, &ops);
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    // No VectorIndex should be created
+    assert!(
+        manager.get_vector_index(tenant_id).is_none(),
+        "no VectorIndex when oplog has no _vectors"
+    );
+}
+
+/// TODO: Document test_recover_vectors_after_clear_op.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_recover_vectors_after_clear_op() {
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "rec_clear_t";
+
+    let ops = vec![
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc1",
+                "body": {
+                    "objectID": "doc1",
+                    "title": "first",
+                    "_vectors": {"default": [1.0, 0.0, 0.0]}
+                }
+            }),
+        ),
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc2",
+                "body": {
+                    "objectID": "doc2",
+                    "title": "second",
+                    "_vectors": {"default": [0.0, 1.0, 0.0]}
+                }
+            }),
+        ),
+        ("clear".to_string(), serde_json::json!({})),
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc3",
+                "body": {
+                    "objectID": "doc3",
+                    "title": "third",
+                    "_vectors": {"default": [0.0, 0.0, 1.0]}
+                }
+            }),
+        ),
+    ];
+
+    setup_tenant_with_oplog_vectors(tmp.path(), tenant_id, &ops);
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    let vi_arc = manager.get_vector_index(tenant_id);
+    assert!(vi_arc.is_some(), "VectorIndex should exist after recovery");
+    let vi_lock = vi_arc.unwrap();
+    let guard = vi_lock.read().unwrap();
+    assert_eq!(guard.len(), 1, "only doc3 should exist after clear + add");
+
+    let results = guard.search(&[0.0, 0.0, 1.0], 1).unwrap();
+    assert_eq!(results[0].doc_id, "doc3");
+}
+
+/// TODO: Document test_recover_vectors_saved_to_disk.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_recover_vectors_saved_to_disk() {
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "rec_disk_t";
+
+    let ops = vec![(
+        "upsert".to_string(),
+        serde_json::json!({
+            "objectID": "doc1",
+            "body": {
+                "objectID": "doc1",
+                "title": "first",
+                "_vectors": {"default": [1.0, 0.0, 0.0]}
+            }
+        }),
+    )];
+
+    let tenant_path = setup_tenant_with_oplog_vectors(tmp.path(), tenant_id, &ops);
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    // Verify vector files were saved to disk after recovery
+    let vectors_dir = tenant_path.join("vectors");
+    assert!(
+        vectors_dir.join("index.usearch").exists(),
+        "index.usearch should be saved after recovery"
+    );
+    assert!(
+        vectors_dir.join("id_map.json").exists(),
+        "id_map.json should be saved after recovery"
+    );
+}
+
+/// TODO: Document test_recover_vectors_upsert_same_doc_twice.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_recover_vectors_upsert_same_doc_twice() {
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "rec_dup_t";
+
+    // Upsert doc1 with vector A, then upsert doc1 again with vector B
+    let ops = vec![
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc1",
+                "body": {
+                    "objectID": "doc1",
+                    "title": "first version",
+                    "_vectors": {"default": [1.0, 0.0, 0.0]}
+                }
+            }),
+        ),
+        (
+            "upsert".to_string(),
+            serde_json::json!({
+                "objectID": "doc1",
+                "body": {
+                    "objectID": "doc1",
+                    "title": "second version",
+                    "_vectors": {"default": [0.0, 1.0, 0.0]}
+                }
+            }),
+        ),
+    ];
+
+    setup_tenant_with_oplog_vectors(tmp.path(), tenant_id, &ops);
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    let vi_arc = manager.get_vector_index(tenant_id);
+    assert!(vi_arc.is_some(), "VectorIndex should exist after recovery");
+    let vi_lock = vi_arc.unwrap();
+    let guard = vi_lock.read().unwrap();
+    assert_eq!(guard.len(), 1, "re-upsert should not duplicate doc1");
+
+    // The vector should be the SECOND one (latest wins)
+    let results = guard.search(&[0.0, 1.0, 0.0], 1).unwrap();
+    assert_eq!(results[0].doc_id, "doc1");
+}
+
+/// TODO: Document test_load_vector_index_skips_when_already_loaded.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_load_vector_index_skips_when_already_loaded() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "skip_load_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    // Create tenant on disk
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    // Save a VectorIndex with 2 docs to disk
+    let mut vi_disk = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi_disk.add("disk_doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi_disk.add("disk_doc2", &[0.0, 1.0, 0.0]).unwrap();
+    vi_disk.save(&tenant_path.join("vectors")).unwrap();
+
+    let manager = IndexManager::new(tmp.path());
+
+    // Pre-populate vector_indices with a DIFFERENT VectorIndex (1 doc)
+    let mut vi_mem = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi_mem.add("mem_doc1", &[0.0, 0.0, 1.0]).unwrap();
+    manager.set_vector_index(tenant_id, vi_mem);
+
+    // Now call get_or_load — load_vector_index should skip because already populated
+    manager.get_or_load(tenant_id).unwrap();
+
+    // Verify we still have the in-memory version (1 doc), NOT the disk version (2 docs)
+    let vi_arc = manager.get_vector_index(tenant_id).unwrap();
+    let guard = vi_arc.read().unwrap();
+    assert_eq!(
+        guard.len(),
+        1,
+        "should keep in-memory index, not overwrite from disk"
+    );
+    let results = guard.search(&[0.0, 0.0, 1.0], 1).unwrap();
+    assert_eq!(results[0].doc_id, "mem_doc1");
+}
+
+/// TODO: Document test_full_crash_recovery_vectors_available.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_full_crash_recovery_vectors_available() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "embedding": [0.7, 0.8, 0.9]
+        })))
+        .mount(&server)
+        .await;
+
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "crash_rec_t";
+
+    // Phase 1: Create manager, add docs with embedder, let commit happen
+    {
+        let manager = IndexManager::new(tmp.path());
+        manager.create_tenant(tenant_id).unwrap();
+
+        // Configure embedder in settings
+        let tenant_path = tmp.path().join(tenant_id);
+        let settings = crate::index::settings::IndexSettings {
+            embedders: Some(HashMap::from([(
+                "default".to_string(),
+                serde_json::json!({
+                    "source": "rest",
+                    "url": format!("{}/embed", server.uri()),
+                    "request": {"input": "{{text}}"},
+                    "response": {"embedding": "{{embedding}}"},
+                    "dimensions": 3
+                }),
+            )])),
+            ..Default::default()
+        };
+        settings.save(tenant_path.join("settings.json")).unwrap();
+
+        // Add docs through write queue (which creates oplog entries)
+        let docs = vec![Document {
+            id: "doc1".to_string(),
+            fields: HashMap::from([(
+                "title".to_string(),
+                crate::types::FieldValue::Text("recovery test".to_string()),
+            )]),
+        }];
+        manager.add_documents_sync(tenant_id, docs).await.unwrap();
+
+        // Verify vectors exist in memory
+        let vi_arc = manager.get_vector_index(tenant_id);
+        assert!(vi_arc.is_some(), "vectors should be in memory after add");
+    }
+
+    // Phase 2: Simulate crash — create new IndexManager
+    {
+        let manager2 = IndexManager::new(tmp.path());
+        manager2.get_or_load(tenant_id).unwrap();
+
+        // Vectors should be loaded from disk (saved after commit)
+        let vi_arc = manager2.get_vector_index(tenant_id);
+        assert!(
+            vi_arc.is_some(),
+            "vectors should survive manager restart (loaded from disk)"
+        );
+        let vi_lock = vi_arc.unwrap();
+        let guard = vi_lock.read().unwrap();
+        assert_eq!(guard.len(), 1);
+        assert_eq!(guard.dimensions(), 3);
+    }
+}
+
+// ── Fingerprint integration tests (8.18) ──
+
+/// TODO: Document test_fingerprint_match_loads_vectors.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_fingerprint_match_loads_vectors() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "fp_match_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    // Save settings with a rest embedder
+    let settings = crate::index::settings::IndexSettings {
+        embedders: Some(std::collections::HashMap::from([(
+            "default".to_string(),
+            serde_json::json!({
+                "source": "rest",
+                "model": "text-embedding-3-small",
+                "dimensions": 3
+            }),
+        )])),
+        ..Default::default()
+    };
+    settings.save(tenant_path.join("settings.json")).unwrap();
+
+    // Save VectorIndex
+    let mut vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi.save(&tenant_path.join("vectors")).unwrap();
+
+    // Save matching fingerprint
+    let configs = vec![(
+        "default".to_string(),
+        crate::vector::config::EmbedderConfig {
+            source: crate::vector::config::EmbedderSource::Rest,
+            model: Some("text-embedding-3-small".into()),
+            dimensions: Some(3),
+            ..Default::default()
+        },
+    )];
+    let fp = crate::vector::config::EmbedderFingerprint::from_configs(&configs, 3);
+    fp.save(&tenant_path.join("vectors")).unwrap();
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    assert!(
+        manager.get_vector_index(tenant_id).is_some(),
+        "vectors should load when fingerprint matches"
+    );
+}
+
+/// TODO: Document test_fingerprint_mismatch_skips_vectors.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_fingerprint_mismatch_skips_vectors() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "fp_mismatch_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    // Settings with model B
+    let settings = crate::index::settings::IndexSettings {
+        embedders: Some(std::collections::HashMap::from([(
+            "default".to_string(),
+            serde_json::json!({
+                "source": "openAi",
+                "model": "text-embedding-3-large",
+                "dimensions": 3,
+                "apiKey": "sk-test"
+            }),
+        )])),
+        ..Default::default()
+    };
+    settings.save(tenant_path.join("settings.json")).unwrap();
+
+    // Save VectorIndex
+    let mut vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi.save(&tenant_path.join("vectors")).unwrap();
+
+    // Save fingerprint with model A (MISMATCH)
+    let configs = vec![(
+        "default".to_string(),
+        crate::vector::config::EmbedderConfig {
+            source: crate::vector::config::EmbedderSource::OpenAi,
+            model: Some("text-embedding-3-small".into()),
+            dimensions: Some(3),
+            ..Default::default()
+        },
+    )];
+    let fp = crate::vector::config::EmbedderFingerprint::from_configs(&configs, 3);
+    fp.save(&tenant_path.join("vectors")).unwrap();
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    assert!(
+        manager.get_vector_index(tenant_id).is_none(),
+        "vectors should NOT load when fingerprint mismatches (model changed)"
+    );
+}
+
+/// TODO: Document test_no_fingerprint_file_loads_vectors_anyway.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_no_fingerprint_file_loads_vectors_anyway() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "nofp_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    // Save settings with embedder
+    let settings = crate::index::settings::IndexSettings {
+        embedders: Some(std::collections::HashMap::from([(
+            "default".to_string(),
+            serde_json::json!({
+                "source": "rest",
+                "model": "text-embedding-3-small",
+                "dimensions": 3
+            }),
+        )])),
+        ..Default::default()
+    };
+    settings.save(tenant_path.join("settings.json")).unwrap();
+
+    // Save VectorIndex but NO fingerprint.json (backward compat)
+    let mut vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi.save(&tenant_path.join("vectors")).unwrap();
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    assert!(
+        manager.get_vector_index(tenant_id).is_some(),
+        "vectors should load when no fingerprint file exists (backward compat)"
+    );
+}
+
+/// TODO: Document test_fingerprint_mismatch_template_change_skips.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_fingerprint_mismatch_template_change_skips() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "fp_tmpl_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    {
+        let schema = crate::index::schema::Schema::builder().build();
+        let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
+    }
+
+    // Settings with NEW template
+    let settings = crate::index::settings::IndexSettings {
+        embedders: Some(std::collections::HashMap::from([(
+            "default".to_string(),
+            serde_json::json!({
+                "source": "rest",
+                "model": "model-a",
+                "dimensions": 3,
+                "documentTemplate": "{{doc.title}}"
+            }),
+        )])),
+        ..Default::default()
+    };
+    settings.save(tenant_path.join("settings.json")).unwrap();
+
+    // Save VectorIndex
+    let mut vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi.save(&tenant_path.join("vectors")).unwrap();
+
+    // Save fingerprint with OLD template (MISMATCH)
+    let configs = vec![(
+        "default".to_string(),
+        crate::vector::config::EmbedderConfig {
+            source: crate::vector::config::EmbedderSource::Rest,
+            model: Some("model-a".into()),
+            dimensions: Some(3),
+            document_template: Some("{{doc.title}} {{doc.body}}".into()),
+            ..Default::default()
+        },
+    )];
+    let fp = crate::vector::config::EmbedderFingerprint::from_configs(&configs, 3);
+    fp.save(&tenant_path.join("vectors")).unwrap();
+
+    let manager = IndexManager::new(tmp.path());
+    manager.get_or_load(tenant_id).unwrap();
+
+    assert!(
+        manager.get_vector_index(tenant_id).is_none(),
+        "vectors should NOT load when document_template changed"
+    );
+}
+
+// ── Memory accounting tests (8.21) ──
+
+/// TODO: Document test_vector_memory_usage_with_indices.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_vector_memory_usage_with_indices() {
+    use usearch::ffi::MetricKind;
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    manager.create_tenant("mem_t").unwrap();
+
+    // Create a VectorIndex with some vectors
+    let mut vi = crate::vector::index::VectorIndex::new(3, MetricKind::Cos).unwrap();
+    vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+    vi.add("doc2", &[0.0, 1.0, 0.0]).unwrap();
+    vi.add("doc3", &[0.0, 0.0, 1.0]).unwrap();
+    manager.set_vector_index("mem_t", vi);
+
+    let usage = manager.vector_memory_usage();
+    assert!(
+        usage > 0,
+        "vector_memory_usage should be > 0 when vectors exist, got {}",
+        usage
+    );
+}
+
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_vector_memory_usage_no_indices() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+
+    let usage = manager.vector_memory_usage();
+    assert_eq!(usage, 0, "vector_memory_usage should be 0 with no indices");
+}
+
+// ── HTTP integration tests (8.25) ──
+
+/// TODO: Document test_vectors_survive_manager_restart.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_vectors_survive_manager_restart() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "embedding": [0.5, 0.6, 0.7]
+        })))
+        .mount(&server)
+        .await;
+
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "restart_surv_t";
+
+    // Phase 1: Create manager, add docs with embedder, verify vectors exist
+    {
+        let manager = IndexManager::new(tmp.path());
+        manager.create_tenant(tenant_id).unwrap();
+
+        let tenant_path = tmp.path().join(tenant_id);
+        let settings = crate::index::settings::IndexSettings {
+            embedders: Some(HashMap::from([(
+                "default".to_string(),
+                serde_json::json!({
+                    "source": "rest",
+                    "url": format!("{}/embed", server.uri()),
+                    "request": {"input": "{{text}}"},
+                    "response": {"embedding": "{{embedding}}"},
+                    "dimensions": 3
+                }),
+            )])),
+            ..Default::default()
+        };
+        settings.save(tenant_path.join("settings.json")).unwrap();
+
+        let docs = vec![
+            Document {
+                id: "doc1".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    crate::types::FieldValue::Text("alpha bravo".to_string()),
+                )]),
+            },
+            Document {
+                id: "doc2".to_string(),
+                fields: HashMap::from([(
+                    "title".to_string(),
+                    crate::types::FieldValue::Text("charlie delta".to_string()),
+                )]),
+            },
+        ];
+        manager.add_documents_sync(tenant_id, docs).await.unwrap();
+
+        // Verify vectors exist in memory
+        let vi_arc = manager
+            .get_vector_index(tenant_id)
+            .expect("vectors should exist");
+        let guard = vi_arc.read().unwrap();
+        assert_eq!(guard.len(), 2, "should have 2 vectors");
+        // Verify search works
+        let results = guard.search(&[0.5, 0.6, 0.7], 2).unwrap();
+        assert_eq!(results.len(), 2, "search should return 2 results");
+    }
+
+    // Phase 2: Restart — create new IndexManager with same base_path
+    {
+        let manager2 = IndexManager::new(tmp.path());
+        manager2.get_or_load(tenant_id).unwrap();
+
+        // Vectors should be loaded from disk
+        let vi_arc = manager2.get_vector_index(tenant_id);
+        assert!(vi_arc.is_some(), "vectors should survive manager restart");
+
+        let vi_lock = vi_arc.unwrap();
+        let guard = vi_lock.read().unwrap();
+        assert_eq!(guard.len(), 2, "should still have 2 vectors after restart");
+        assert_eq!(guard.dimensions(), 3);
+
+        // Verify search still works after restart
+        let results = guard.search(&[0.5, 0.6, 0.7], 2).unwrap();
+        assert_eq!(
+            results.len(),
+            2,
+            "search should return 2 results after restart"
+        );
+    }
+}
+
+/// TODO: Document test_vectors_lost_when_embedder_model_changes.
+#[cfg(feature = "vector-search")]
+#[tokio::test]
+async fn test_vectors_lost_when_embedder_model_changes() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "embedding": [0.1, 0.2, 0.3]
+        })))
+        .mount(&server)
+        .await;
+
+    let tmp = TempDir::new().unwrap();
+    let tenant_id = "model_chg_t";
+    let tenant_path = tmp.path().join(tenant_id);
+
+    // Phase 1: Add docs with model A (REST embedder)
+    {
+        let manager = IndexManager::new(tmp.path());
+        manager.create_tenant(tenant_id).unwrap();
+
+        let settings = crate::index::settings::IndexSettings {
+            embedders: Some(HashMap::from([(
+                "default".to_string(),
+                serde_json::json!({
+                    "source": "rest",
+                    "model": "model-a",
+                    "url": format!("{}/embed", server.uri()),
+                    "request": {"input": "{{text}}"},
+                    "response": {"embedding": "{{embedding}}"},
+                    "dimensions": 3
+                }),
+            )])),
+            ..Default::default()
+        };
+        settings.save(tenant_path.join("settings.json")).unwrap();
+
+        let docs = vec![Document {
+            id: "doc1".to_string(),
+            fields: HashMap::from([(
+                "title".to_string(),
+                crate::types::FieldValue::Text("test doc".to_string()),
+            )]),
+        }];
+        manager.add_documents_sync(tenant_id, docs).await.unwrap();
+
+        assert!(
+            manager.get_vector_index(tenant_id).is_some(),
+            "vectors should exist after Phase 1"
+        );
+    }
+
+    // Phase 2: Change settings to model B, restart
+    {
+        let settings = crate::index::settings::IndexSettings {
+            embedders: Some(HashMap::from([(
+                "default".to_string(),
+                serde_json::json!({
+                    "source": "rest",
+                    "model": "model-b",
+                    "url": format!("{}/embed", server.uri()),
+                    "request": {"input": "{{text}}"},
+                    "response": {"embedding": "{{embedding}}"},
+                    "dimensions": 3
+                }),
+            )])),
+            ..Default::default()
+        };
+        settings.save(tenant_path.join("settings.json")).unwrap();
+
+        let manager2 = IndexManager::new(tmp.path());
+        manager2.get_or_load(tenant_id).unwrap();
+
+        // Vectors should NOT be loaded — fingerprint mismatch
+        assert!(
+            manager2.get_vector_index(tenant_id).is_none(),
+            "vectors should NOT load when embedder model changes (fingerprint mismatch)"
+        );
+    }
+}
+
+// ── validate_index_name ──
+
+#[test]
+fn index_name_valid() {
+    assert!(validate_index_name("my-index_123").is_ok());
+    assert!(validate_index_name("products").is_ok());
+    assert!(validate_index_name("test.v2").is_ok());
+}
+
+#[test]
+fn index_name_rejects_path_traversal() {
+    assert!(validate_index_name("../etc/passwd").is_err());
+    assert!(validate_index_name("..").is_err());
+    assert!(validate_index_name("foo/../../bar").is_err());
+    assert!(validate_index_name("foo\\bar").is_err());
+}
+
+#[test]
+fn index_name_rejects_empty() {
+    assert!(validate_index_name("").is_err());
+}
+
+#[test]
+fn index_name_rejects_null_bytes() {
+    assert!(validate_index_name("test\0name").is_err());
+}
+
+#[test]
+fn index_name_rejects_too_long() {
+    let long_name = "a".repeat(MAX_INDEX_NAME_BYTES + 1);
+    assert!(validate_index_name(&long_name).is_err());
+}
+
+#[tokio::test]
+async fn create_tenant_rejects_path_traversal() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    let result = manager.create_tenant("../escape");
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("path traversal"), "got: {msg}");
+}
+
+/// TODO: Document read_side_getters_reject_path_traversal_tenant_ids.
+#[tokio::test]
+async fn read_side_getters_reject_path_traversal_tenant_ids() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+
+    // Create files in a sibling path that would be reachable via "../..."
+    // if tenant IDs were not validated at read boundaries.
+    let escape_dir = tmp.path().join("../escape_getters_reject_path_traversal");
+    std::fs::create_dir_all(&escape_dir).unwrap();
+    IndexSettings::default()
+        .save(escape_dir.join("settings.json"))
+        .unwrap();
+    RuleStore::new()
+        .save(&escape_dir.join("rules.json"))
+        .unwrap();
+    SynonymStore::new()
+        .save(escape_dir.join("synonyms.json"))
+        .unwrap();
+
+    let bad_id = "../escape_getters_reject_path_traversal";
+    assert!(manager.get_settings(bad_id).is_none());
+    assert!(manager.get_rules(bad_id).is_none());
+    assert!(manager.get_synonyms(bad_id).is_none());
+}
+
+#[tokio::test]
+async fn delete_tenant_rejects_path_traversal_tenant_ids() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    let escape_dir = tmp.path().join("../escape_delete_reject_path_traversal");
+    std::fs::create_dir_all(&escape_dir).unwrap();
+
+    let bad_id = "../escape_delete_reject_path_traversal".to_string();
+    let result = manager.delete_tenant(&bad_id).await;
+    assert!(result.is_err(), "delete_tenant should reject traversal IDs");
+    assert!(
+        escape_dir.exists(),
+        "path traversal must not delete sibling paths"
+    );
+}
+
+/// TODO: Document import_tenant_rejects_path_traversal_tenant_ids.
+#[tokio::test]
+async fn import_tenant_rejects_path_traversal_tenant_ids() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    let src_path = tmp.path().join("import_src");
+    std::fs::create_dir_all(&src_path).unwrap();
+    std::fs::write(src_path.join("settings.json"), "{}").unwrap();
+
+    let escape_dir = tmp.path().join("../escape_import_reject_path_traversal");
+    let bad_id = "../escape_import_reject_path_traversal".to_string();
+    let result = manager.import_tenant(&bad_id, &src_path);
+    assert!(result.is_err(), "import_tenant should reject traversal IDs");
+    assert!(
+        !escape_dir.exists(),
+        "path traversal must not create sibling destination paths"
+    );
+}
+
+#[tokio::test]
+async fn export_tenant_rejects_path_traversal_tenant_ids() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    let bad_id = "../escape_export_reject_path_traversal".to_string();
+    let result = manager.export_tenant(&bad_id, tmp.path().join("export_target"));
+    assert!(result.is_err(), "export_tenant should reject traversal IDs");
+}
+
+#[tokio::test]
+async fn get_or_create_oplog_rejects_path_traversal_tenant_ids() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+    let bad_id = "../escape_oplog_reject_path_traversal";
+    assert!(
+        manager.get_or_create_oplog(bad_id).is_none(),
+        "get_or_create_oplog should reject traversal IDs"
+    );
+    assert!(
+        !tmp.path()
+            .join("../escape_oplog_reject_path_traversal")
+            .exists(),
+        "path traversal must not create sibling oplog directories"
+    );
+}
+
+#[tokio::test]
+async fn tenant_storage_bytes_rejects_path_traversal_tenant_ids() {
+    let tmp = TempDir::new().unwrap();
+    let manager = IndexManager::new(tmp.path());
+
+    let escape_dir = tmp.path().join("../escape_storage_reject_path_traversal");
+    std::fs::create_dir_all(&escape_dir).unwrap();
+    std::fs::write(escape_dir.join("marker.txt"), "leak").unwrap();
+
+    let leaked_bytes = manager.tenant_storage_bytes("../escape_storage_reject_path_traversal");
+    assert_eq!(
+        leaked_bytes, 0,
+        "tenant_storage_bytes should not read outside base path"
+    );
+}
+
+// ── Custom dictionary pipeline wiring tests ─────────────────────────
+
+fn setup_manager_with_dictionaries(tmp: &TempDir) -> Arc<IndexManager> {
+    let manager = IndexManager::new(tmp.path());
+    let dm = Arc::new(crate::dictionaries::manager::DictionaryManager::new(
+        tmp.path(),
+    ));
+    manager.set_dictionary_manager(dm);
+    manager
+}
+
+/// TODO: Document test_custom_stopword_removes_term_from_query.
+#[tokio::test]
+async fn test_custom_stopword_removes_term_from_query() {
+    let tmp = TempDir::new().unwrap();
+    let manager = setup_manager_with_dictionaries(&tmp);
+    manager.create_tenant("t1").unwrap();
+
+    // Doc 1 matches only "delta", Doc 2 matches only "alpha"
+    let docs = vec![
+        Document {
+            id: "d1".to_string(),
+            fields: HashMap::from([(
+                "title".to_string(),
+                crate::types::FieldValue::Text("delta waves".to_string()),
+            )]),
+        },
+        Document {
+            id: "d2".to_string(),
+            fields: HashMap::from([(
+                "title".to_string(),
+                crate::types::FieldValue::Text("alpha particles".to_string()),
+            )]),
+        },
+    ];
+    manager.add_documents_sync("t1", docs).await.unwrap();
+
+    let en_langs = vec!["en".to_string()];
+    let before = manager
+        .search_with_options(
+            "t1",
+            "alpha delta",
+            &SearchOptions {
+                limit: 10,
+                remove_stop_words: Some(&crate::query::stopwords::RemoveStopWordsValue::All),
+                query_languages: Some(&en_langs),
+                query_type: Some("prefixNone"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        before.total, 0,
+        "without custom stopword wiring, 'alpha delta' requires both terms and returns no hits"
+    );
+
+    // Add "alpha" as a custom English stopword under the search tenant "t1".
+    // Also add conflicting "_default" stopword data so wrong-tenant lookup is observable.
+    // BUG (RED): The search path hardcodes DEFAULT_DICTIONARY_TENANT ("_default") in
+    // remove_stop_words_with_dictionary_manager (query.rs:295), so this lookup reads
+    // "_default" instead of tenant "t1" until Stage 3 threads tenant_id through preprocess_query.
+    let dm = manager.dictionary_manager().unwrap();
+    dm.batch(
+        "t1",
+        crate::dictionaries::DictionaryName::Stopwords,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "sw-alpha",
+                    "language": "en",
+                    "word": "alpha",
+                    "state": "enabled",
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+    dm.batch(
+        crate::dictionaries::DEFAULT_DICTIONARY_TENANT,
+        crate::dictionaries::DictionaryName::Stopwords,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "sw-delta-default",
+                    "language": "en",
+                    "word": "delta",
+                    "state": "enabled",
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+
+    // Search "alpha delta" with removeStopWords=All.
+    // "alpha" should be custom-stopped → query becomes "delta" → only d1 matches.
+    // Without wiring: "alpha" is NOT a built-in stopword, so query stays "alpha delta"
+    // and both docs match.
+    let result = manager
+        .search_with_options(
+            "t1",
+            "alpha delta",
+            &SearchOptions {
+                limit: 10,
+                remove_stop_words: Some(&crate::query::stopwords::RemoveStopWordsValue::All),
+                query_languages: Some(&en_langs),
+                query_type: Some("prefixNone"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Only d1 should match — tenant "t1" stopword "alpha" should be used.
+    // If "_default" leaks in, "delta" is removed instead and d2 matches.
+    assert_eq!(
+        result.total, 1,
+        "custom stopword 'alpha' should remove it from query, leaving only 'delta'"
+    );
+    assert_eq!(result.documents[0].document.id, "d1");
+}
+
+/// Regression: stopwords stored under `_default` must NOT bleed into tenant "t1" searches.
+/// Currently FAILS (RED) because `remove_stop_words_with_dictionary_manager` hardcodes
+/// `DEFAULT_DICTIONARY_TENANT`, causing `_default` entries to apply to ALL tenants.
+#[tokio::test]
+async fn test_stopword_isolation_no_cross_tenant_bleed() {
+    let tmp = TempDir::new().unwrap();
+    let manager = setup_manager_with_dictionaries(&tmp);
+    manager.create_tenant("t1").unwrap();
+    manager.create_tenant("t2").unwrap();
+
+    let t1_docs = vec![
+        Document {
+            id: "d1".to_string(),
+            fields: HashMap::from([(
+                "title".to_string(),
+                crate::types::FieldValue::Text("delta waves".to_string()),
+            )]),
+        },
+        Document {
+            id: "d2".to_string(),
+            fields: HashMap::from([(
+                "title".to_string(),
+                crate::types::FieldValue::Text("alpha particles".to_string()),
+            )]),
+        },
+    ];
+    manager.add_documents_sync("t1", t1_docs).await.unwrap();
+    let t2_docs = vec![
+        Document {
+            id: "tenant2-d1".to_string(),
+            fields: HashMap::from([(
+                "title".to_string(),
+                crate::types::FieldValue::Text("delta comet".to_string()),
+            )]),
+        },
+        Document {
+            id: "tenant2-d2".to_string(),
+            fields: HashMap::from([(
+                "title".to_string(),
+                crate::types::FieldValue::Text("alpha comet".to_string()),
+            )]),
+        },
+    ];
+    manager.add_documents_sync("t2", t2_docs).await.unwrap();
+
+    // "t1" should remove "alpha", while "t2"/"_default" remove "delta".
+    // A t1 search for "alpha delta" must therefore match d1 only.
+    let dm = manager.dictionary_manager().unwrap();
+    dm.batch(
+        "t1",
+        crate::dictionaries::DictionaryName::Stopwords,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "sw-alpha",
+                    "language": "en",
+                    "word": "alpha",
+                    "state": "enabled",
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+    dm.batch(
+        "t2",
+        crate::dictionaries::DictionaryName::Stopwords,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "sw-delta-tenant2",
+                    "language": "en",
+                    "word": "delta",
+                    "state": "enabled",
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+    dm.batch(
+        crate::dictionaries::DEFAULT_DICTIONARY_TENANT,
+        crate::dictionaries::DictionaryName::Stopwords,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "sw-delta-default",
+                    "language": "en",
+                    "word": "delta",
+                    "state": "enabled",
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+
+    let en_langs = vec!["en".to_string()];
+    let result = manager
+        .search_with_options(
+            "t1",
+            "alpha delta",
+            &SearchOptions {
+                limit: 10,
+                remove_stop_words: Some(&crate::query::stopwords::RemoveStopWordsValue::All),
+                query_languages: Some(&en_langs),
+                query_type: Some("prefixNone"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Tenant "t1" must use its own stopword set ("alpha"), so query becomes "delta"
+    // and returns d1. If "_default"/other-tenant data leaks in, "delta" is removed and d2 wins.
+    assert_eq!(
+        result.total, 1,
+        "t1 search must route stopword lookup to t1 dictionary entries"
+    );
+    assert_eq!(result.documents[0].document.id, "d1");
+}
+
+/// TODO: Document test_custom_plural_expands_query.
+#[tokio::test]
+async fn test_custom_plural_expands_query() {
+    let tmp = TempDir::new().unwrap();
+    let manager = setup_manager_with_dictionaries(&tmp);
+    manager.create_tenant("t1").unwrap();
+
+    // Add document with "cacti" (custom plural of "cactus")
+    let docs = vec![Document {
+        id: "d1".to_string(),
+        fields: HashMap::from([(
+            "title".to_string(),
+            crate::types::FieldValue::Text("beautiful cacti garden".to_string()),
+        )]),
+    }];
+    manager.add_documents_sync("t1", docs).await.unwrap();
+
+    let en_langs = vec!["en".to_string()];
+    let before = manager
+        .search_with_options(
+            "t1",
+            "cactus",
+            &SearchOptions {
+                limit: 10,
+                ignore_plurals: Some(&crate::query::plurals::IgnorePluralsValue::All),
+                query_languages: Some(&en_langs),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        before.total, 0,
+        "without a custom plural entry, 'cactus' should not match 'cacti' here"
+    );
+
+    // Add custom plural pair [cactus, cacti] under the search tenant "t1".
+    // BUG (RED): The search path hardcodes DEFAULT_DICTIONARY_TENANT ("_default") in
+    // build_plural_language_spec (search_phases.rs:1117), so this lookup will miss
+    // the tenant-scoped entry until Stage 3 threads tenant_id through preprocess_query.
+    let dm = manager.dictionary_manager().unwrap();
+    dm.batch(
+        "t1",
+        crate::dictionaries::DictionaryName::Plurals,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "pl-cactus",
+                    "language": "en",
+                    "words": ["cactus", "cacti"],
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+
+    // Search for "cactus" with ignorePlurals=true — should expand to also match "cacti"
+    let result = manager
+        .search_with_options(
+            "t1",
+            "cactus",
+            &SearchOptions {
+                limit: 10,
+                ignore_plurals: Some(&crate::query::plurals::IgnorePluralsValue::All),
+                query_languages: Some(&en_langs),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.documents[0].document.id, "d1");
+}
+
+/// Regression: plurals stored under `_default` must NOT expand queries for tenant "t1".
+/// Currently FAILS (RED) because `build_plural_language_spec` hardcodes
+/// `DEFAULT_DICTIONARY_TENANT`, causing `_default` entries to apply to ALL tenants.
+#[tokio::test]
+async fn test_plural_isolation_no_cross_tenant_bleed() {
+    let tmp = TempDir::new().unwrap();
+    let manager = setup_manager_with_dictionaries(&tmp);
+    manager.create_tenant("t1").unwrap();
+    manager.create_tenant("t2").unwrap();
+
+    let t1_docs = vec![Document {
+        id: "d1".to_string(),
+        fields: HashMap::from([(
+            "title".to_string(),
+            crate::types::FieldValue::Text("beautiful cacti garden".to_string()),
+        )]),
+    }];
+    manager.add_documents_sync("t1", t1_docs).await.unwrap();
+    let t2_docs = vec![Document {
+        id: "tenant2-d1".to_string(),
+        fields: HashMap::from([(
+            "title".to_string(),
+            crate::types::FieldValue::Text("beautiful cactuses greenhouse".to_string()),
+        )]),
+    }];
+    manager.add_documents_sync("t2", t2_docs).await.unwrap();
+
+    // "t1" should expand cactus->cacti, while "t2"/"_default" map cactus->cactuses.
+    // A t1 search must therefore resolve to d1.
+    let dm = manager.dictionary_manager().unwrap();
+    dm.batch(
+        "t1",
+        crate::dictionaries::DictionaryName::Plurals,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "pl-cactus",
+                    "language": "en",
+                    "words": ["cactus", "cacti"],
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+    dm.batch(
+        "t2",
+        crate::dictionaries::DictionaryName::Plurals,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "pl-cactus-tenant2",
+                    "language": "en",
+                    "words": ["cactus", "cactuses"],
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+    dm.batch(
+        crate::dictionaries::DEFAULT_DICTIONARY_TENANT,
+        crate::dictionaries::DictionaryName::Plurals,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "pl-cactus-default",
+                    "language": "en",
+                    "words": ["cactus", "cactuses"],
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+
+    let en_langs = vec!["en".to_string()];
+    let result = manager
+        .search_with_options(
+            "t1",
+            "cactus",
+            &SearchOptions {
+                limit: 10,
+                ignore_plurals: Some(&crate::query::plurals::IgnorePluralsValue::All),
+                query_languages: Some(&en_langs),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Tenant "t1" configured [cactus, cacti], so cactus should match d1.
+    // If "_default"/other-tenant data is used instead, expansion targets "cactuses" and d1 is missed.
+    assert_eq!(result.total, 1, "t1 search must use t1 plural dictionary");
+    assert_eq!(result.documents[0].document.id, "d1");
+}
+
+/// TODO: Document test_custom_compound_decomposition_expands_query.
+#[cfg(feature = "decompound")]
+#[tokio::test]
+async fn test_custom_compound_decomposition_expands_query() {
+    let tmp = TempDir::new().unwrap();
+    let manager = setup_manager_with_dictionaries(&tmp);
+    manager.create_tenant("t1").unwrap();
+
+    // Use a long first component (>12 chars) so split-alternative fallback cannot split it.
+    // This makes the test validate the custom compound dictionary path specifically.
+    let docs = vec![Document {
+        id: "d1".to_string(),
+        fields: HashMap::from([(
+            "title".to_string(),
+            crate::types::FieldValue::Text("ein xylophonographisch fest hier".to_string()),
+        )]),
+    }];
+    manager.add_documents_sync("t1", docs).await.unwrap();
+
+    let de_langs = vec!["de".to_string()];
+    let before = manager
+        .search_full_with_stop_words_with_hits_per_page_cap(
+            "t1",
+            "xylophonographischfest",
+            &SearchOptions {
+                limit: 10,
+                query_languages: Some(&de_langs),
+                decompound_query: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        before.total, 0,
+        "without custom decomposition, this synthetic compound should not match"
+    );
+
+    // Add custom compound decomposition under the search tenant "t1".
+    // BUG (RED): The search path hardcodes DEFAULT_DICTIONARY_TENANT ("_default") in
+    // build_decompound_language_spec (search_phases.rs:1236), so this lookup will miss
+    // the tenant-scoped entry until Stage 3 threads tenant_id through preprocess_query.
+    let dm = manager.dictionary_manager().unwrap();
+    dm.batch(
+        "t1",
+        crate::dictionaries::DictionaryName::Compounds,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "cp-xylophonographischfest",
+                    "language": "de",
+                    "word": "xylophonographischfest",
+                    "decomposition": ["xylophonographisch", "fest"],
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+
+    // Search with decompound enabled — should expand via custom decomposition.
+    let result = manager
+        .search_full_with_stop_words_with_hits_per_page_cap(
+            "t1",
+            "xylophonographischfest",
+            &SearchOptions {
+                limit: 10,
+                query_languages: Some(&de_langs),
+                decompound_query: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.documents[0].document.id, "d1");
+}
+
+/// Regression: decompound entries under `_default` must NOT expand queries for tenant "t1".
+/// Currently FAILS (RED) because `build_decompound_language_spec` hardcodes
+/// `DEFAULT_DICTIONARY_TENANT`, causing `_default` entries to apply to ALL tenants.
+#[cfg(feature = "decompound")]
+#[tokio::test]
+async fn test_decompound_isolation_no_cross_tenant_bleed() {
+    let tmp = TempDir::new().unwrap();
+    let manager = setup_manager_with_dictionaries(&tmp);
+    manager.create_tenant("t1").unwrap();
+    manager.create_tenant("t2").unwrap();
+
+    let t1_docs = vec![Document {
+        id: "d1".to_string(),
+        fields: HashMap::from([(
+            "title".to_string(),
+            crate::types::FieldValue::Text("ein xylophonographisch fest hier".to_string()),
+        )]),
+    }];
+    manager.add_documents_sync("t1", t1_docs).await.unwrap();
+    let t2_docs = vec![Document {
+        id: "tenant2-d1".to_string(),
+        fields: HashMap::from([(
+            "title".to_string(),
+            crate::types::FieldValue::Text("ein xylophon graphischfest dort".to_string()),
+        )]),
+    }];
+    manager.add_documents_sync("t2", t2_docs).await.unwrap();
+
+    // "t1" should decompose to ["xylophonographisch","fest"], while "t2"/"_default"
+    // use conflicting decomposition terms that cannot match d1.
+    // Disable built-in decompound for "_default" so this test isolates tenant routing.
+    let dm = manager.dictionary_manager().unwrap();
+    dm.batch(
+        "t1",
+        crate::dictionaries::DictionaryName::Compounds,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "cp-xylophonographischfest",
+                    "language": "de",
+                    "word": "xylophonographischfest",
+                    "decomposition": ["xylophonographisch", "fest"],
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+    dm.batch(
+        "t2",
+        crate::dictionaries::DictionaryName::Compounds,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "cp-xylophonographischfest-tenant2",
+                    "language": "de",
+                    "word": "xylophonographischfest",
+                    "decomposition": ["nonsenseteil", "ohnetreffer"],
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+    let mut default_settings = crate::dictionaries::DictionarySettings::default();
+    default_settings.disable_standard_entries.insert(
+        crate::dictionaries::DictionaryName::Compounds,
+        [("de".to_string(), true)].into_iter().collect(),
+    );
+    dm.set_settings(
+        crate::dictionaries::DEFAULT_DICTIONARY_TENANT,
+        &default_settings,
+    )
+    .unwrap();
+    dm.batch(
+        crate::dictionaries::DEFAULT_DICTIONARY_TENANT,
+        crate::dictionaries::DictionaryName::Compounds,
+        &crate::dictionaries::BatchDictionaryRequest {
+            clear_existing_dictionary_entries: false,
+            requests: vec![crate::dictionaries::BatchRequest {
+                action: crate::dictionaries::BatchAction::AddEntry,
+                body: serde_json::json!({
+                    "objectID": "cp-xylophonographischfest-default",
+                    "language": "de",
+                    "word": "xylophonographischfest",
+                    "decomposition": ["nonsenseteil", "ohnetreffer"],
+                    "type": "custom"
+                }),
+            }],
+        },
+    )
+    .unwrap();
+
+    let de_langs = vec!["de".to_string()];
+    let result = manager
+        .search_full_with_stop_words_with_hits_per_page_cap(
+            "t1",
+            "xylophonographischfest",
+            &SearchOptions {
+                limit: 10,
+                query_languages: Some(&de_langs),
+                decompound_query: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Tenant "t1" configured the matching decomposition for d1.
+    // If "_default"/other-tenant mappings are used, expansion misses d1.
+    assert_eq!(
+        result.total, 1,
+        "t1 search must use t1 decompound dictionary"
+    );
+    assert_eq!(result.documents[0].document.id, "d1");
+}

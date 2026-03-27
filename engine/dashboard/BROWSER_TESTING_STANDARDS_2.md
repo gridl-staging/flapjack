@@ -95,7 +95,7 @@ This is not honor-system. Two layers physically prevent cheating in spec files.
 
 Layer 1 -- ESLint (catches violations at lint time):
 
-The config at tests/e2e-ui/eslint.config.mjs applies strict rules to *.spec.ts files only. Fixture and setup files are exempt. Run with `npm run lint:e2e`. Key rules:
+The config at tests/e2e-ui/eslint.config.mjs applies strict rules to `*.spec.ts` files plus the shared `tests/e2e-ui/helpers.ts` module. Fixture and setup files remain exempt. Run with `npm run lint:e2e`. Key rules:
 
 ```
 playwright/no-eval              bans page.evaluate, page.$eval
@@ -128,7 +128,7 @@ Shortcuts live in fixture/setup files. Never in spec files.
 tests/
   fixtures/                   shortcuts: API calls, data seeding, auth
   e2e-ui/
-    eslint.config.mjs         bans shortcuts in *.spec.ts (run: npm run lint:e2e)
+    eslint.config.mjs         bans shortcuts in spec files + shared UI helpers
     smoke/*.spec.ts           human-like interactions only
     full/*.spec.ts            human-like interactions only
   e2e-api/                    pure HTTP tests (no browser)

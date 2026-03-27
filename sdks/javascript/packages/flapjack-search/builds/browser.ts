@@ -1,3 +1,5 @@
+/**
+ */
 // Flapjack Search — browser build
 // Re-exports @flapjack-search/client-search browser build with a friendlier factory name.
 
@@ -14,6 +16,9 @@ export type FlapjackSearch = SearchClient & {
   addAlgoliaAgent(segment: string, version?: string): void;
 };
 
+/**
+ * TODO: Document flapjackSearch.
+ */
 export function flapjackSearch(
   appId: string,
   apiKey: string,

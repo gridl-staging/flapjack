@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
@@ -6,6 +7,25 @@ use super::aggregation::QueryAggregator;
 use super::config::AnalyticsConfig;
 use super::schema::{InsightEvent, SearchEvent};
 use super::writer;
+
+/// Maximum number of debug events retained in the ring buffer.
+const DEBUG_BUFFER_CAP: usize = 3000;
+
+/// A debug entry recorded for every event received via POST /1/events,
+/// regardless of whether it passed validation. Used by the event debugger UI.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugEvent {
+    pub timestamp_ms: i64,
+    pub index: String,
+    pub event_type: String,
+    pub event_subtype: Option<String>,
+    pub event_name: String,
+    pub user_token: String,
+    pub object_ids: Vec<String>,
+    pub http_code: u16,
+    pub validation_errors: Vec<String>,
+}
 
 /// Central analytics event collector.
 ///
@@ -16,6 +36,7 @@ pub struct AnalyticsCollector {
     config: AnalyticsConfig,
     search_buffer: Mutex<Vec<SearchEvent>>,
     insight_buffer: Mutex<Vec<InsightEvent>>,
+    debug_buffer: Mutex<VecDeque<DebugEvent>>,
     aggregator: QueryAggregator,
     /// queryID -> (query, index_name, timestamp_ms) for correlating clicks with searches
     query_id_cache: DashMap<String, QueryIdEntry>,
@@ -35,6 +56,7 @@ impl AnalyticsCollector {
             config,
             search_buffer: Mutex::new(Vec::with_capacity(1024)),
             insight_buffer: Mutex::new(Vec::with_capacity(256)),
+            debug_buffer: Mutex::new(VecDeque::with_capacity(DEBUG_BUFFER_CAP)),
             aggregator: QueryAggregator::new(30),
             query_id_cache: DashMap::new(),
             shutdown: Notify::new(),
@@ -101,6 +123,72 @@ impl AnalyticsCollector {
         if should_flush {
             self.flush_insights();
         }
+    }
+
+    /// Record a debug event entry for the event debugger UI.
+    pub fn record_debug_event(&self, event: DebugEvent) {
+        let mut buf = self.debug_buffer.lock().unwrap();
+        if buf.len() >= DEBUG_BUFFER_CAP {
+            buf.pop_front();
+        }
+        buf.push_back(event);
+    }
+
+    /// Query recent debug events from the ring buffer, applying optional filters.
+    /// Returns events in reverse-chronological order (newest first), capped at `limit`.
+    pub fn get_debug_events(
+        &self,
+        limit: usize,
+        index: Option<&str>,
+        event_type: Option<&str>,
+        status: Option<&str>,
+        from_timestamp_ms: Option<i64>,
+        until_timestamp_ms: Option<i64>,
+    ) -> Vec<DebugEvent> {
+        let buf = self.debug_buffer.lock().unwrap();
+        buf.iter()
+            .rev()
+            .filter(|e| {
+                if let Some(idx) = index {
+                    if e.index != idx {
+                        return false;
+                    }
+                }
+                if let Some(et) = event_type {
+                    if e.event_type != et {
+                        return false;
+                    }
+                }
+                if let Some(st) = status {
+                    match st {
+                        "ok" => {
+                            if e.http_code != 200 {
+                                return false;
+                            }
+                        }
+                        "error" => {
+                            if e.http_code == 200 {
+                                return false;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(from_ms) = from_timestamp_ms {
+                    if e.timestamp_ms < from_ms {
+                        return false;
+                    }
+                }
+                if let Some(until_ms) = until_timestamp_ms {
+                    if e.timestamp_ms > until_ms {
+                        return false;
+                    }
+                }
+                true
+            })
+            .take(limit)
+            .cloned()
+            .collect()
     }
 
     /// Look up a queryID to correlate with the original search.
@@ -186,6 +274,35 @@ impl AnalyticsCollector {
     pub fn flush_all(&self) {
         self.flush_searches();
         self.flush_insights();
+    }
+
+    /// Purge all insight events for a user token from memory and on-disk analytics data.
+    /// Returns number of removed events.
+    pub fn purge_user_token(&self, user_token: &str) -> Result<u64, String> {
+        let removed_from_buffer = {
+            let mut buf = self.insight_buffer.lock().unwrap();
+            let before = buf.len();
+            buf.retain(|e| e.user_token != user_token);
+            (before - buf.len()) as u64
+        };
+
+        let mut removed_from_disk = 0_u64;
+        if self.config.data_dir.exists() {
+            let entries = std::fs::read_dir(&self.config.data_dir)
+                .map_err(|e| format!("Failed to read analytics data dir: {}", e))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("Failed to read analytics entry: {}", e))?;
+                let index_dir = entry.path();
+                if !index_dir.is_dir() {
+                    continue;
+                }
+                let events_dir = index_dir.join("events");
+                removed_from_disk +=
+                    writer::purge_insight_events_for_user_token(&events_dir, user_token)?;
+            }
+        }
+
+        Ok(removed_from_buffer + removed_from_disk)
     }
 
     /// Start the background flush loop. Should be spawned as a tokio task.

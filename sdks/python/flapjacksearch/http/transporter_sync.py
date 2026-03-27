@@ -1,3 +1,5 @@
+"""
+"""
 from json import loads
 from sys import version_info
 
@@ -25,6 +27,7 @@ from flapjacksearch.http.verb import Verb
 
 
 class TransporterSync(BaseTransporter):
+    """TODO: Document TransporterSync."""
     def __init__(self, config: BaseConfig) -> None:
         super().__init__(config)
         self._session: Optional[Session] = None
@@ -52,6 +55,7 @@ class TransporterSync(BaseTransporter):
         request_options: RequestOptions,
         use_read_transporter: bool,
     ) -> ApiResponse:
+        """TODO: Document TransporterSync.request."""
         if self._session is None:
             self._session = Session()
             self._session.mount("https://", HTTPAdapter(max_retries=Retry(connect=0)))
@@ -123,6 +127,7 @@ class TransporterSync(BaseTransporter):
 
 
 class EchoTransporterSync(TransporterSync):
+    """TODO: Document EchoTransporterSync."""
     def __init__(self, config: BaseConfig) -> None:
         super().__init__(config)
         self._config = config
@@ -135,6 +140,7 @@ class EchoTransporterSync(TransporterSync):
         request_options: RequestOptions,
         use_read_transporter: bool,
     ) -> ApiResponse:
+        """TODO: Document EchoTransporterSync.request."""
         self.prepare(request_options, verb == Verb.GET or use_read_transporter)
 
         return ApiResponse(

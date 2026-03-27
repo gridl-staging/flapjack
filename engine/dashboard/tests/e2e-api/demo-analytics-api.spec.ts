@@ -1,4 +1,5 @@
 import { test, expect } from '../fixtures/auth.fixture';
+import type { APIRequestContext } from '@playwright/test';
 import { API_BASE, API_HEADERS } from '../fixtures/local-instance';
 
 /**
@@ -9,12 +10,23 @@ import { API_BASE, API_HEADERS } from '../fixtures/local-instance';
  * see tests/e2e-ui/full/analytics*.spec.ts
  */
 
+async function skipIfNoServer({ request }: { request: APIRequestContext }) {
+  try {
+    const res = await request.get(`${API_BASE}/health`, { timeout: 3000 });
+    if (!res.ok()) test.skip(true, 'Flapjack server not available');
+  } catch {
+    test.skip(true, 'Flapjack server not reachable');
+  }
+}
+
 test.describe('Analytics Management API (no browser)', () => {
+  test.beforeEach(skipIfNoServer);
+
   test('flush endpoint triggers immediate analytics update', async ({ request }) => {
     const res = await request.post(`${API_BASE}/2/analytics/flush`, {
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const data = await res.json();
     expect(data.status).toBe('ok');
   });
@@ -30,19 +42,19 @@ test.describe('Analytics Management API (no browser)', () => {
       headers: API_HEADERS,
       data: { index: clearIndex },
     });
-    expect(clearRes.ok()).toBeTruthy();
+    expect(clearRes.status()).toBe(200);
     const clearData = await clearRes.json();
     expect(clearData.status).toBe('ok');
     expect(clearData.partitionsRemoved).toBeGreaterThan(0);
 
-    const countRes = await request.get(`${API_BASE}/2/searches/count`, {
-      params: { index: clearIndex, startDate: '2025-01-01', endDate: '2027-01-01' },
+    const secondClearRes = await request.delete(`${API_BASE}/2/analytics/clear`, {
       headers: API_HEADERS,
+      data: { index: clearIndex },
     });
-    if (countRes.ok()) {
-      const countData = await countRes.json();
-      expect(countData.count).toBe(0);
-    }
+    expect(secondClearRes.status()).toBe(200);
+    const secondClearData = await secondClearRes.json();
+    expect(secondClearData.status).toBe('ok');
+    expect(secondClearData.partitionsRemoved).toBe(0);
   });
 
   test('seed endpoint generates analytics data', async ({ request }) => {
@@ -51,7 +63,7 @@ test.describe('Analytics Management API (no browser)', () => {
       headers: API_HEADERS,
       data: { index: INDEX_NAME, days: 30 },
     });
-    expect(seedRes.ok()).toBeTruthy();
+    expect(seedRes.status()).toBe(200);
     const seedData = await seedRes.json();
     expect(seedData.totalSearches).toBeGreaterThan(0);
     expect(seedData.totalClicks).toBeGreaterThan(0);
@@ -60,7 +72,7 @@ test.describe('Analytics Management API (no browser)', () => {
       params: { index: INDEX_NAME, startDate: '2025-01-01', endDate: '2027-01-01' },
       headers: API_HEADERS,
     });
-    expect(countRes.ok()).toBeTruthy();
+    expect(countRes.status()).toBe(200);
     const countData = await countRes.json();
     expect(countData.count).toBeGreaterThan(0);
 

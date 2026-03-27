@@ -7,8 +7,20 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::AppState;
+use super::{safe_nb_pages, AppState};
+use crate::extractors::{validate_index_http, ValidatedIndexName};
 use flapjack::index::synonyms::{Synonym, SynonymStore};
+
+/// Convert an internal storage error into a sanitized 500 response.
+/// Logs the real error server-side but returns a generic message to avoid
+/// leaking filesystem paths or other internals to clients.
+fn internal_error(e: impl std::fmt::Display) -> (StatusCode, String) {
+    tracing::error!("synonyms storage error: {e}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+    )
+}
 
 /// Get a synonym by ID
 #[utoipa::path(
@@ -31,6 +43,7 @@ pub async fn get_synonym(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
 ) -> Result<Json<Synonym>, (StatusCode, String)> {
+    validate_index_http(&index_name)?;
     let synonyms_path = state
         .manager
         .base_path
@@ -44,8 +57,7 @@ pub async fn get_synonym(
         ));
     }
 
-    let store = SynonymStore::load(&synonyms_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let store = SynonymStore::load(&synonyms_path).map_err(internal_error)?;
 
     store
         .get(&object_id)
@@ -81,10 +93,11 @@ pub async fn save_synonym(
     Path((index_name, _object_id)): Path<(String, String)>,
     Json(synonym): Json<Synonym>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    validate_index_http(&index_name)?;
     state
         .manager
         .create_tenant(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
 
     let synonyms_path = state
         .manager
@@ -93,17 +106,14 @@ pub async fn save_synonym(
         .join("synonyms.json");
 
     let mut store = if synonyms_path.exists() {
-        SynonymStore::load(&synonyms_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        SynonymStore::load(&synonyms_path).map_err(internal_error)?
     } else {
         SynonymStore::new()
     };
 
     store.insert(synonym.clone());
 
-    store
-        .save(&synonyms_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    store.save(&synonyms_path).map_err(internal_error)?;
 
     state.manager.invalidate_synonyms_cache(&index_name);
 
@@ -116,7 +126,7 @@ pub async fn save_synonym(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339(),
@@ -145,6 +155,7 @@ pub async fn delete_synonym(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    validate_index_http(&index_name)?;
     let synonyms_path = state
         .manager
         .base_path
@@ -158,8 +169,7 @@ pub async fn delete_synonym(
         ));
     }
 
-    let mut store = SynonymStore::load(&synonyms_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut store = SynonymStore::load(&synonyms_path).map_err(internal_error)?;
 
     store.remove(&object_id).ok_or_else(|| {
         (
@@ -168,9 +178,7 @@ pub async fn delete_synonym(
         )
     })?;
 
-    store
-        .save(&synonyms_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    store.save(&synonyms_path).map_err(internal_error)?;
 
     state.manager.invalidate_synonyms_cache(&index_name);
 
@@ -183,7 +191,7 @@ pub async fn delete_synonym(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "deletedAt": chrono::Utc::now().to_rfc3339()
@@ -208,14 +216,14 @@ pub async fn delete_synonym(
 )]
 pub async fn save_synonyms(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
     Query(params): Query<HashMap<String, String>>,
     Json(synonyms): Json<Vec<Synonym>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     state
         .manager
         .create_tenant(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
 
     let synonyms_path = state
         .manager
@@ -231,8 +239,7 @@ pub async fn save_synonyms(
     let mut store = if replace || !synonyms_path.exists() {
         SynonymStore::new()
     } else {
-        SynonymStore::load(&synonyms_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        SynonymStore::load(&synonyms_path).map_err(internal_error)?
     };
 
     let synonyms_json: Vec<serde_json::Value> = synonyms
@@ -244,11 +251,18 @@ pub async fn save_synonyms(
         store.insert(syn);
     }
 
-    store
-        .save(&synonyms_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    store.save(&synonyms_path).map_err(internal_error)?;
 
     state.manager.invalidate_synonyms_cache(&index_name);
+
+    // Forward synonyms to replicas if requested
+    let forward_to_replicas = params
+        .get("forwardToReplicas")
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(false);
+    if forward_to_replicas {
+        forward_synonyms_to_replicas(&state, &index_name, &store).map_err(internal_error)?;
+    }
 
     state.manager.append_oplog(
         &index_name,
@@ -259,7 +273,7 @@ pub async fn save_synonyms(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339()
@@ -283,7 +297,7 @@ pub async fn save_synonyms(
 )]
 pub async fn clear_synonyms(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let synonyms_path = state
         .manager
@@ -292,8 +306,7 @@ pub async fn clear_synonyms(
         .join("synonyms.json");
 
     if synonyms_path.exists() {
-        std::fs::remove_file(&synonyms_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        std::fs::remove_file(&synonyms_path).map_err(internal_error)?;
     }
 
     state.manager.invalidate_synonyms_cache(&index_name);
@@ -304,7 +317,7 @@ pub async fn clear_synonyms(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339()
@@ -348,7 +361,7 @@ fn default_hits_per_page() -> usize {
 )]
 pub async fn search_synonyms(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
     Json(req): Json<SearchSynonymsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let synonyms_path = state
@@ -358,8 +371,7 @@ pub async fn search_synonyms(
         .join("synonyms.json");
 
     let store = if synonyms_path.exists() {
-        SynonymStore::load(&synonyms_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        SynonymStore::load(&synonyms_path).map_err(internal_error)?
     } else {
         SynonymStore::new()
     };
@@ -370,9 +382,49 @@ pub async fn search_synonyms(
         req.page,
         req.hits_per_page,
     );
+    let nb_pages = safe_nb_pages(total, req.hits_per_page);
 
     Ok(Json(serde_json::json!({
         "hits": hits,
-        "nbHits": total
+        "nbHits": total,
+        "page": req.page,
+        "nbPages": nb_pages
     })))
+}
+
+/// Forward the current synonym store from a primary index to all its configured replicas.
+fn forward_synonyms_to_replicas(
+    state: &Arc<AppState>,
+    primary_index_name: &str,
+    store: &SynonymStore,
+) -> Result<(), flapjack::error::FlapjackError> {
+    use flapjack::index::replica::parse_replica_entry;
+    use flapjack::index::settings::IndexSettings;
+
+    let settings_path = state
+        .manager
+        .base_path
+        .join(primary_index_name)
+        .join("settings.json");
+    if !settings_path.exists() {
+        return Ok(());
+    }
+    let primary_settings = IndexSettings::load(&settings_path)?;
+    let replicas = match &primary_settings.replicas {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    for replica_str in replicas {
+        let parsed = parse_replica_entry(replica_str)?;
+        let replica_name = parsed.name();
+        let replica_dir = state.manager.base_path.join(replica_name);
+        if !replica_dir.exists() {
+            continue;
+        }
+        let replica_synonyms_path = replica_dir.join("synonyms.json");
+        store.save(&replica_synonyms_path)?;
+        state.manager.invalidate_synonyms_cache(replica_name);
+    }
+    Ok(())
 }

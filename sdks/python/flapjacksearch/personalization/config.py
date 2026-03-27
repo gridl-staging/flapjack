@@ -1,3 +1,5 @@
+"""
+"""
 from os import environ
 from typing import Optional
 
@@ -8,6 +10,7 @@ from flapjacksearch.http.user_agent import UserAgent
 
 
 class PersonalizationConfig(BaseConfig):
+    """TODO: Document PersonalizationConfig."""
     def __init__(
         self, app_id: Optional[str], api_key: Optional[str], region: str = ""
     ) -> None:
@@ -47,6 +50,7 @@ class PersonalizationConfig(BaseConfig):
         self.region = region
 
     def set_default_hosts(self):
+        """TODO: Document PersonalizationConfig.set_default_hosts."""
         if self.hosts is not None:
             return
 

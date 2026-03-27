@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { TEST_ROUTER_FUTURE } from '@/test/routerFuture'
 import { ExperimentDetail } from './ExperimentDetail';
 
 const mockMutateAsync = vi.fn();
@@ -31,7 +32,7 @@ import { useExperimentResults, useExperiment } from '@/hooks/useExperiments';
 
 function renderWithRoute(experimentId: string) {
   return render(
-    <MemoryRouter initialEntries={[`/experiments/${experimentId}`]}>
+    <MemoryRouter future={TEST_ROUTER_FUTURE} initialEntries={[`/experiments/${experimentId}`]}>
       <Routes>
         <Route path="/experiments/:experimentId" element={<ExperimentDetail />} />
       </Routes>
@@ -522,6 +523,13 @@ describe('ExperimentDetail', () => {
 
     expect(screen.getByText('Ranking test')).toBeInTheDocument();
     expect(screen.getByText('running')).toBeInTheDocument();
+  });
+
+  it('renders canonical conversion metric label in the header', () => {
+    mockResults({ primaryMetric: 'conversionRate' });
+    renderWithRoute('exp-1');
+
+    expect(screen.getByTestId('experiment-detail-primary-metric')).toHaveTextContent('Conversion Rate');
   });
 
   it('shows estimated days remaining when available', () => {
@@ -1111,6 +1119,21 @@ describe('ExperimentDetail', () => {
         payload: expect.objectContaining({ promoted: false }),
       })
     );
+  });
+
+  it('renders a submit error when concluding the winner fails', async () => {
+    const user = userEvent.setup();
+    mockMutateAsync.mockRejectedValue(new Error('Conclude failed'));
+    mockResults(gateReadyOverrides());
+    renderWithRoute('exp-1');
+
+    await user.click(screen.getByRole('button', { name: /declare winner/i }));
+
+    const dialog = screen.getByTestId('declare-winner-dialog');
+    await user.click(within(dialog).getByRole('button', { name: /confirm/i }));
+
+    expect(await within(dialog).findByTestId('declare-winner-error')).toHaveTextContent('Unable to conclude experiment. Try again.');
+    expect(screen.getByTestId('declare-winner-dialog')).toBeInTheDocument();
   });
 
   it('dialog shows no diff section when variant has no overrides', async () => {

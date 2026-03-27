@@ -1,4 +1,6 @@
 # coding: utf-8
+"""
+"""
 
 
 class AlgoliaException(Exception):
@@ -12,6 +14,7 @@ class MissingObjectIdException(AlgoliaException):
 
 
 class RequestException(AlgoliaException):
+    """TODO: Document RequestException."""
     def __init__(self, message, status_code):
         super(AlgoliaException, self).__init__(message)
         self.status_code = status_code
@@ -44,6 +47,7 @@ class ValidUntilNotFoundException(AlgoliaException):
 
 
 class ApiTypeError(AlgoliaException, TypeError):
+    """TODO: Document ApiTypeError."""
     def __init__(
         self, msg, path_to_item=None, valid_classes=None, key_type=None
     ) -> None:
@@ -91,6 +95,7 @@ class ApiValueError(AlgoliaException, ValueError):
 
 
 class ApiAttributeError(AlgoliaException, AttributeError):
+    """TODO: Document ApiAttributeError."""
     def __init__(self, msg, path_to_item=None) -> None:
         """
         Raised when an attribute reference or assignment fails.
@@ -127,6 +132,7 @@ class ApiKeyError(AlgoliaException, KeyError):
 
 
 class ApiException(AlgoliaException):
+    """TODO: Document ApiException."""
     def __init__(
         self,
         status_code: int = -1,

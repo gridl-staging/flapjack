@@ -1,3 +1,5 @@
+/**
+ */
 import type { Response as AlgoliaResponse, EndRequest, Requester } from '@flapjack-search/client-common';
 
 function isAbortError(error: unknown): boolean {
@@ -15,7 +17,13 @@ export type FetchRequesterOptions = {
   readonly requesterOptions?: RequestInit | undefined;
 };
 
+/**
+ * TODO: Document createFetchRequester.
+ */
 export function createFetchRequester({ requesterOptions = {} }: FetchRequesterOptions = {}): Requester {
+  /**
+   * TODO: Document send.
+   */
   async function send(request: EndRequest): Promise<AlgoliaResponse> {
     const abortController = new AbortController();
     const signal = abortController.signal;

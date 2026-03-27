@@ -5,7 +5,7 @@ mod common;
 
 const ADMIN_KEY: &str = "test-admin-key-abc123";
 
-async fn setup() -> (String, tempfile::TempDir, String) {
+async fn setup() -> (String, common::TempDir, String) {
     let (addr, temp) = common::spawn_server_with_key(Some(ADMIN_KEY)).await;
     let client = reqwest::Client::new();
 
@@ -129,7 +129,11 @@ async fn test_admin_key_full_access() {
     .unwrap();
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body.get("taskID").is_some(), "batch should return taskID");
+    let task_id = body["taskID"]
+        .as_i64()
+        .or_else(|| body["taskID"].as_u64().map(|v| v as i64))
+        .expect("batch should return taskID");
+    common::wait_for_task_authed(&client, &addr, task_id, Some(ADMIN_KEY)).await;
 
     let resp = authed(
         &client,
@@ -647,14 +651,17 @@ async fn test_default_keys_created() {
         .iter()
         .find(|k| k["description"] == "Admin API Key")
         .unwrap();
-    // Keys are now hashed, so we can't compare plaintext value
     assert!(
-        admin["hash"].as_str().is_some(),
-        "Admin key should have hash"
+        admin["value"].as_str().is_some(),
+        "Admin key should expose API response field 'value'"
     );
     assert!(
-        admin["salt"].as_str().is_some(),
-        "Admin key should have salt"
+        admin.get("hash").is_none(),
+        "Admin key response must not leak internal hash"
+    );
+    assert!(
+        admin.get("salt").is_none(),
+        "Admin key response must not leak internal salt"
     );
     assert!(admin["acl"].as_array().unwrap().len() > 10);
 
@@ -710,8 +717,12 @@ async fn test_any_valid_key_can_read_own_key() {
         "any valid key should read its own key info"
     );
     let body: serde_json::Value = resp.json().await.unwrap();
-    // Verify the key info is returned (hash, salt, ACL)
-    assert!(body["hash"].as_str().is_some(), "Should have hash");
+    // Verify key info is returned in DTO-safe shape.
+    assert_eq!(body["value"].as_str(), Some(search_key.as_str()));
+    assert!(
+        body.get("hash").is_none(),
+        "response must not leak hash field"
+    );
     assert!(body["acl"].as_array().is_some(), "Should have ACL");
 }
 
@@ -771,9 +782,10 @@ async fn test_query_param_auth() {
 
     let resp = client
         .post(format!(
-            "http://{}/1/indexes/test/query?x-algolia-api-key={}&x-algolia-application-id=test",
+            "http://{}/1/indexes/test/query?x-algolia-api-key={}",
             addr, ADMIN_KEY
         ))
+        .header("x-algolia-application-id", "test")
         .json(&json!({"query": "test"}))
         .send()
         .await
@@ -872,28 +884,10 @@ async fn test_acl_case_sensitivity() {
     .send()
     .await
     .unwrap();
-    assert_eq!(resp.status(), 201);
-    let uppercase_key = resp.json::<serde_json::Value>().await.unwrap()["key"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    // Try to search with uppercase ACL key - should FAIL (ACLs are case-sensitive)
-    let search_resp = authed(
-        &client,
-        "POST",
-        &format!("http://{}/1/indexes/test/query", addr),
-        &uppercase_key,
-    )
-    .json(&json!({"query": "test"}))
-    .send()
-    .await
-    .unwrap();
-
     assert_eq!(
-        search_resp.status(),
-        403,
-        "ACL 'Search' (uppercase) should not match 'search' permission - ACLs are case-sensitive"
+        resp.status(),
+        400,
+        "ACL 'Search' (uppercase) should be rejected at create time"
     );
 
     // Create a properly cased key

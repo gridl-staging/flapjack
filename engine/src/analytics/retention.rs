@@ -1,5 +1,9 @@
 use std::path::Path;
 
+const PARTITION_PREFIX: &str = "date=";
+const PARTITION_DATE_FORMAT: &str = "%Y-%m-%d";
+const RETENTION_INTERVAL_SECONDS: u64 = 86_400;
+
 /// Delete Parquet partition directories older than the configured retention period.
 ///
 /// Walks the analytics directory looking for `date=YYYY-MM-DD/` directories
@@ -9,50 +13,14 @@ pub fn cleanup_old_partitions(analytics_dir: &Path, retention_days: u32) -> Resu
         return Ok(0);
     }
 
-    let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::days(retention_days as i64);
+    let cutoff = cutoff_date(retention_days);
     let mut removed = 0;
 
-    // Walk: analytics_dir/{index_name}/{searches|events}/date=YYYY-MM-DD/
-    let entries = std::fs::read_dir(analytics_dir).map_err(|e| format!("read_dir error: {}", e))?;
-
-    for index_entry in entries.flatten() {
-        if !index_entry.path().is_dir() {
-            continue;
-        }
-        // Each sub-directory (searches, events)
-        let sub_entries = match std::fs::read_dir(index_entry.path()) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for sub_entry in sub_entries.flatten() {
-            if !sub_entry.path().is_dir() {
-                continue;
-            }
-            // Date partition dirs
-            let part_entries = match std::fs::read_dir(sub_entry.path()) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            for part_entry in part_entries.flatten() {
-                let name = part_entry.file_name().to_string_lossy().to_string();
-                if let Some(date_str) = name.strip_prefix("date=") {
-                    if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                        if date < cutoff {
-                            if let Err(e) = std::fs::remove_dir_all(part_entry.path()) {
-                                tracing::warn!(
-                                    "[analytics] Failed to remove old partition {}: {}",
-                                    part_entry.path().display(),
-                                    e
-                                );
-                            } else {
-                                tracing::info!(
-                                    "[analytics] Removed old partition: {}",
-                                    part_entry.path().display()
-                                );
-                                removed += 1;
-                            }
-                        }
-                    }
+    for index_dir in read_root_subdirectories(analytics_dir)? {
+        for event_type_dir in read_child_subdirectories(&index_dir) {
+            for partition_dir in read_child_subdirectories(&event_type_dir) {
+                if remove_partition_if_expired(&partition_dir, cutoff) {
+                    removed += 1;
                 }
             }
         }
@@ -61,11 +29,105 @@ pub fn cleanup_old_partitions(analytics_dir: &Path, retention_days: u32) -> Resu
     Ok(removed)
 }
 
+fn cutoff_date(retention_days: u32) -> chrono::NaiveDate {
+    chrono::Utc::now().date_naive() - chrono::Duration::days(retention_days as i64)
+}
+
+fn read_root_subdirectories(path: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+    let entries = std::fs::read_dir(path).map_err(|e| format!("read_dir error: {}", e))?;
+    Ok(filter_directory_entries(entries))
+}
+
+fn read_child_subdirectories(path: &Path) -> Vec<std::path::PathBuf> {
+    match std::fs::read_dir(path) {
+        Ok(entries) => filter_directory_entries(entries),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn filter_directory_entries(entries: std::fs::ReadDir) -> Vec<std::path::PathBuf> {
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+fn partition_date_from_name(name: &str) -> Option<chrono::NaiveDate> {
+    let date_str = name.strip_prefix(PARTITION_PREFIX)?;
+    chrono::NaiveDate::parse_from_str(date_str, PARTITION_DATE_FORMAT).ok()
+}
+
+/// TODO: Document remove_partition_if_expired.
+fn remove_partition_if_expired(partition_dir: &Path, cutoff: chrono::NaiveDate) -> bool {
+    let partition_name = partition_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let Some(partition_date) = partition_date_from_name(partition_name) else {
+        return false;
+    };
+    if partition_date >= cutoff {
+        return false;
+    }
+
+    match std::fs::remove_dir_all(partition_dir) {
+        Ok(()) => {
+            tracing::info!(
+                "[analytics] Removed old partition: {}",
+                partition_dir.display()
+            );
+            true
+        }
+        Err(error) => {
+            tracing::warn!(
+                "[analytics] Failed to remove old partition {}: {}",
+                partition_dir.display(),
+                error
+            );
+            false
+        }
+    }
+}
+
+fn log_cleanup_result(phase: &str, cleanup_result: Result<usize, String>) {
+    match cleanup_result {
+        Ok(removed_partitions) if removed_partitions > 0 => {
+            tracing::info!(
+                "[analytics] {} cleanup: removed {} old partitions",
+                phase,
+                removed_partitions
+            );
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!("[analytics] {} cleanup error: {}", phase, error),
+    }
+}
+
+fn run_cleanup_phase(analytics_dir: &Path, retention_days: u32, phase: &str) {
+    let cleanup_result = cleanup_old_partitions(analytics_dir, retention_days);
+    log_cleanup_result(phase, cleanup_result);
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn partition_date_from_name_parses_valid_partition_name() {
+        assert_eq!(
+            partition_date_from_name("date=2020-01-01"),
+            Some(chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn partition_date_from_name_rejects_non_partition_names() {
+        assert_eq!(partition_date_from_name("2020-01-01"), None);
+        assert_eq!(partition_date_from_name("date=not-a-date"), None);
+    }
 
     #[test]
     fn cleanup_nonexistent_dir_returns_zero() {
@@ -130,29 +192,14 @@ mod tests {
 
 /// Run retention cleanup as a background task (daily).
 pub async fn run_retention_loop(analytics_dir: std::path::PathBuf, retention_days: u32) {
-    // Run once at startup
-    match cleanup_old_partitions(&analytics_dir, retention_days) {
-        Ok(n) if n > 0 => {
-            tracing::info!("[analytics] Startup cleanup: removed {} old partitions", n)
-        }
-        Ok(_) => {}
-        Err(e) => tracing::warn!("[analytics] Startup cleanup error: {}", e),
-    }
+    run_cleanup_phase(&analytics_dir, retention_days, "Startup");
 
     // Then every 24 hours
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(86400));
+    let mut interval =
+        tokio::time::interval(tokio::time::Duration::from_secs(RETENTION_INTERVAL_SECONDS));
     interval.tick().await; // skip first immediate tick
     loop {
         interval.tick().await;
-        match cleanup_old_partitions(&analytics_dir, retention_days) {
-            Ok(n) if n > 0 => {
-                tracing::info!(
-                    "[analytics] Retention cleanup: removed {} old partitions",
-                    n
-                )
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("[analytics] Retention cleanup error: {}", e),
-        }
+        run_cleanup_phase(&analytics_dir, retention_days, "Retention");
     }
 }

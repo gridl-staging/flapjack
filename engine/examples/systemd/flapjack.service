@@ -1,0 +1,47 @@
+[Unit]
+Description=Flapjack Search Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=flapjack
+# Ops-managed installs use this binary path.
+ExecStart=/opt/flapjack/bin/flapjack
+# install.sh default path (single-user install):
+# ExecStart=~/.flapjack/bin/flapjack
+# systemd does not expand "~"; replace it with /home/<user>/.flapjack/bin/flapjack
+# User=ubuntu
+# If you keep the data dir under /home, also update FLAPJACK_DATA_DIR,
+# ReadWritePaths, and set ProtectHome=false below.
+
+# Keep shared non-secret defaults inline.
+# Production still requires FLAPJACK_ADMIN_KEY from the env file below.
+Environment="FLAPJACK_DATA_DIR=/opt/flapjack/data"
+Environment="FLAPJACK_ENV=production"
+
+# Recommended for production: keep secrets and host-specific overrides in
+# /etc/flapjack/env, then uncomment the next line.
+# EnvironmentFile=/etc/flapjack/env
+
+Restart=always
+RestartSec=5s
+LimitNOFILE=65536
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/flapjack/data
+
+[Install]
+WantedBy=multi-user.target

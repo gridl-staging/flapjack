@@ -1,3 +1,5 @@
+"""
+"""
 from platform import python_version
 from sys import version_info
 from typing import Optional
@@ -11,6 +13,7 @@ from flapjacksearch import __version__
 
 
 class UserAgent:
+    """TODO: Document UserAgent."""
     def __init__(self) -> None:
         self.value = "Flapjack for Python ({}); Python ({})".format(
             __version__, str(python_version())

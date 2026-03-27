@@ -1,3 +1,5 @@
+"""
+"""
 from os import environ
 from typing import Optional
 
@@ -8,6 +10,7 @@ from flapjacksearch.http.user_agent import UserAgent
 
 
 class RecommendConfig(BaseConfig):
+    """TODO: Document RecommendConfig."""
     def __init__(self, app_id: Optional[str], api_key: Optional[str]) -> None:
         super().__init__(app_id, api_key)
 
@@ -43,6 +46,7 @@ class RecommendConfig(BaseConfig):
             self.proxies["https"] = https_proxy
 
     def set_default_hosts(self):
+        """TODO: Document RecommendConfig.set_default_hosts."""
         if self.hosts is not None:
             return
 

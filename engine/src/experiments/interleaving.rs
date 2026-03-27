@@ -1,3 +1,4 @@
+//! Team-draft interleaving algorithm for A/B search experiments, combining two ranked result lists into a single interleaved list with deterministic team assignment and click attribution.
 use super::assignment::murmurhash3_128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -145,6 +146,7 @@ mod tests {
         assert_eq!(r1[0].doc_id, r2[0].doc_id);
     }
 
+    /// Verify that the MurmurHash3-based coin flip distributes first-team selection roughly 50/50 across 1000 distinct query IDs.
     #[test]
     fn team_draft_different_queries_get_different_first_teams_statistically() {
         let list_a = vec!["a1"];

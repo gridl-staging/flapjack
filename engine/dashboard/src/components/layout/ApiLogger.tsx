@@ -1,8 +1,17 @@
+/**
+ * @module Renders a collapsible API request log panel with expand/collapse, export, and clear functionality.
+ */
 import { useApiLogger } from '@/hooks/useApiLogger';
 import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronUp, Download, Trash2 } from 'lucide-react';
 import { formatDuration } from '@/lib/utils';
 
+/**
+ * Collapsible bottom panel that displays a chronological log of API requests.
+ * Shows the most recent request summary when collapsed; expands to a scrollable
+ * list with status indicators, method, URL, and duration for each entry.
+ * Provides controls to export the log as a file or clear all entries.
+ */
 export function ApiLogger() {
   const { entries, isExpanded, toggleExpanded, clear, exportAsFile } = useApiLogger();
   const lastEntry = entries[0];

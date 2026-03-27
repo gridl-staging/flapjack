@@ -1,9 +1,22 @@
+//! Define `IndexSettings` and its serialization, validation, and helper methods for managing search index configuration with Algolia-compatible camelCase JSON.
 use crate::query::plurals::IgnorePluralsValue;
 use crate::query::stopwords::RemoveStopWordsValue;
 use serde::{Deserialize, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
+
+/// Strip the `unordered(...)` wrapper from a searchable attribute if present.
+/// Returns the inner attribute name (e.g., `"title"` from `"unordered(title)"`).
+pub fn strip_unordered_prefix(attr: &str) -> &str {
+    if let Some(inner) = attr.strip_prefix("unordered(") {
+        if let Some(stripped) = inner.strip_suffix(")") {
+            return stripped;
+        }
+    }
+    attr
+}
 
 fn default_hits_per_page() -> u32 {
     20
@@ -39,6 +52,19 @@ fn vec_is_empty(v: &[String]) -> bool {
     v.is_empty()
 }
 
+#[path = "settings_embedders.rs"]
+mod embedders;
+#[path = "settings_redaction.rs"]
+mod redaction;
+
+pub use embedders::{detect_embedder_changes, EmbedderChange};
+pub use redaction::REDACTED_SECRET;
+
+use redaction::{
+    redact_embedder_secrets, redact_user_data_secrets, restore_embedder_secrets,
+    restore_user_data_secrets,
+};
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -48,11 +74,13 @@ pub enum IndexMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SemanticSearchSettings {
     #[serde(rename = "eventSources", skip_serializing_if = "Option::is_none")]
     pub event_sources: Option<Vec<String>>,
 }
 
+/// Hold all index configuration settings including ranking, faceting, searchable attributes, typo tolerance, embedders, and mode. Serialized as camelCase JSON for Algolia API compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IndexSettings {
@@ -71,6 +99,13 @@ pub struct IndexSettings {
 
     #[serde(rename = "customRanking")]
     pub custom_ranking: Option<Vec<String>>,
+
+    #[serde(
+        rename = "relevancyStrictness",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub relevancy_strictness: Option<u32>,
 
     #[serde(rename = "attributesToRetrieve")]
     pub attributes_to_retrieve: Option<Vec<String>>,
@@ -118,6 +153,34 @@ pub struct IndexSettings {
     pub separators_to_index: String,
 
     #[serde(
+        rename = "keepDiacriticsOnCharacters",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub keep_diacritics_on_characters: String,
+
+    #[serde(
+        rename = "customNormalization",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub custom_normalization: Option<HashMap<String, HashMap<String, String>>>,
+
+    #[serde(
+        rename = "camelCaseAttributes",
+        default,
+        skip_serializing_if = "vec_is_empty"
+    )]
+    pub camel_case_attributes: Vec<String>,
+
+    #[serde(
+        rename = "decompoundedAttributes",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub decompounded_attributes: Option<HashMap<String, Vec<String>>>,
+
+    #[serde(
         rename = "alternativesAsExact",
         serialize_with = "serialize_vec_as_null_if_empty",
         deserialize_with = "deserialize_null_as_empty_vec"
@@ -131,8 +194,11 @@ pub struct IndexSettings {
     )]
     pub optional_words: Vec<String>,
 
-    #[serde(rename = "numericAttributesToIndex")]
-    pub numeric_attributes_to_index: Option<Vec<String>>,
+    #[serde(
+        rename = "numericAttributesForFiltering",
+        alias = "numericAttributesToIndex"
+    )]
+    pub numeric_attributes_for_filtering: Option<Vec<String>>,
 
     #[serde(rename = "attributesToIndex", skip_serializing_if = "Option::is_none")]
     pub attributes_to_index: Option<Vec<String>>,
@@ -163,6 +229,13 @@ pub struct IndexSettings {
     pub query_languages: Vec<String>,
 
     #[serde(
+        rename = "indexLanguages",
+        default,
+        skip_serializing_if = "vec_is_empty"
+    )]
+    pub index_languages: Vec<String>,
+
+    #[serde(
         rename = "ignorePlurals",
         default,
         skip_serializing_if = "ignore_plurals_is_default"
@@ -177,6 +250,113 @@ pub struct IndexSettings {
 
     #[serde(rename = "semanticSearch", skip_serializing_if = "Option::is_none")]
     pub semantic_search: Option<SemanticSearchSettings>,
+
+    #[serde(
+        rename = "enablePersonalization",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub enable_personalization: Option<bool>,
+
+    #[serde(rename = "renderingContent", skip_serializing_if = "Option::is_none")]
+    pub rendering_content: Option<serde_json::Value>,
+
+    #[serde(rename = "userData", skip_serializing_if = "Option::is_none")]
+    pub user_data: Option<serde_json::Value>,
+
+    #[serde(rename = "enableRules", skip_serializing_if = "Option::is_none")]
+    pub enable_rules: Option<bool>,
+
+    // ── Stage 4: Missing structural settings parameters ──
+    #[serde(
+        rename = "advancedSyntaxFeatures",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub advanced_syntax_features: Option<Vec<String>>,
+
+    #[serde(
+        rename = "sortFacetValuesBy",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sort_facet_values_by: Option<String>,
+
+    #[serde(
+        rename = "snippetEllipsisText",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub snippet_ellipsis_text: Option<String>,
+
+    #[serde(
+        rename = "restrictHighlightAndSnippetArrays",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub restrict_highlight_and_snippet_arrays: Option<bool>,
+
+    #[serde(
+        rename = "minProximity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub min_proximity: Option<u32>,
+
+    #[serde(
+        rename = "disableExactOnAttributes",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub disable_exact_on_attributes: Option<Vec<String>>,
+
+    #[serde(
+        rename = "replaceSynonymsInHighlight",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub replace_synonyms_in_highlight: Option<bool>,
+
+    #[serde(
+        rename = "attributeCriteriaComputedByMinProximity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub attribute_criteria_computed_by_min_proximity: Option<bool>,
+    #[serde(
+        rename = "enableReRanking",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub enable_re_ranking: Option<bool>,
+    #[serde(
+        rename = "disableTypoToleranceOnWords",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub disable_typo_tolerance_on_words: Option<Vec<String>>,
+    #[serde(
+        rename = "disableTypoToleranceOnAttributes",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub disable_typo_tolerance_on_attributes: Option<Vec<String>>,
+
+    /// No-op compatibility field: accepted and persisted but has no behavioral effect.
+    #[serde(
+        rename = "allowCompressionOfIntegerArray",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub allow_compression_of_integer_array: Option<bool>,
+
+    // ── Replicas (§10) ──
+    #[serde(rename = "replicas", default, skip_serializing_if = "Option::is_none")]
+    pub replicas: Option<Vec<String>>,
+
+    /// Read-only: set on replica indexes to point back to the primary.
+    #[serde(rename = "primary", default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -187,6 +367,7 @@ pub enum DistinctValue {
 }
 
 impl Default for IndexSettings {
+    /// Initialize settings with standard search-engine defaults: eight-criterion ranking, 20 hits per page, `prefixLast` query type, typo thresholds of 4/8, and all optional fields set to `None`.
     fn default() -> Self {
         IndexSettings {
             attributes_for_faceting: Vec::new(),
@@ -202,6 +383,7 @@ impl Default for IndexSettings {
                 "custom".to_string(),
             ]),
             custom_ranking: None,
+            relevancy_strictness: None,
             attributes_to_retrieve: None,
             unretrievable_attributes: None,
             attributes_to_highlight: None,
@@ -217,12 +399,16 @@ impl Default for IndexSettings {
             query_type: "prefixLast".to_string(),
             remove_words_if_no_results: "none".to_string(),
             separators_to_index: "".to_string(),
+            keep_diacritics_on_characters: "".to_string(),
+            custom_normalization: None,
+            camel_case_attributes: Vec::new(),
+            decompounded_attributes: None,
             alternatives_as_exact: vec![
                 "ignorePlurals".to_string(),
                 "singleWordSynonym".to_string(),
             ],
             optional_words: Vec::new(),
-            numeric_attributes_to_index: None,
+            numeric_attributes_for_filtering: None,
             attributes_to_index: None,
             version: 1,
             synonyms: None,
@@ -230,10 +416,29 @@ impl Default for IndexSettings {
             distinct: None,
             remove_stop_words: RemoveStopWordsValue::Disabled,
             query_languages: Vec::new(),
+            index_languages: Vec::new(),
             ignore_plurals: IgnorePluralsValue::Disabled,
             embedders: None,
             mode: None,
             semantic_search: None,
+            enable_personalization: None,
+            rendering_content: None,
+            user_data: None,
+            enable_rules: None,
+            advanced_syntax_features: None,
+            sort_facet_values_by: None,
+            snippet_ellipsis_text: None,
+            restrict_highlight_and_snippet_arrays: None,
+            min_proximity: None,
+            disable_exact_on_attributes: None,
+            disable_typo_tolerance_on_words: None,
+            disable_typo_tolerance_on_attributes: None,
+            replace_synonyms_in_highlight: None,
+            attribute_criteria_computed_by_min_proximity: None,
+            enable_re_ranking: None,
+            allow_compression_of_integer_array: None,
+            replicas: None,
+            primary: None,
         }
     }
 }
@@ -249,6 +454,50 @@ impl DistinctValue {
 }
 
 impl IndexSettings {
+    /// Extract single-character normalization mappings from the `"default"` script in `custom_normalization`, lowercasing both keys and replacement values.
+    ///
+    /// Multi-character keys and multi-codepoint lowercase expansions are silently skipped.
+    ///
+    /// # Arguments
+    ///
+    /// * `settings` - The index settings containing the optional `custom_normalization` map.
+    ///
+    /// # Returns
+    ///
+    /// A sorted `Vec<(char, String)>` of lowercase source characters to their normalized replacements.
+    pub fn flatten_custom_normalization(settings: &IndexSettings) -> Vec<(char, String)> {
+        let mut by_char: BTreeMap<char, String> = BTreeMap::new();
+
+        if let Some(default_map) = settings
+            .custom_normalization
+            .as_ref()
+            .and_then(|map| map.get("default"))
+        {
+            let mut entries: Vec<(&String, &String)> = default_map.iter().collect();
+            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+
+            for (char_key, replacement) in entries {
+                let mut chars = char_key.chars();
+                let c = match chars.next() {
+                    Some(value) if chars.next().is_none() => value,
+                    _ => continue,
+                };
+                let mut lowered = c.to_lowercase();
+                let lower = match lowered.next() {
+                    Some(value) if lowered.next().is_none() => value,
+                    _ => continue,
+                };
+                let normalized_replacement = replacement
+                    .chars()
+                    .flat_map(|ch| ch.to_lowercase())
+                    .collect::<String>();
+                by_char.insert(lower, normalized_replacement);
+            }
+        }
+
+        by_char.into_iter().collect()
+    }
+
     pub fn load<P: AsRef<Path>>(path: P) -> crate::error::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let settings: IndexSettings = serde_json::from_str(&content)?;
@@ -284,17 +533,37 @@ impl IndexSettings {
     }
 
     pub fn should_retrieve(&self, field: &str) -> bool {
-        if let Some(unretrievable) = &self.unretrievable_attributes {
-            if unretrievable.contains(&field.to_string()) {
-                return false;
+        self.should_retrieve_with_acl(field, false)
+    }
+
+    /// Determine whether a field should be included in retrieval results, respecting both `unretrievableAttributes` and `attributesToRetrieve`.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The attribute name to check.
+    /// * `can_see_unretrievable_attributes` - When `true`, bypass the unretrievable-attributes filter (admin ACL).
+    ///
+    /// # Returns
+    ///
+    /// `true` if the field should appear in the response.
+    pub fn should_retrieve_with_acl(
+        &self,
+        field: &str,
+        can_see_unretrievable_attributes: bool,
+    ) -> bool {
+        if !can_see_unretrievable_attributes {
+            if let Some(unretrievable) = &self.unretrievable_attributes {
+                if unretrievable.iter().any(|attr| attr == field) {
+                    return false;
+                }
             }
         }
 
         if let Some(retrievable) = &self.attributes_to_retrieve {
-            if retrievable.contains(&"*".to_string()) {
+            if retrievable.iter().any(|attr| attr == "*") {
                 return true;
             }
-            return retrievable.contains(&field.to_string());
+            return retrievable.iter().any(|attr| attr == field);
         }
 
         true
@@ -302,6 +571,28 @@ impl IndexSettings {
 
     pub fn is_neural_search_active(&self) -> bool {
         matches!(self.mode, Some(IndexMode::NeuralSearch))
+    }
+
+    pub fn redacted_for_response(&self) -> Self {
+        let mut clone = self.clone();
+        clone.redact_response_secrets();
+        clone
+    }
+
+    pub fn redacted_user_data(&self) -> Option<serde_json::Value> {
+        let mut user_data = self.user_data.clone();
+        redact_user_data_secrets(&mut user_data);
+        user_data
+    }
+
+    pub fn restore_redacted_response_secrets(&mut self, previous: &Self) {
+        restore_user_data_secrets(&mut self.user_data, previous.user_data.as_ref());
+        restore_embedder_secrets(&mut self.embedders, previous.embedders.as_ref());
+    }
+
+    fn redact_response_secrets(&mut self) {
+        redact_user_data_secrets(&mut self.user_data);
+        redact_embedder_secrets(&mut self.embedders);
     }
 
     /// Validate embedder configurations. Returns Ok(()) if no embedders or if
@@ -315,6 +606,17 @@ impl IndexSettings {
         self.validate_embedders_inner(embedders)
     }
 
+    /// Parse each embedder entry into `EmbedderConfig` and run its validation.
+    ///
+    /// Behind the `vector-search` feature flag; the non-feature build is a no-op.
+    ///
+    /// # Arguments
+    ///
+    /// * `embedders` - Map of embedder name to raw JSON configuration.
+    ///
+    /// # Returns
+    ///
+    /// `Err(String)` naming the offending embedder on parse or validation failure.
     #[cfg(feature = "vector-search")]
     fn validate_embedders_inner(
         &self,
@@ -344,44 +646,6 @@ impl IndexSettings {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum EmbedderChange {
-    Added(String),
-    Removed(String),
-    Modified(String),
-}
-
-pub fn detect_embedder_changes(
-    old: &Option<HashMap<String, serde_json::Value>>,
-    new: &Option<HashMap<String, serde_json::Value>>,
-) -> Vec<EmbedderChange> {
-    let empty = HashMap::new();
-    let old_map = old.as_ref().unwrap_or(&empty);
-    let new_map = new.as_ref().unwrap_or(&empty);
-
-    let mut changes = Vec::new();
-    let mut all_keys: HashSet<&String> = old_map.keys().collect();
-    all_keys.extend(new_map.keys());
-
-    for key in all_keys {
-        match (old_map.get(key), new_map.get(key)) {
-            (None, Some(_)) => changes.push(EmbedderChange::Added(key.clone())),
-            (Some(_), None) => changes.push(EmbedderChange::Removed(key.clone())),
-            (Some(old_val), Some(new_val)) => {
-                let fields_changed = ["source", "model", "dimensions"]
-                    .iter()
-                    .any(|field| old_val.get(field) != new_val.get(field));
-                if fields_changed {
-                    changes.push(EmbedderChange::Modified(key.clone()));
-                }
-            }
-            (None, None) => unreachable!(),
-        }
-    }
-
-    changes
-}
-
 fn parse_facet_modifier(attr: &str) -> String {
     if let Some(stripped) = attr.strip_prefix("filterOnly(") {
         stripped.trim_end_matches(')').to_string()
@@ -395,473 +659,5 @@ fn parse_facet_modifier(attr: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_modifiers() {
-        assert_eq!(parse_facet_modifier("category"), "category");
-        assert_eq!(parse_facet_modifier("filterOnly(price)"), "price");
-        assert_eq!(parse_facet_modifier("searchable(brand)"), "brand");
-    }
-
-    #[test]
-    fn test_facet_set() {
-        let settings = IndexSettings {
-            attributes_for_faceting: vec![
-                "category".to_string(),
-                "filterOnly(price)".to_string(),
-                "searchable(brand)".to_string(),
-            ],
-            ..Default::default()
-        };
-
-        let facets = settings.facet_set();
-        assert!(facets.contains("category"));
-        assert!(facets.contains("price"));
-        assert!(facets.contains("brand"));
-    }
-
-    #[test]
-    fn test_distinct_value() {
-        let bool_false = DistinctValue::Bool(false);
-        assert_eq!(bool_false.as_count(), 0);
-
-        let bool_true = DistinctValue::Bool(true);
-        assert_eq!(bool_true.as_count(), 1);
-
-        let int_val = DistinctValue::Integer(3);
-        assert_eq!(int_val.as_count(), 3);
-    }
-
-    #[test]
-    fn test_settings_roundtrip_preserves_all_fields() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("settings.json");
-
-        let original = IndexSettings {
-            attributes_for_faceting: vec!["category".to_string(), "filterOnly(price)".to_string()],
-            searchable_attributes: Some(vec!["title".to_string(), "brand".to_string()]),
-            custom_ranking: Some(vec!["desc(popularity)".to_string()]),
-            attributes_to_retrieve: Some(vec!["title".to_string(), "price".to_string()]),
-            unretrievable_attributes: Some(vec!["internal_id".to_string()]),
-            attribute_for_distinct: Some("product_id".to_string()),
-            distinct: Some(DistinctValue::Integer(2)),
-            ..Default::default()
-        };
-
-        original.save(&path).unwrap();
-        let loaded = IndexSettings::load(&path).unwrap();
-
-        assert_eq!(
-            loaded.attributes_for_faceting, original.attributes_for_faceting,
-            "attributes_for_faceting mismatch"
-        );
-        assert_eq!(
-            loaded.searchable_attributes, original.searchable_attributes,
-            "searchable_attributes mismatch"
-        );
-        assert_eq!(loaded.ranking, original.ranking, "ranking mismatch");
-        assert_eq!(
-            loaded.custom_ranking, original.custom_ranking,
-            "custom_ranking mismatch"
-        );
-        assert_eq!(
-            loaded.attributes_to_retrieve, original.attributes_to_retrieve,
-            "attributes_to_retrieve mismatch"
-        );
-        assert_eq!(
-            loaded.unretrievable_attributes, original.unretrievable_attributes,
-            "unretrievable_attributes mismatch"
-        );
-        assert_eq!(
-            loaded.attribute_for_distinct, original.attribute_for_distinct,
-            "attribute_for_distinct mismatch"
-        );
-        assert_eq!(loaded.distinct, original.distinct, "distinct mismatch");
-    }
-
-    #[test]
-    fn test_partial_json_uses_defaults() {
-        let json = r#"{"queryType":"prefixAll"}"#;
-        let settings: IndexSettings = serde_json::from_str(json).unwrap();
-        assert_eq!(settings.query_type, "prefixAll");
-        assert_eq!(settings.min_word_size_for_1_typo, 4); // default value
-    }
-
-    // ── Embedders field tests (4.1) ──
-
-    #[test]
-    fn test_settings_embedders_default_none() {
-        let settings = IndexSettings::default();
-        assert!(settings.embedders.is_none());
-    }
-
-    #[test]
-    fn test_settings_embedders_roundtrip() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("settings.json");
-
-        let mut embedders = HashMap::new();
-        embedders.insert(
-            "default".to_string(),
-            serde_json::json!({"source": "userProvided", "dimensions": 384}),
-        );
-
-        let original = IndexSettings {
-            embedders: Some(embedders),
-            ..Default::default()
-        };
-
-        original.save(&path).unwrap();
-        let loaded = IndexSettings::load(&path).unwrap();
-
-        let loaded_embedders = loaded
-            .embedders
-            .as_ref()
-            .expect("embedders should survive roundtrip");
-        let default_config = loaded_embedders
-            .get("default")
-            .expect("should have 'default' key");
-        assert_eq!(default_config["source"], "userProvided");
-        assert_eq!(default_config["dimensions"], 384);
-    }
-
-    #[test]
-    fn test_settings_embedders_skip_serializing_when_none() {
-        let settings = IndexSettings::default();
-        let json_str = serde_json::to_string(&settings).unwrap();
-        assert!(
-            !json_str.contains("embedders"),
-            "JSON should not contain 'embedders' when None"
-        );
-    }
-
-    #[test]
-    fn test_settings_embedders_partial_update() {
-        let json = r#"{"embedders": {"myEmb": {"source": "userProvided", "dimensions": 128}}}"#;
-        let settings: IndexSettings = serde_json::from_str(json).unwrap();
-
-        // Embedders populated
-        let emb = settings.embedders.as_ref().unwrap();
-        assert_eq!(emb["myEmb"]["dimensions"], 128);
-
-        // Other fields got defaults
-        assert_eq!(settings.hits_per_page, 20);
-        assert_eq!(settings.query_type, "prefixLast");
-    }
-
-    #[test]
-    fn test_settings_backward_compat_no_embedders() {
-        let json = r#"{"queryType":"prefixAll","hitsPerPage":10}"#;
-        let settings: IndexSettings = serde_json::from_str(json).unwrap();
-        assert!(settings.embedders.is_none());
-        assert_eq!(settings.query_type, "prefixAll");
-        assert_eq!(settings.hits_per_page, 10);
-    }
-
-    // ── Embedder validation tests (4.5) ──
-
-    #[cfg(feature = "vector-search")]
-    #[test]
-    fn test_validate_embedders_valid() {
-        let mut embedders = HashMap::new();
-        embedders.insert(
-            "default".to_string(),
-            serde_json::json!({"source": "userProvided", "dimensions": 384}),
-        );
-        let settings = IndexSettings {
-            embedders: Some(embedders),
-            ..Default::default()
-        };
-        assert!(settings.validate_embedders().is_ok());
-    }
-
-    #[cfg(feature = "vector-search")]
-    #[test]
-    fn test_validate_embedders_invalid_source() {
-        let mut embedders = HashMap::new();
-        embedders.insert(
-            "broken".to_string(),
-            serde_json::json!({"source": "nonExistent"}),
-        );
-        let settings = IndexSettings {
-            embedders: Some(embedders),
-            ..Default::default()
-        };
-        let err = settings.validate_embedders().unwrap_err();
-        assert!(
-            err.contains("broken"),
-            "error should mention embedder name: {}",
-            err
-        );
-    }
-
-    #[cfg(feature = "vector-search")]
-    #[test]
-    fn test_validate_embedders_missing_required_field() {
-        let mut embedders = HashMap::new();
-        embedders.insert("myEmb".to_string(), serde_json::json!({"source": "openAi"}));
-        let settings = IndexSettings {
-            embedders: Some(embedders),
-            ..Default::default()
-        };
-        let err = settings.validate_embedders().unwrap_err();
-        assert!(
-            err.contains("myEmb"),
-            "error should mention embedder name: {}",
-            err
-        );
-        assert!(
-            err.contains("apiKey"),
-            "error should mention missing field: {}",
-            err
-        );
-    }
-
-    #[cfg(feature = "vector-search")]
-    #[test]
-    fn test_validate_embedders_null_value_skipped() {
-        let mut embedders = HashMap::new();
-        embedders.insert("default".to_string(), serde_json::Value::Null);
-        let settings = IndexSettings {
-            embedders: Some(embedders),
-            ..Default::default()
-        };
-        assert!(settings.validate_embedders().is_ok());
-    }
-
-    #[test]
-    fn test_validate_embedders_none_is_ok() {
-        let settings = IndexSettings::default();
-        assert!(settings.validate_embedders().is_ok());
-    }
-
-    #[test]
-    fn test_validate_embedders_empty_map_is_ok() {
-        let settings = IndexSettings {
-            embedders: Some(HashMap::new()),
-            ..Default::default()
-        };
-        assert!(settings.validate_embedders().is_ok());
-    }
-
-    // ── Stale vector detection tests (4.8) ──
-
-    #[test]
-    fn test_embedder_changes_detects_model_change() {
-        let old = Some(HashMap::from([(
-            "emb1".to_string(),
-            serde_json::json!({"source": "openAi", "model": "A"}),
-        )]));
-        let new = Some(HashMap::from([(
-            "emb1".to_string(),
-            serde_json::json!({"source": "openAi", "model": "B"}),
-        )]));
-        let changes = detect_embedder_changes(&old, &new);
-        assert_eq!(changes, vec![EmbedderChange::Modified("emb1".to_string())]);
-    }
-
-    #[test]
-    fn test_embedder_changes_detects_source_change() {
-        let old = Some(HashMap::from([(
-            "emb1".to_string(),
-            serde_json::json!({"source": "openAi"}),
-        )]));
-        let new = Some(HashMap::from([(
-            "emb1".to_string(),
-            serde_json::json!({"source": "rest"}),
-        )]));
-        let changes = detect_embedder_changes(&old, &new);
-        assert_eq!(changes, vec![EmbedderChange::Modified("emb1".to_string())]);
-    }
-
-    #[test]
-    fn test_embedder_changes_detects_dimensions_change() {
-        let old = Some(HashMap::from([(
-            "emb1".to_string(),
-            serde_json::json!({"source": "userProvided", "dimensions": 128}),
-        )]));
-        let new = Some(HashMap::from([(
-            "emb1".to_string(),
-            serde_json::json!({"source": "userProvided", "dimensions": 384}),
-        )]));
-        let changes = detect_embedder_changes(&old, &new);
-        assert_eq!(changes, vec![EmbedderChange::Modified("emb1".to_string())]);
-    }
-
-    #[test]
-    fn test_embedder_changes_unchanged() {
-        let config = serde_json::json!({"source": "userProvided", "dimensions": 384});
-        let old = Some(HashMap::from([("emb1".to_string(), config.clone())]));
-        let new = Some(HashMap::from([("emb1".to_string(), config)]));
-        let changes = detect_embedder_changes(&old, &new);
-        assert!(changes.is_empty());
-    }
-
-    #[test]
-    fn test_embedder_changes_new_embedder() {
-        let old: Option<HashMap<String, serde_json::Value>> = Some(HashMap::new());
-        let new = Some(HashMap::from([(
-            "new_emb".to_string(),
-            serde_json::json!({"source": "userProvided", "dimensions": 128}),
-        )]));
-        let changes = detect_embedder_changes(&old, &new);
-        assert_eq!(changes, vec![EmbedderChange::Added("new_emb".to_string())]);
-    }
-
-    #[test]
-    fn test_embedder_changes_removed_embedder() {
-        let old = Some(HashMap::from([(
-            "old_emb".to_string(),
-            serde_json::json!({"source": "userProvided", "dimensions": 128}),
-        )]));
-        let new: Option<HashMap<String, serde_json::Value>> = Some(HashMap::new());
-        let changes = detect_embedder_changes(&old, &new);
-        assert_eq!(
-            changes,
-            vec![EmbedderChange::Removed("old_emb".to_string())]
-        );
-    }
-
-    #[test]
-    fn test_embedder_changes_both_none() {
-        let changes = detect_embedder_changes(&None, &None);
-        assert!(changes.is_empty());
-    }
-
-    // ── Mode and SemanticSearch tests (5.2) ──
-
-    #[test]
-    fn test_settings_mode_default_none() {
-        let settings = IndexSettings::default();
-        assert!(settings.mode.is_none());
-    }
-
-    #[test]
-    fn test_settings_mode_roundtrip() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("settings.json");
-
-        let original = IndexSettings {
-            mode: Some(IndexMode::NeuralSearch),
-            ..Default::default()
-        };
-
-        original.save(&path).unwrap();
-        let loaded = IndexSettings::load(&path).unwrap();
-
-        assert_eq!(loaded.mode, Some(IndexMode::NeuralSearch));
-    }
-
-    #[test]
-    fn test_settings_mode_skip_serializing_when_none() {
-        let settings = IndexSettings::default();
-        let json_str = serde_json::to_string(&settings).unwrap();
-        assert!(
-            !json_str.contains("\"mode\""),
-            "JSON should not contain 'mode' when None"
-        );
-    }
-
-    #[test]
-    fn test_settings_mode_serde_values() {
-        // Deserialize
-        let neural: IndexMode = serde_json::from_str("\"neuralSearch\"").unwrap();
-        assert_eq!(neural, IndexMode::NeuralSearch);
-
-        let keyword: IndexMode = serde_json::from_str("\"keywordSearch\"").unwrap();
-        assert_eq!(keyword, IndexMode::KeywordSearch);
-
-        // Serialize
-        assert_eq!(
-            serde_json::to_string(&IndexMode::NeuralSearch).unwrap(),
-            "\"neuralSearch\""
-        );
-        assert_eq!(
-            serde_json::to_string(&IndexMode::KeywordSearch).unwrap(),
-            "\"keywordSearch\""
-        );
-    }
-
-    #[test]
-    fn test_settings_mode_backward_compat() {
-        let json = r#"{"queryType":"prefixAll","hitsPerPage":10}"#;
-        let settings: IndexSettings = serde_json::from_str(json).unwrap();
-        assert!(settings.mode.is_none());
-        assert_eq!(settings.query_type, "prefixAll");
-    }
-
-    #[test]
-    fn test_settings_semantic_search_default_none() {
-        let settings = IndexSettings::default();
-        assert!(settings.semantic_search.is_none());
-    }
-
-    #[test]
-    fn test_settings_semantic_search_roundtrip() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("settings.json");
-
-        let original = IndexSettings {
-            semantic_search: Some(SemanticSearchSettings {
-                event_sources: Some(vec!["idx1".to_string(), "idx2".to_string()]),
-            }),
-            ..Default::default()
-        };
-
-        original.save(&path).unwrap();
-        let loaded = IndexSettings::load(&path).unwrap();
-
-        let ss = loaded
-            .semantic_search
-            .expect("semantic_search should survive roundtrip");
-        assert_eq!(
-            ss.event_sources,
-            Some(vec!["idx1".to_string(), "idx2".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_settings_semantic_search_event_sources() {
-        let ss = SemanticSearchSettings {
-            event_sources: Some(vec!["idx1".to_string()]),
-        };
-        let json_str = serde_json::to_string(&ss).unwrap();
-        assert!(
-            json_str.contains("eventSources"),
-            "should use camelCase: {}",
-            json_str
-        );
-        assert!(
-            !json_str.contains("event_sources"),
-            "should not use snake_case: {}",
-            json_str
-        );
-
-        // Roundtrip
-        let deserialized: SemanticSearchSettings = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(deserialized.event_sources, Some(vec!["idx1".to_string()]));
-    }
-
-    #[test]
-    fn test_settings_is_neural_search_active() {
-        let mut settings = IndexSettings::default();
-        assert!(
-            !settings.is_neural_search_active(),
-            "default should not be neural"
-        );
-
-        settings.mode = Some(IndexMode::KeywordSearch);
-        assert!(
-            !settings.is_neural_search_active(),
-            "keywordSearch should not be neural"
-        );
-
-        settings.mode = Some(IndexMode::NeuralSearch);
-        assert!(
-            settings.is_neural_search_active(),
-            "neuralSearch should be neural"
-        );
-    }
-}
+#[path = "settings_tests.rs"]
+mod tests;

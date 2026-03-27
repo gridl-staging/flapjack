@@ -1,5 +1,10 @@
+/**
+ */
 import { execaCommand } from 'execa';
 
+/**
+ * TODO: Document publish.
+ */
 async function publish(): Promise<void> {
   // publish the stable public packages
   await execaCommand(

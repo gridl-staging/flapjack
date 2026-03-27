@@ -8,7 +8,7 @@
  * - No page.pause() (debugging leftover)
  * - No API calls (request.*), waitForTimeout, dispatchEvent in spec files
  *
- * Fixture and setup files are exempt — only *.spec.ts files are linted.
+ * Fixture and setup files are exempt. Shared UI helpers are linted alongside spec files.
  *
  * Note: Tag-based locators (table, tr, td, th, svg, etc.) are allowed for
  * row-scoping per BROWSER_TESTING_STANDARDS_2.md. Only CSS class selectors,
@@ -19,8 +19,8 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    // Only lint spec files — fixtures/setup files are exempt
-    files: ['**/*.spec.ts'],
+    // Lint spec files plus the shared UI helper used by those specs.
+    files: ['**/*.spec.ts', '**/helpers.ts'],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
@@ -45,6 +45,9 @@ export default tseslint.config(
 
       // Ban page.pause() (debugging leftover)
       'playwright/no-page-pause': 'error',
+
+      // Prefer Playwright's semantic locator helpers over equivalent locator([attr=...]) queries
+      'playwright/prefer-native-locators': 'error',
 
       // --- Layer 1: Custom banned patterns ---
       'no-restricted-syntax': ['error',
@@ -88,6 +91,10 @@ export default tseslint.config(
         // Ban XPath selectors: .locator('//...')
         {
           selector: "CallExpression[callee.property.name='locator'] > Literal[value=/^\\/\\//]",
+          message: 'XPath selectors are banned in spec files. Use data-testid or getByRole/getByText instead.',
+        },
+        {
+          selector: "CallExpression[callee.property.name='locator'] > Literal[value=/^xpath=/]",
           message: 'XPath selectors are banned in spec files. Use data-testid or getByRole/getByText instead.',
         },
         // Ban attribute selectors: .locator('[attr=value]') or .locator('input[name=...]')

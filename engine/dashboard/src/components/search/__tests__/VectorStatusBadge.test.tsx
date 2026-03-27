@@ -6,7 +6,11 @@ import type { EmbedderConfig } from '@/lib/types';
 describe('VectorStatusBadge', () => {
   it('renders nothing when no embedders configured', () => {
     const { container } = render(
-      <VectorStatusBadge embedders={undefined} mode={undefined} />
+      <VectorStatusBadge
+        embedders={undefined}
+        mode={undefined}
+        vectorSearchEnabled={true}
+      />
     );
     expect(container.firstChild).toBeNull();
   });
@@ -16,7 +20,13 @@ describe('VectorStatusBadge', () => {
       default: { source: 'userProvided', dimensions: 384 },
     };
 
-    render(<VectorStatusBadge embedders={embedders} mode={undefined} />);
+    render(
+      <VectorStatusBadge
+        embedders={embedders}
+        mode={undefined}
+        vectorSearchEnabled={true}
+      />
+    );
 
     const badge = screen.getByTestId('vector-status-badge');
     expect(badge).toBeInTheDocument();
@@ -29,7 +39,13 @@ describe('VectorStatusBadge', () => {
       default: { source: 'userProvided', dimensions: 384 },
     };
 
-    render(<VectorStatusBadge embedders={embedders} mode="neuralSearch" />);
+    render(
+      <VectorStatusBadge
+        embedders={embedders}
+        mode="neuralSearch"
+        vectorSearchEnabled={true}
+      />
+    );
 
     const badge = screen.getByTestId('vector-status-badge');
     expect(badge).toHaveTextContent(/neural/i);
@@ -41,14 +57,22 @@ describe('VectorStatusBadge', () => {
     };
 
     const { rerender } = render(
-      <VectorStatusBadge embedders={embedders} mode="keywordSearch" />
+      <VectorStatusBadge
+        embedders={embedders}
+        mode="keywordSearch"
+        vectorSearchEnabled={true}
+      />
     );
     expect(screen.getByTestId('vector-status-badge')).toHaveTextContent(
       /keyword/i
     );
 
     rerender(
-      <VectorStatusBadge embedders={embedders} mode={undefined} />
+      <VectorStatusBadge
+        embedders={embedders}
+        mode={undefined}
+        vectorSearchEnabled={true}
+      />
     );
     expect(screen.getByTestId('vector-status-badge')).toHaveTextContent(
       /keyword/i
@@ -57,7 +81,11 @@ describe('VectorStatusBadge', () => {
 
   it('renders nothing when embedders is empty object', () => {
     const { container } = render(
-      <VectorStatusBadge embedders={{}} mode={undefined} />
+      <VectorStatusBadge
+        embedders={{}}
+        mode={undefined}
+        vectorSearchEnabled={true}
+      />
     );
     expect(container.firstChild).toBeNull();
   });
@@ -68,9 +96,50 @@ describe('VectorStatusBadge', () => {
       backup: { source: 'openAi', model: 'text-embedding-3-small' },
     };
 
-    render(<VectorStatusBadge embedders={embedders} mode={undefined} />);
+    render(
+      <VectorStatusBadge
+        embedders={embedders}
+        mode={undefined}
+        vectorSearchEnabled={true}
+      />
+    );
 
     const badge = screen.getByTestId('vector-status-badge');
     expect(badge).toHaveTextContent(/2 embedders/i);
+  });
+
+  it('renders compiled-out badge when vector search is disabled', () => {
+    const embedders: Record<string, EmbedderConfig> = {
+      default: { source: 'userProvided', dimensions: 384 },
+    };
+
+    render(
+      <VectorStatusBadge
+        embedders={embedders}
+        mode="neuralSearch"
+        vectorSearchEnabled={false}
+      />
+    );
+
+    const badge = screen.getByTestId('vector-status-badge-disabled');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent(/not compiled in/i);
+    expect(screen.queryByTestId('vector-status-badge')).not.toBeInTheDocument();
+  });
+
+  it('renders nothing while capability data is unresolved', () => {
+    const embedders: Record<string, EmbedderConfig> = {
+      default: { source: 'userProvided', dimensions: 384 },
+    };
+
+    const { container } = render(
+      <VectorStatusBadge
+        embedders={embedders}
+        mode="neuralSearch"
+        vectorSearchEnabled={undefined}
+      />
+    );
+
+    expect(container.firstChild).toBeNull();
   });
 });

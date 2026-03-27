@@ -23,6 +23,17 @@ pub fn point_in_box(
     lat >= min_lat && lat <= max_lat && lng >= min_lng && lng <= max_lng
 }
 
+/// Determine if a point lies inside a polygon using the ray casting algorithm.
+///
+/// # Arguments
+///
+/// * `lat` - The latitude coordinate to test.
+/// * `lng` - The longitude coordinate to test.
+/// * `polygon` - A slice of (latitude, longitude) tuples forming a closed polygon.
+///
+/// # Returns
+///
+/// True if the point is inside the polygon, false otherwise. Returns false if the polygon has fewer than 3 vertices.
 pub fn point_in_polygon(lat: f64, lng: f64, polygon: &[(f64, f64)]) -> bool {
     let n = polygon.len();
     if n < 3 {
@@ -68,6 +79,7 @@ pub struct AroundPrecisionConfig {
 }
 
 impl AroundPrecisionConfig {
+    /// TODO: Document AroundPrecisionConfig.bucket_distance.
     pub fn bucket_distance(&self, distance_m: f64) -> u64 {
         let dist = distance_m as u64;
         if let Some(fixed) = self.fixed {
@@ -118,6 +130,7 @@ impl GeoParams {
         !self.bounding_boxes.is_empty() || !self.polygons.is_empty() || self.around.is_some()
     }
 
+    /// TODO: Document GeoParams.filter_point.
     pub fn filter_point(&self, lat: f64, lng: f64) -> bool {
         if !self.bounding_boxes.is_empty() {
             return self
@@ -173,6 +186,17 @@ pub fn parse_around_radius(v: &serde_json::Value) -> Option<AroundRadius> {
     }
 }
 
+/// Parse JSON into a vector of bounding boxes, each defined by four coordinates: [p1_lat, p1_lng, p2_lat, p2_lng].
+///
+/// Accepts nested arrays `[[lat, lng, lat, lng]]`, flat arrays `[lat, lng, lat, lng, ...]`, or comma-separated strings `"lat,lng,lat,lng,..."`.
+///
+/// # Arguments
+///
+/// * `v` - A JSON value to parse.
+///
+/// # Returns
+///
+/// A vector of parsed bounding boxes. Returns an empty vector if input is invalid or coordinates are incomplete.
 pub fn parse_bounding_boxes(v: &serde_json::Value) -> Vec<BoundingBox> {
     let mut boxes = Vec::new();
     match v {
@@ -232,6 +256,17 @@ pub fn parse_bounding_boxes(v: &serde_json::Value) -> Vec<BoundingBox> {
     boxes
 }
 
+/// Parse JSON into a vector of polygons, where each polygon is a sequence of (latitude, longitude) coordinate pairs.
+///
+/// Accepts nested arrays `[[lat, lng, lat, lng, ...]]`, flat arrays `[lat, lng, lat, lng, ...]`, or comma-separated strings `"lat,lng,lat,lng,..."`.
+///
+/// # Arguments
+///
+/// * `v` - A JSON value to parse.
+///
+/// # Returns
+///
+/// A vector of polygons; each polygon is a vector of (lat, lng) tuples. Returns an empty vector if input is invalid or has fewer than 6 coordinates (less than 3 points).
 pub fn parse_polygons(v: &serde_json::Value) -> Vec<Vec<(f64, f64)>> {
     let mut polygons = Vec::new();
     match v {
@@ -269,6 +304,17 @@ pub fn parse_polygons(v: &serde_json::Value) -> Vec<Vec<(f64, f64)>> {
     }
     polygons
 }
+/// Parse JSON into an AroundPrecisionConfig for precision-based distance bucketing.
+///
+/// Accepts a single fixed precision number or an array of objects with `from` (distance threshold) and `value` (precision). Ranges are automatically sorted by distance.
+///
+/// # Arguments
+///
+/// * `v` - A JSON value to parse.
+///
+/// # Returns
+///
+/// An AroundPrecisionConfig with either fixed precision or distance-based ranges. Returns default empty config if input is invalid.
 pub fn parse_around_precision(v: &serde_json::Value) -> AroundPrecisionConfig {
     match v {
         serde_json::Value::Number(n) => AroundPrecisionConfig {
@@ -359,6 +405,7 @@ mod tests {
         assert_eq!(polys[0].len(), 3);
     }
 
+    /// Verify that filter_point correctly accepts points inside a bounding box and rejects points outside it.
     #[test]
     fn test_geo_params_filter_bounding_box() {
         let params = GeoParams {
@@ -408,6 +455,7 @@ mod tests {
         assert!(params.filter_point(89.0, 179.0));
     }
 
+    /// Verify that bounding box filters take precedence over around-radius filters when both are configured.
     #[test]
     fn test_bbox_wins_over_around() {
         let params = GeoParams {

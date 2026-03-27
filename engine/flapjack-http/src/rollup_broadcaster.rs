@@ -1,18 +1,5 @@
-//! Background rollup broadcaster (Phase 4b).
-//!
-//! Every `FLAPJACK_ROLLUP_INTERVAL_SECS` seconds (default 300), this task:
-//!   1. Discovers all analytics indexes by listing subdirectories of the
-//!      analytics data directory.
-//!   2. For each index, calls the local AnalyticsQueryEngine to compute
-//!      an AnalyticsRollup (top searches, search count, no-result searches).
-//!   3. POSTs the rollup to every peer's /internal/analytics-rollup endpoint
-//!      via AnalyticsClusterClient::push_rollup_to_peers().
-//!
-//! Peers cache the received rollup and use it to answer analytics queries
-//! locally (Tier 2 path in maybe_fan_out), avoiding cross-region fan-out.
-
 use crate::analytics_cluster::{AnalyticsClusterClient, AnalyticsRollup};
-use flapjack::analytics::{AnalyticsConfig, AnalyticsQueryEngine};
+use flapjack::analytics::{AnalyticsConfig, AnalyticsQueryEngine, AnalyticsQueryParams};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -81,7 +68,17 @@ pub async fn compute_rollup(
     let mut results = HashMap::new();
 
     if let Ok(v) = engine
-        .top_searches(index, &start, &end, 50, false, None, None)
+        .top_searches(
+            &AnalyticsQueryParams {
+                index_name: index,
+                start_date: &start,
+                end_date: &end,
+                limit: 50,
+                tags: None,
+            },
+            false,
+            None,
+        )
         .await
     {
         results.insert("searches".to_string(), v);
@@ -129,13 +126,23 @@ pub async fn run_rollup_broadcast(
         cluster.peer_ids().len()
     );
 
-    for index in &indexes {
-        let rollup = compute_rollup(engine, node_id, index).await;
+    broadcast_rollups_for_indexes(engine, cluster, node_id, &indexes).await;
+}
+
+/// TODO: Document broadcast_rollups_for_indexes.
+async fn broadcast_rollups_for_indexes(
+    engine: &AnalyticsQueryEngine,
+    cluster: &AnalyticsClusterClient,
+    node_id: &str,
+    indexes: &[String],
+) {
+    for index_name in indexes {
+        let rollup = compute_rollup(engine, node_id, index_name).await;
         cluster.push_rollup_to_peers(&rollup).await;
         tracing::info!(
             "[ROLLUP-BROADCAST] Pushed rollup node_id={} index={} result_keys={}",
             node_id,
-            index,
+            index_name,
             rollup.results.len()
         );
     }
@@ -221,6 +228,7 @@ mod tests {
 
     // ── compute_rollup ────────────────────────────────────────────────────────
 
+    /// Verify that `compute_rollup` on an empty index still returns all three result keys (`searches`, `searches/count`, `searches/noResults`) with a valid node ID, index name, and positive timestamp.
     #[tokio::test]
     async fn compute_rollup_no_data_returns_valid_struct() {
         let dir = TempDir::new().unwrap();
@@ -266,6 +274,7 @@ mod tests {
         );
     }
 
+    /// Verify that `compute_rollup` populates the `searches` result key when the underlying analytics directory contains seeded search event data.
     #[tokio::test]
     async fn compute_rollup_with_seeded_data_populates_searches_key() {
         let dir = TempDir::new().unwrap();
@@ -326,5 +335,33 @@ mod tests {
         // because with no indexes there's nothing to push.
         run_rollup_broadcast(&engine, &config, &cluster, "local").await;
         // If we reach here without panic, the test passes
+    }
+
+    /// TODO: Document broadcast_rollups_for_indexes_empty_input_is_noop.
+    #[tokio::test]
+    async fn broadcast_rollups_for_indexes_empty_input_is_noop() {
+        use flapjack_replication::config::{NodeConfig, PeerConfig};
+
+        let dir = TempDir::new().unwrap();
+        let config = flapjack::analytics::AnalyticsConfig {
+            enabled: true,
+            data_dir: dir.path().to_path_buf(),
+            flush_interval_secs: 3600,
+            flush_size: 100_000,
+            retention_days: 90,
+        };
+        let engine = Arc::new(AnalyticsQueryEngine::new(config));
+
+        let node_cfg = NodeConfig {
+            node_id: "local".to_string(),
+            bind_addr: "127.0.0.1:0".to_string(),
+            peers: vec![PeerConfig {
+                node_id: "peer".to_string(),
+                addr: "http://127.0.0.1:19999".to_string(),
+            }],
+        };
+        let cluster = AnalyticsClusterClient::new(&node_cfg).expect("cluster client should build");
+
+        broadcast_rollups_for_indexes(&engine, &cluster, "local", &[]).await;
     }
 }

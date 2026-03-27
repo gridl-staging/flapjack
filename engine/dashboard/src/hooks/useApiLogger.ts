@@ -67,7 +67,11 @@ export const useApiLogger = create<ApiLoggerStore>()(
           .map((e, i) => {
             const headers = Object.entries(e.headers)
               .filter(([k]) => k !== 'x-request-id') // Exclude internal header
-              .map(([k, v]) => `  -H "${k}: ${v}"`)
+              .map(([k, v]) => {
+                // Redact API key in exported scripts to prevent credential leakage
+                const val = k === 'x-algolia-api-key' ? '[REDACTED]' : v;
+                return `  -H "${k}: ${val}"`;
+              })
               .join(' \\\n');
             const body = e.body ? ` \\\n  -d '${JSON.stringify(e.body)}'` : '';
             const fullUrl = e.url.startsWith('http') ? e.url : `${__BACKEND_URL__}${e.url}`;

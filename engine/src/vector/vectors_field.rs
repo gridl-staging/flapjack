@@ -1,7 +1,11 @@
+//! Extract and parse user-provided vector embeddings from document JSON with per-embedder validation. Remove vectors from documents before indexing to prevent large float arrays from being included in the full-text index.
 use std::collections::HashMap;
 
 use super::VectorError;
 use crate::types::Document;
+
+type ParsedEmbedderVector = Result<Vec<f32>, VectorError>;
+type ParsedVectorsByEmbedder = HashMap<String, ParsedEmbedderVector>;
 
 /// Extract user-provided vectors from a document's JSON representation.
 /// Returns `Ok(None)` if `_vectors` field is absent.
@@ -9,7 +13,7 @@ use crate::types::Document;
 /// Returns `Err` if `_vectors` is present but not a JSON object (malformed input).
 pub fn extract_vectors(
     doc_json: &serde_json::Value,
-) -> Result<Option<HashMap<String, Result<Vec<f32>, VectorError>>>, VectorError> {
+) -> Result<Option<ParsedVectorsByEmbedder>, VectorError> {
     let vectors_val = match doc_json.get("_vectors") {
         Some(v) => v,
         None => return Ok(None),
@@ -73,6 +77,7 @@ mod tests {
     use super::*;
     use crate::types::FieldValue;
 
+    /// Assert that extract_vectors returns a map of valid embeddings when _vectors contains valid float arrays.
     #[test]
     fn test_extract_vectors_present() {
         let doc_json = serde_json::json!({
@@ -103,6 +108,7 @@ mod tests {
         assert!(result.is_none());
     }
 
+    /// Assert that extract_vectors correctly processes multiple embedders in a single _vectors object.
     #[test]
     fn test_extract_vectors_multiple_embedders() {
         let doc_json = serde_json::json!({
@@ -122,6 +128,7 @@ mod tests {
         assert_eq!(map["mymodel"].as_ref().unwrap().len(), 2);
     }
 
+    /// Assert that extract_vectors captures errors for embedder values that are not arrays.
     #[test]
     fn test_extract_vectors_invalid_not_array() {
         let doc_json = serde_json::json!({
@@ -141,6 +148,7 @@ mod tests {
         );
     }
 
+    /// Assert that extract_vectors captures errors when array elements are not numbers, reporting the failing index.
     #[test]
     fn test_extract_vectors_invalid_not_floats() {
         let doc_json = serde_json::json!({
@@ -177,6 +185,7 @@ mod tests {
         assert!(map["bad"].is_err());
     }
 
+    /// Assert that extract_vectors returns Err when _vectors is not a JSON object.
     #[test]
     fn test_extract_vectors_not_object() {
         // _vectors as array — should be Err, not silently ignored
@@ -232,6 +241,7 @@ mod tests {
         assert!(map.is_empty());
     }
 
+    /// Assert that extract_vectors captures an error when an embedder value is null.
     #[test]
     fn test_extract_vectors_null_embedder_value() {
         let doc_json = serde_json::json!({
@@ -251,6 +261,7 @@ mod tests {
         );
     }
 
+    /// Assert that strip_vectors_from_document removes _vectors while preserving other fields.
     #[test]
     fn test_strip_vectors_from_document() {
         let mut fields = std::collections::HashMap::new();

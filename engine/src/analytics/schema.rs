@@ -1,3 +1,4 @@
+//! Analytics event types (search and insight), their Arrow/Parquet schemas, and Algolia-spec validation logic.
 use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 
@@ -27,6 +28,7 @@ pub struct SearchEvent {
 
 /// Sent by client via Insights API (click, conversion, view events).
 #[derive(Debug, Clone, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct InsightEvent {
     pub event_type: String,
@@ -37,7 +39,7 @@ pub struct InsightEvent {
     pub user_token: String,
     #[serde(default)]
     pub authenticated_user_token: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "queryID", alias = "queryId")]
     pub query_id: Option<String>,
     #[serde(default)]
     pub object_ids: Vec<String>,
@@ -73,21 +75,27 @@ impl InsightEvent {
         if self.event_name.is_empty() || self.event_name.len() > 64 {
             return Err("eventName must be 1-64 characters".to_string());
         }
-        if self.user_token.is_empty() || self.user_token.len() > 129 {
-            return Err("userToken must be 1-129 characters".to_string());
-        }
+        validate_user_token(&self.user_token)?;
         let oids = self.effective_object_ids();
         if oids.is_empty() || oids.len() > 20 {
             return Err("objectIDs must have 1-20 items".to_string());
         }
-        // For click-after-search, positions are required and must match objectIDs length
-        if self.event_type == "click" && self.query_id.is_some() {
+        // For click events, positions are required and must match objectIDs length.
+        if self.event_type == "click" {
             match &self.positions {
-                None => return Err("positions required for click-after-search events".to_string()),
+                None => return Err("positions required for click events".to_string()),
                 Some(pos) if pos.len() != oids.len() => {
                     return Err("positions length must match objectIDs length".to_string());
                 }
                 _ => {}
+            }
+        }
+        if let Some(ref subtype) = self.event_subtype {
+            if self.event_type != "conversion" {
+                return Err("eventSubtype is only valid for conversion events".to_string());
+            }
+            if subtype != "addToCart" && subtype != "purchase" {
+                return Err("eventSubtype must be addToCart or purchase".to_string());
             }
         }
         if let Some(ref qid) = self.query_id {
@@ -114,6 +122,19 @@ impl InsightEvent {
         }
         Ok(())
     }
+}
+
+pub fn validate_user_token(user_token: &str) -> Result<(), String> {
+    if user_token.is_empty() || user_token.len() > 129 {
+        return Err("userToken must be 1-129 characters".to_string());
+    }
+    if !user_token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("userToken must contain only [a-zA-Z0-9\\-_]".to_string());
+    }
+    Ok(())
 }
 
 /// Arrow schema for search events stored in Parquet.
@@ -164,6 +185,7 @@ pub fn insight_event_schema() -> Arc<Schema> {
 mod tests {
     use super::*;
 
+    /// Construct a minimal valid click `InsightEvent` for use as a test fixture.
     fn valid_event() -> InsightEvent {
         InsightEvent {
             event_type: "click".to_string(),
@@ -175,7 +197,7 @@ mod tests {
             query_id: None,
             object_ids: vec!["obj1".to_string()],
             object_ids_alt: vec![],
-            positions: None,
+            positions: Some(vec![1]),
             timestamp: None,
             value: None,
             currency: None,
@@ -268,6 +290,13 @@ mod tests {
         assert!(e.validate().is_err());
     }
 
+    #[test]
+    fn validate_user_token_invalid_chars() {
+        let mut e = valid_event();
+        e.user_token = "user@email.com".to_string();
+        assert!(e.validate().is_err());
+    }
+
     // ── validate: object_ids ────────────────────────────────────────────
 
     #[test]
@@ -289,6 +318,7 @@ mod tests {
     fn validate_20_object_ids_ok() {
         let mut e = valid_event();
         e.object_ids = (0..20).map(|i| format!("obj{}", i)).collect();
+        e.positions = Some((1..=20).collect());
         assert!(e.validate().is_ok());
     }
 
@@ -299,6 +329,15 @@ mod tests {
         let mut e = valid_event();
         e.event_type = "click".to_string();
         e.query_id = Some("a".repeat(32));
+        e.positions = None;
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_click_without_query_id_needs_positions() {
+        let mut e = valid_event();
+        e.event_type = "click".to_string();
+        e.query_id = None;
         e.positions = None;
         assert!(e.validate().is_err());
     }
@@ -319,6 +358,40 @@ mod tests {
         e.event_type = "click".to_string();
         e.query_id = Some("a".repeat(32));
         e.positions = Some(vec![1]);
+        assert!(e.validate().is_ok());
+    }
+
+    // ── validate: event_subtype ────────────────────────────────────────
+
+    #[test]
+    fn validate_event_subtype_rejected_for_non_conversion() {
+        let mut e = valid_event();
+        e.event_type = "click".to_string();
+        e.event_subtype = Some("addToCart".to_string());
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_event_subtype_rejects_invalid_conversion_value() {
+        let mut e = valid_event();
+        e.event_type = "conversion".to_string();
+        e.event_subtype = Some("invalid".to_string());
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_event_subtype_accepts_purchase_on_conversion() {
+        let mut e = valid_event();
+        e.event_type = "conversion".to_string();
+        e.event_subtype = Some("purchase".to_string());
+        assert!(e.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_event_subtype_accepts_add_to_cart_on_conversion() {
+        let mut e = valid_event();
+        e.event_type = "conversion".to_string();
+        e.event_subtype = Some("addToCart".to_string());
         assert!(e.validate().is_ok());
     }
 
@@ -479,5 +552,25 @@ mod tests {
         let json = r#"{"eventType":"click","eventName":"Clicked","index":"products","userToken":"user1","objectIDs":["obj1"]}"#;
         let event: InsightEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.effective_object_ids(), &["obj1"]);
+    }
+
+    #[test]
+    fn insight_event_deserializes_query_id_from_queryid() {
+        let json = r#"{"eventType":"click","eventName":"Clicked","index":"products","userToken":"user1","queryID":"abcdef0123456789abcdef0123456789","objectIDs":["obj1"],"positions":[1]}"#;
+        let event: InsightEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            event.query_id.as_deref(),
+            Some("abcdef0123456789abcdef0123456789")
+        );
+    }
+
+    #[test]
+    fn insight_event_deserializes_query_id_from_queryid_alias() {
+        let json = r#"{"eventType":"click","eventName":"Clicked","index":"products","userToken":"user1","queryId":"abcdef0123456789abcdef0123456789","objectIDs":["obj1"],"positions":[1]}"#;
+        let event: InsightEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            event.query_id.as_deref(),
+            Some("abcdef0123456789abcdef0123456789")
+        );
     }
 }

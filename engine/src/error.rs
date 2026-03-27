@@ -1,6 +1,14 @@
+//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/mar24_pm_2_repo_hygiene_sweep/flapjack_dev/engine/src/error.rs.
 use http::StatusCode;
 use thiserror::Error;
 
+/// Unified error type for the Flapjack engine.
+///
+/// Each variant carries a human-readable message and maps to a specific HTTP status code
+/// via [`status_code`](Self::status_code). When the `axum-support` feature is enabled,
+/// implements `IntoResponse` to produce Algolia-compatible JSON error bodies
+/// (`{ "message": "...", "status": N }`) while sanitizing internal errors to prevent
+/// leaking file paths, bucket names, or engine internals.
 #[derive(Error, Debug, Clone)]
 pub enum FlapjackError {
     #[error("Tenant not found: {0}")]
@@ -49,6 +57,9 @@ pub enum FlapjackError {
     #[error("Task not found: {0}")]
     TaskNotFound(String),
 
+    #[error("ObjectID does not exist")]
+    ObjectNotFound,
+
     #[error("Write queue full (1000 operations pending)")]
     QueueFull,
 
@@ -85,6 +96,9 @@ pub enum FlapjackError {
 
     #[error("Index paused for migration: {0}")]
     IndexPaused(String),
+
+    #[error("{0}")]
+    Forbidden(String),
 }
 
 pub type Result<T> = std::result::Result<T, FlapjackError>;
@@ -125,7 +139,41 @@ impl From<flapjack_ssl::FlapjackError> for FlapjackError {
     }
 }
 
+#[cfg(feature = "axum-support")]
+impl From<axum::extract::rejection::JsonRejection> for FlapjackError {
+    fn from(rejection: axum::extract::rejection::JsonRejection) -> Self {
+        FlapjackError::Json(rejection.body_text())
+    }
+}
+
 impl FlapjackError {
+    // Status-code mapping policy (Algolia parity):
+    // Variant(s)                                               | HTTP | Rationale
+    // ---------------------------------------------------------|------|--------------------------------------------
+    // TenantNotFound, TaskNotFound, ObjectNotFound            | 404  | Missing resource lookup
+    // IndexAlreadyExists                                      | 409  | Conflict with existing resource
+    // InvalidQuery, QueryTooComplex, InvalidSchema,           | 400  | Client payload/query contract violation
+    // MissingField, TypeMismatch, FieldNotFound,              |      |
+    // BufferSizeExceeded, DocumentTooLarge, BatchTooLarge,    |      |
+    // InvalidDocument, QueryParse, Json                       |      |
+    // QueueFull                                               | 429  | Backpressure/rate limiting
+    // Forbidden                                               | 403  | Authenticated but not authorized
+    // TooManyConcurrentWrites, MemoryPressure, IndexPaused    | 503  | Temporary service unavailability/retryable
+    // Io, Tantivy, S3, Ssl, Acme, Config                      | 500  | Internal server/runtime dependency failure
+    /// Map this error variant to the appropriate HTTP status code.
+    ///
+    /// Follows Algolia parity conventions:
+    /// - **404** — missing resource (`TenantNotFound`, `TaskNotFound`, `ObjectNotFound`)
+    /// - **409** — conflict (`IndexAlreadyExists`)
+    /// - **400** — client contract violations (invalid query, schema, document, parse errors)
+    /// - **429** — backpressure (`QueueFull`)
+    /// - **403** — authorization failure (`Forbidden`)
+    /// - **503** — temporary unavailability (`TooManyConcurrentWrites`, `MemoryPressure`, `IndexPaused`)
+    /// - **500** — internal failures (`Io`, `Tantivy`, `S3`, `Ssl`, `Acme`, `Config`)
+    ///
+    /// # Returns
+    ///
+    /// The `http::StatusCode` corresponding to this error variant.
     pub fn status_code(&self) -> StatusCode {
         match self {
             FlapjackError::TenantNotFound(_) => StatusCode::NOT_FOUND,
@@ -141,6 +189,7 @@ impl FlapjackError {
             FlapjackError::DocumentTooLarge { .. } => StatusCode::BAD_REQUEST,
             FlapjackError::BatchTooLarge { .. } => StatusCode::BAD_REQUEST,
             FlapjackError::TaskNotFound(_) => StatusCode::NOT_FOUND,
+            FlapjackError::ObjectNotFound => StatusCode::NOT_FOUND,
             FlapjackError::QueueFull => StatusCode::TOO_MANY_REQUESTS,
             FlapjackError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
             FlapjackError::Tantivy(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -153,6 +202,7 @@ impl FlapjackError {
             FlapjackError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
             FlapjackError::MemoryPressure { .. } => StatusCode::SERVICE_UNAVAILABLE,
             FlapjackError::IndexPaused(_) => StatusCode::SERVICE_UNAVAILABLE,
+            FlapjackError::Forbidden(_) => StatusCode::FORBIDDEN,
         }
     }
 }
@@ -173,6 +223,12 @@ mod tests {
     fn index_already_exists_is_409() {
         let e = FlapjackError::IndexAlreadyExists("test".into());
         assert_eq!(e.status_code(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn forbidden_is_403() {
+        let e = FlapjackError::Forbidden("not allowed".into());
+        assert_eq!(e.status_code(), StatusCode::FORBIDDEN);
     }
 
     #[test]
@@ -230,6 +286,20 @@ mod tests {
     }
 
     #[test]
+    fn too_many_writes_and_queue_full_have_distinct_status_codes() {
+        // Individual status codes are verified by too_many_writes_is_503 and queue_full_is_429.
+        // This test guards against accidental convergence.
+        assert_ne!(
+            FlapjackError::TooManyConcurrentWrites {
+                current: 41,
+                max: 40,
+            }
+            .status_code(),
+            FlapjackError::QueueFull.status_code()
+        );
+    }
+
+    #[test]
     fn io_error_is_500() {
         let e = FlapjackError::Io("disk full".into());
         assert_eq!(e.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -278,6 +348,12 @@ mod tests {
     #[test]
     fn task_not_found_is_404() {
         let e = FlapjackError::TaskNotFound("abc123".into());
+        assert_eq!(e.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn object_not_found_is_404() {
+        let e = FlapjackError::ObjectNotFound;
         assert_eq!(e.status_code(), StatusCode::NOT_FOUND);
     }
 
@@ -380,6 +456,15 @@ mod tests {
         }
 
         #[test]
+        fn forbidden_http_response_is_403() {
+            assert_eq!(
+                status_from_response(FlapjackError::Forbidden("not allowed".into())),
+                StatusCode::FORBIDDEN,
+                "Forbidden HTTP response must be 403 (matches status_code())"
+            );
+        }
+
+        #[test]
         fn index_paused_http_response_is_503_with_retry_after() {
             let response = FlapjackError::IndexPaused("my_index".into()).into_response();
             assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -393,6 +478,9 @@ mod tests {
             );
         }
 
+        /// Exhaustively verify that every `FlapjackError` variant produces an HTTP response
+        /// whose status code matches `status_code()`, guarding against divergence between
+        /// the status mapping and the `IntoResponse` implementation.
         #[test]
         fn into_response_status_matches_status_code_for_all_variants() {
             // Exhaustive check: every variant's HTTP response status equals status_code()
@@ -418,6 +506,7 @@ mod tests {
                 FlapjackError::DocumentTooLarge { size: 100, max: 50 },
                 FlapjackError::BatchTooLarge { size: 100, max: 50 },
                 FlapjackError::TaskNotFound("id".into()),
+                FlapjackError::ObjectNotFound,
                 FlapjackError::QueueFull,
                 FlapjackError::Io("err".into()),
                 FlapjackError::Tantivy("err".into()),
@@ -433,6 +522,7 @@ mod tests {
                     level: "warn".into(),
                 },
                 FlapjackError::IndexPaused("idx".into()),
+                FlapjackError::Forbidden("not allowed".into()),
             ];
             for e in errors {
                 let expected = e.status_code();
@@ -443,6 +533,106 @@ mod tests {
                     actual, expected, e
                 );
             }
+        }
+
+        // ── Algolia-compatible response body shape ──────────────────────
+        // Error responses must be exactly { "message": "...", "status": N }
+        // No extra fields (error, request_id, suggestion, docs).
+
+        async fn body_json(e: FlapjackError) -> serde_json::Value {
+            let resp = e.into_response();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice(&body).unwrap()
+        }
+
+        /// Verify that error response bodies contain exactly `message` and `status` fields
+        /// with no legacy fields (`error`, `request_id`, `suggestion`, `docs`), ensuring
+        /// Algolia-compatible response shape.
+        #[tokio::test]
+        async fn error_response_has_message_and_status_only() {
+            let json = body_json(FlapjackError::TenantNotFound("test".into())).await;
+            assert!(json.get("message").is_some(), "must have 'message'");
+            assert_eq!(json["status"], 404, "status must be HTTP code as u16");
+            // Must NOT have old fields
+            assert!(json.get("error").is_none(), "must not have 'error'");
+            assert!(
+                json.get("request_id").is_none(),
+                "must not have 'request_id'"
+            );
+            assert!(
+                json.get("suggestion").is_none(),
+                "must not have 'suggestion'"
+            );
+            assert!(json.get("docs").is_none(), "must not have 'docs'");
+        }
+
+        /// Verify that the `status` field in the JSON error body matches the actual HTTP
+        /// status code for a representative set of error variants.
+        #[tokio::test]
+        async fn error_response_status_field_matches_http_status() {
+            let cases: Vec<(FlapjackError, u16)> = vec![
+                (FlapjackError::TenantNotFound("x".into()), 404),
+                (FlapjackError::InvalidQuery("x".into()), 400),
+                (FlapjackError::IndexAlreadyExists("x".into()), 409),
+                (FlapjackError::TaskNotFound("x".into()), 404),
+                (FlapjackError::ObjectNotFound, 404),
+                (FlapjackError::QueueFull, 429),
+                (FlapjackError::Io("x".into()), 500),
+            ];
+            for (err, expected_status) in cases {
+                let json = body_json(err).await;
+                assert_eq!(
+                    json["status"], expected_status,
+                    "status field must match HTTP status code"
+                );
+            }
+        }
+
+        /// TODO: Document internal_errors_dont_leak_details.
+        #[tokio::test]
+        async fn internal_errors_dont_leak_details() {
+            // Tantivy errors must not leak engine internals
+            let json = body_json(FlapjackError::Tantivy(
+                "segment corruption at /var/data/index/segments".into(),
+            ))
+            .await;
+            let msg = json["message"].as_str().unwrap();
+            assert!(
+                !msg.contains("/var"),
+                "internal error must not leak file paths: {}",
+                msg
+            );
+            assert!(
+                !msg.contains("segment"),
+                "internal error must not leak Tantivy details: {}",
+                msg
+            );
+
+            // IO errors must not leak paths
+            let json = body_json(FlapjackError::Io(
+                "permission denied: /tmp/data/index".into(),
+            ))
+            .await;
+            let msg = json["message"].as_str().unwrap();
+            assert!(
+                !msg.contains("/Users"),
+                "IO error must not leak file paths: {}",
+                msg
+            );
+
+            // S3 errors must not leak credentials/config
+            let json = body_json(FlapjackError::S3(
+                "access denied for bucket my-secret-bucket".into(),
+            ))
+            .await;
+            let msg = json["message"].as_str().unwrap();
+            assert!(
+                !msg.contains("my-secret-bucket"),
+                "S3 error must not leak bucket names: {}",
+                msg
+            );
         }
     }
 }
@@ -456,187 +646,98 @@ use serde::Serialize;
 #[cfg(feature = "axum-support")]
 #[derive(Serialize)]
 pub struct ErrorResponse {
-    pub error: String,
     pub message: String,
-    pub request_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub suggestion: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub docs: Option<String>,
+    pub status: u16,
 }
 
 #[cfg(feature = "axum-support")]
-impl IntoResponse for FlapjackError {
-    fn into_response(self) -> Response {
-        let (status, error_code, message, suggestion) = match &self {
-            FlapjackError::TenantNotFound(tenant) => (
-                StatusCode::NOT_FOUND,
-                "index_not_found",
-                format!("Index '{}' does not exist", tenant),
-                Some("Create the index first with POST /indexes".to_string()),
-            ),
-            FlapjackError::IndexAlreadyExists(tenant) => (
-                StatusCode::CONFLICT,
-                "index_already_exists",
-                format!("Index '{}' already exists", tenant),
-                None,
-            ),
-            FlapjackError::InvalidQuery(msg) => {
-                (StatusCode::BAD_REQUEST, "invalid_query", msg.clone(), None)
-            }
-            FlapjackError::QueryTooComplex(msg) => (
-                StatusCode::BAD_REQUEST,
-                "query_too_complex",
-                msg.clone(),
-                Some("Simplify your query or reduce filter complexity".to_string()),
-            ),
-            FlapjackError::InvalidSchema(msg) => {
-                (StatusCode::BAD_REQUEST, "invalid_schema", msg.clone(), None)
-            }
-            FlapjackError::MissingField(field) => (
-                StatusCode::BAD_REQUEST,
-                "missing_field",
-                format!("Required field '{}' is missing", field),
-                None,
-            ),
+impl FlapjackError {
+    /// User-facing error message. Internal errors are sanitized to avoid leaking
+    /// file paths, stack traces, bucket names, or other server internals.
+    fn api_message(&self) -> String {
+        match self {
+            FlapjackError::TenantNotFound(t) => format!("Index '{}' does not exist", t),
+            FlapjackError::IndexAlreadyExists(t) => format!("Index '{}' already exists", t),
+            FlapjackError::InvalidQuery(msg) => msg.clone(),
+            FlapjackError::QueryTooComplex(msg) => msg.clone(),
+            FlapjackError::InvalidSchema(msg) => msg.clone(),
+            FlapjackError::MissingField(f) => format!("Required field '{}' is missing", f),
             FlapjackError::TypeMismatch {
                 field,
                 expected,
                 actual,
-            } => (
-                StatusCode::BAD_REQUEST,
-                "type_mismatch",
-                format!("Field '{}' expected {}, got {}", field, expected, actual),
-                None,
-            ),
-            FlapjackError::FieldNotFound(field) => (
-                StatusCode::BAD_REQUEST,
-                "field_not_found",
-                format!("Field '{}' not found in schema", field),
-                None,
-            ),
-            FlapjackError::TooManyConcurrentWrites { current, max } => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "too_many_concurrent_writes",
+            } => format!("Field '{}' expected {}, got {}", field, expected, actual),
+            FlapjackError::FieldNotFound(f) => format!("Field '{}' not found in schema", f),
+            FlapjackError::TooManyConcurrentWrites { current, max } => {
                 format!(
                     "Too many concurrent writes: {} active, max {}",
                     current, max
-                ),
-                Some("Retry after a short delay".to_string()),
-            ),
-            FlapjackError::BufferSizeExceeded { requested, max } => (
-                StatusCode::BAD_REQUEST,
-                "buffer_size_exceeded",
-                format!("Buffer size {} exceeds max {} bytes", requested, max),
-                None,
-            ),
-            FlapjackError::DocumentTooLarge { size, max } => (
-                StatusCode::BAD_REQUEST,
-                "document_too_large",
-                format!("Document size {} exceeds max {} bytes", size, max),
-                Some("Split document into smaller chunks".to_string()),
-            ),
-            FlapjackError::BatchTooLarge { size, max } => (
-                StatusCode::BAD_REQUEST,
-                "batch_too_large",
-                format!("Batch size {} exceeds max {} documents", size, max),
-                Some("Split batch into smaller chunks".to_string()),
-            ),
-            FlapjackError::TaskNotFound(task_id) => (
-                StatusCode::NOT_FOUND,
-                "task_not_found",
-                format!("Task '{}' not found", task_id),
-                Some("Task may have been evicted (max 1000 tasks per tenant)".to_string()),
-            ),
-            FlapjackError::QueueFull => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "queue_full",
-                "Write queue full (1000 operations pending)".to_string(),
-                Some("Retry after a short delay".to_string()),
-            ),
-            FlapjackError::Io(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "io_error",
-                format!("IO error: {}", e),
-                None,
-            ),
-            FlapjackError::Tantivy(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("Internal error: {}", e),
-                None,
-            ),
-            FlapjackError::QueryParse(e) => (
-                StatusCode::BAD_REQUEST,
-                "query_parse_error",
-                format!("Query parse error: {}", e),
-                None,
-            ),
-            FlapjackError::Json(e) => (
-                StatusCode::BAD_REQUEST,
-                "json_error",
-                format!("JSON error: {}", e),
-                None,
-            ),
-            FlapjackError::InvalidDocument(msg) => (
-                StatusCode::BAD_REQUEST,
-                "invalid_document",
-                msg.clone(),
-                Some("Check document structure and field types".to_string()),
-            ),
-            FlapjackError::S3(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "s3_error",
-                format!("S3 error: {}", e),
-                Some(
-                    "Check FLAPJACK_S3_BUCKET, FLAPJACK_S3_REGION, and AWS credentials".to_string(),
-                ),
-            ),
-            FlapjackError::Ssl(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "ssl_error",
-                format!("SSL error: {}", e),
-                None,
-            ),
-            FlapjackError::Acme(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "acme_error",
-                format!("ACME error: {}", e),
-                Some("Check FLAPJACK_SSL_EMAIL and ensure port 80 is accessible".to_string()),
-            ),
-            FlapjackError::Config(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "config_error",
-                format!("Configuration error: {}", e),
-                None,
-            ),
-            FlapjackError::MemoryPressure {
-                allocated_mb,
-                limit_mb,
-                ref level,
-            } => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "memory_pressure",
-                format!(
-                    "Memory pressure: {} MB allocated of {} MB limit ({})",
-                    allocated_mb, limit_mb, level
-                ),
-                Some("Retry after a short delay".to_string()),
-            ),
-            FlapjackError::IndexPaused(ref index) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "index_paused",
-                format!("Index is paused for migration: {}", index),
-                Some("Retry after a short delay".to_string()),
-            ),
-        };
+                )
+            }
+            FlapjackError::BufferSizeExceeded { requested, max } => {
+                format!("Buffer size {} exceeds max {} bytes", requested, max)
+            }
+            FlapjackError::DocumentTooLarge { size, max } => {
+                format!("Document size {} exceeds max {} bytes", size, max)
+            }
+            FlapjackError::BatchTooLarge { size, max } => {
+                format!("Batch size {} exceeds max {} documents", size, max)
+            }
+            FlapjackError::TaskNotFound(id) => format!("Task '{}' not found", id),
+            FlapjackError::ObjectNotFound => "ObjectID does not exist".to_string(),
+            FlapjackError::QueueFull => "Write queue full".to_string(),
+            FlapjackError::InvalidDocument(msg) => msg.clone(),
+            FlapjackError::QueryParse(e) => format!("Query parse error: {}", e),
+            FlapjackError::Json(e) => format!("JSON error: {}", e),
+            FlapjackError::MemoryPressure { .. } => {
+                "Server under memory pressure, retry later".to_string()
+            }
+            FlapjackError::IndexPaused(_) => "Index is temporarily unavailable".to_string(),
+            FlapjackError::Forbidden(msg) => msg.clone(),
+            // Internal errors — sanitized, no details leaked
+            FlapjackError::Io(_)
+            | FlapjackError::Tantivy(_)
+            | FlapjackError::S3(_)
+            | FlapjackError::Ssl(_)
+            | FlapjackError::Acme(_)
+            | FlapjackError::Config(_) => "Internal server error".to_string(),
+        }
+    }
+}
+
+#[cfg(feature = "axum-support")]
+impl IntoResponse for FlapjackError {
+    /// Convert this error into an Axum HTTP response with an Algolia-compatible JSON body.
+    ///
+    /// Produces a response with:
+    /// - HTTP status from [`status_code`](Self::status_code)
+    /// - JSON body containing only `message` and `status` fields
+    /// - `Retry-After: 5` header for `MemoryPressure` variants
+    /// - `Retry-After: 1` header for `IndexPaused` variants
+    ///
+    /// Internal errors (`Io`, `Tantivy`, `S3`, `Ssl`, `Acme`, `Config`) are logged at
+    /// error level server-side, then sanitized to a generic "Internal server error" message
+    /// so that file paths, stack traces, and infrastructure details are never exposed to clients.
+    fn into_response(self) -> Response {
+        let status = self.status_code();
+        let message = self.api_message();
+
+        // Log internal details server-side before sanitizing the response
+        if matches!(
+            &self,
+            FlapjackError::Io(_)
+                | FlapjackError::Tantivy(_)
+                | FlapjackError::S3(_)
+                | FlapjackError::Ssl(_)
+                | FlapjackError::Acme(_)
+                | FlapjackError::Config(_)
+        ) {
+            tracing::error!("{}", self);
+        }
 
         let error_response = ErrorResponse {
-            error: error_code.to_string(),
             message,
-            request_id: format!("req_fj_{}", uuid::Uuid::new_v4()),
-            suggestion,
-            docs: Some(format!("https://flapjack.dev/docs/errors/{}", error_code)),
+            status: status.as_u16(),
         };
 
         let mut response = (status, Json(error_response)).into_response();

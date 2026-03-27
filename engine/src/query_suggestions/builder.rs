@@ -96,13 +96,15 @@ pub async fn build_suggestions_index(
 
         let result = analytics_engine
             .top_searches(
-                &source.index_name,
-                &thirty_days_ago,
-                &today,
-                10_000,
+                &crate::analytics::AnalyticsQueryParams {
+                    index_name: &source.index_name,
+                    start_date: &thirty_days_ago,
+                    end_date: &today,
+                    limit: 10_000,
+                    tags: tags_opt.as_deref(),
+                },
                 false,
                 None,
-                tags_opt.as_deref(),
             )
             .await;
 

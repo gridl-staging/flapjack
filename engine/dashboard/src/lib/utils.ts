@@ -1,3 +1,6 @@
+/**
+ * @module Shared utility functions for class name merging (Tailwind), byte/date/duration/uptime formatting.
+ */
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -17,6 +20,11 @@ export function formatBytes(bytes: number, decimals = 2): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
+/**
+ * Formats a date as a human-readable relative time string (e.g. "just now", "5 mins ago", "3 days ago"), falling back to locale-formatted date for dates older than 7 days.
+ * @param date - ISO date string or Date object to format
+ * @returns A relative time string for recent dates, or a locale-formatted date string for older dates
+ */
 export function formatDate(date: string | Date): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   const now = new Date();

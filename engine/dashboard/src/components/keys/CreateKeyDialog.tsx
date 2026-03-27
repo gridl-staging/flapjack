@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from 'react';
+import { memo, useState, useCallback, useEffect } from 'react';
 import { Shield } from 'lucide-react';
 import { useCreateApiKey } from '@/hooks/useApiKeys';
 import { useIndexes } from '@/hooks/useIndexes';
@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
+import { normalizeRestrictSourcesInput } from './restrictSources';
 
 interface CreateKeyDialogProps {
   open: boolean;
@@ -32,6 +34,12 @@ const ACL_OPTIONS = [
   { value: 'analytics', label: 'Analytics', description: 'Access analytics data' },
 ];
 
+function toggleStringValue(values: string[], value: string): string[] {
+  return values.includes(value)
+    ? values.filter((currentValue) => currentValue !== value)
+    : [...values, value];
+}
+
 export const CreateKeyDialog = memo(function CreateKeyDialog({
   open,
   onOpenChange,
@@ -44,6 +52,22 @@ export const CreateKeyDialog = memo(function CreateKeyDialog({
   const [selectedIndexes, setSelectedIndexes] = useState<string[]>([]);
   const [maxHitsPerQuery, setMaxHitsPerQuery] = useState('');
   const [maxQueriesPerIPPerHour, setMaxQueriesPerIPPerHour] = useState('');
+  const [restrictSources, setRestrictSources] = useState('');
+
+  const resetForm = useCallback(() => {
+    setDescription('');
+    setSelectedAcl(['search']);
+    setSelectedIndexes([]);
+    setMaxHitsPerQuery('');
+    setMaxQueriesPerIPPerHour('');
+    setRestrictSources('');
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      resetForm();
+    }
+  }, [open, resetForm]);
 
   const handleCreate = useCallback(async () => {
     if (selectedAcl.length === 0) {
@@ -52,7 +76,8 @@ export const CreateKeyDialog = memo(function CreateKeyDialog({
     }
 
     try {
-      await createKey.mutateAsync({
+      const normalizedRestrictSources = normalizeRestrictSourcesInput(restrictSources);
+      const payload = {
         description: description || undefined,
         acl: selectedAcl,
         indexes: selectedIndexes.length > 0 ? selectedIndexes : undefined,
@@ -62,14 +87,14 @@ export const CreateKeyDialog = memo(function CreateKeyDialog({
         maxQueriesPerIPPerHour: maxQueriesPerIPPerHour
           ? parseInt(maxQueriesPerIPPerHour, 10)
           : undefined,
-      });
+        ...(normalizedRestrictSources.length > 0
+          ? { restrictSources: normalizedRestrictSources }
+          : {}),
+      };
 
-      // Reset form
-      setDescription('');
-      setSelectedAcl(['search']);
-      setSelectedIndexes([]);
-      setMaxHitsPerQuery('');
-      setMaxQueriesPerIPPerHour('');
+      await createKey.mutateAsync(payload);
+
+      resetForm();
       onOpenChange(false);
     } catch (err) {
       console.error('Failed to create key:', err);
@@ -80,24 +105,18 @@ export const CreateKeyDialog = memo(function CreateKeyDialog({
     selectedIndexes,
     maxHitsPerQuery,
     maxQueriesPerIPPerHour,
+    restrictSources,
     createKey,
     onOpenChange,
+    resetForm,
   ]);
 
   const toggleAcl = useCallback((value: string) => {
-    setSelectedAcl((prev) =>
-      prev.includes(value)
-        ? prev.filter((v) => v !== value)
-        : [...prev, value]
-    );
+    setSelectedAcl((prev) => toggleStringValue(prev, value));
   }, []);
 
   const toggleIndex = useCallback((indexUid: string) => {
-    setSelectedIndexes((prev) =>
-      prev.includes(indexUid)
-        ? prev.filter((v) => v !== indexUid)
-        : [...prev, indexUid]
-    );
+    setSelectedIndexes((prev) => toggleStringValue(prev, indexUid));
   }, []);
 
   return (
@@ -131,12 +150,14 @@ export const CreateKeyDialog = memo(function CreateKeyDialog({
               {ACL_OPTIONS.map((option) => (
                 <button
                   key={option.value}
+                  type="button"
                   onClick={() => toggleAcl(option.value)}
                   className={`text-left p-3 rounded-md border transition-colors ${
                     selectedAcl.includes(option.value)
                       ? 'border-primary bg-primary/10'
                       : 'border-border hover:border-primary/50'
                   }`}
+                  data-testid={`acl-option-${option.value}`}
                 >
                   <div className="font-medium text-sm">{option.label}</div>
                   <div className="text-xs text-muted-foreground">
@@ -195,6 +216,21 @@ export const CreateKeyDialog = memo(function CreateKeyDialog({
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Restrict Sources */}
+          <div className="space-y-2">
+            <Label htmlFor="restrict-sources-input">Restrict Sources (optional)</Label>
+            <p className="text-xs text-muted-foreground">
+              Enter one source per line or comma-separated (IP or CIDR range)
+            </p>
+            <Textarea
+              id="restrict-sources-input"
+              value={restrictSources}
+              onChange={(e) => setRestrictSources(e.target.value)}
+              placeholder={'10.0.0.0/8, 192.168.1.0/24'}
+              rows={3}
+            />
           </div>
 
           {/* Rate limits */}

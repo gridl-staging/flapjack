@@ -1,7 +1,12 @@
+//! Define the error type and result alias used throughout the flapjack-ssl crate.
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, FlapjackError>;
 
+/// Represent errors that can occur during SSL certificate provisioning and management.
+///
+/// Variants cover configuration issues, raw SSL errors, ACME protocol failures,
+/// I/O errors, X.509 parsing problems, and certificate generation failures.
 #[derive(Error, Debug)]
 pub enum FlapjackError {
     #[error("Configuration error: {0}")]

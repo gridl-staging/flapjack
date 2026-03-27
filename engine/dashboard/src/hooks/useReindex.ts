@@ -1,3 +1,6 @@
+/**
+ * @module Exports the `useReindex` hook, which performs a full re-index of a given index by browsing all documents, clearing the index, and batch-reinserting them while tracking progress in the UI.
+ */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
@@ -9,6 +12,15 @@ interface BrowseResponse {
   nbHits: number;
 }
 
+/**
+ * Provides a mutation that re-indexes all documents in the given index.
+ * 
+ * Browses every document via cursor pagination, clears the index (preserving settings), then re-adds all documents in batches of 1,000. Progress is tracked as an active task visible in the header indexing queue. On completion the search, indexes, and index-stats query caches are invalidated.
+ * 
+ * @param indexName - Name of the index to re-index.
+ * @returns A TanStack Query mutation object whose `mutate`/`mutateAsync` triggers the re-index.
+ * @throws When the index contains no documents.
+ */
 export function useReindex(indexName: string) {
   const queryClient = useQueryClient();
   const { toast } = useToast();

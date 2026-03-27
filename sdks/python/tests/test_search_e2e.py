@@ -1,5 +1,6 @@
 """End-to-end tests for flapjack-search Python SDK against a local Flapjack server."""
 
+import os
 import pytest
 
 from flapjacksearch.search.client import SearchClientSync
@@ -21,12 +22,17 @@ from flapjacksearch.search.models import (
 
 INDEX_NAME = "python-e2e-test"
 
+_APP_ID = os.environ.get("FLAPJACK_APP_ID", "test-app")
+_API_KEY = os.environ.get("FLAPJACK_API_KEY", "test-api-key")
+_HOST = os.environ.get("FLAPJACK_HOST", "localhost")
+_PORT = os.environ.get("FLAPJACK_PORT", "7700")
+
 
 @pytest.fixture(scope="module")
 def client():
-    config = SearchConfig("test-app", "test-api-key")
+    config = SearchConfig(_APP_ID, _API_KEY)
     config.hosts = HostsCollection(
-        [Host(url="localhost:7700", scheme="http", accept=CallType.READ | CallType.WRITE)]
+        [Host(url=f"{_HOST}:{_PORT}", scheme="http", accept=CallType.READ | CallType.WRITE)]
     )
     c = SearchClientSync.create_with_config(config=config)
     yield c
@@ -277,6 +283,124 @@ class TestRules:
         # Cleanup
         result = client.delete_rule(index_name=INDEX_NAME, object_id="rule-1")
         client.wait_for_task(index_name=INDEX_NAME, task_id=result.task_id)
+
+
+class TestBrowseCursorPagination:
+    def test_browse_with_cursor(self, client):
+        result = client.browse(
+            index_name=INDEX_NAME,
+            browse_params={"hitsPerPage": 2},
+        )
+        assert hasattr(result, "hits") or "hits" in (result if isinstance(result, dict) else {})
+        hits = result.hits if hasattr(result, "hits") else result["hits"]
+        assert len(hits) == 2
+
+        cursor = result.cursor if hasattr(result, "cursor") else result.get("cursor")
+        assert cursor is not None, "Expected cursor for pagination"
+
+        # Follow cursor
+        result2 = client.browse(
+            index_name=INDEX_NAME,
+            browse_params={"cursor": cursor, "hitsPerPage": 2},
+        )
+        hits2 = result2.hits if hasattr(result2, "hits") else result2["hits"]
+        assert len(hits2) >= 1, "Expected at least 1 hit on second page"
+
+
+class TestSettingsStage1:
+    def test_numeric_attributes_for_filtering_roundtrip(self, client):
+        result = client.set_settings(
+            index_name=INDEX_NAME,
+            index_settings=IndexSettings(
+                numeric_attributes_for_filtering=["price", "rating"],
+            ),
+        )
+        client.wait_for_task(index_name=INDEX_NAME, task_id=result.task_id)
+
+        settings = client.get_settings(index_name=INDEX_NAME)
+        attrs = settings.numeric_attributes_for_filtering
+        assert attrs is not None, "Expected numericAttributesForFiltering in settings"
+        assert "price" in attrs
+        assert "rating" in attrs
+
+    def test_unordered_searchable_attributes_roundtrip(self, client):
+        result = client.set_settings(
+            index_name=INDEX_NAME,
+            index_settings=IndexSettings(
+                searchable_attributes=["unordered(name)", "brand", "unordered(description)"],
+            ),
+        )
+        client.wait_for_task(index_name=INDEX_NAME, task_id=result.task_id)
+
+        settings = client.get_settings(index_name=INDEX_NAME)
+        assert "unordered(name)" in settings.searchable_attributes
+        assert "unordered(description)" in settings.searchable_attributes
+
+        # Restore
+        result = client.set_settings(
+            index_name=INDEX_NAME,
+            index_settings=IndexSettings(
+                searchable_attributes=["name", "brand", "category"],
+                attributes_for_faceting=["brand", "category"],
+            ),
+        )
+        client.wait_for_task(index_name=INDEX_NAME, task_id=result.task_id)
+
+    def test_allow_compression_of_integer_array_roundtrip(self, client):
+        result = client.set_settings(
+            index_name=INDEX_NAME,
+            index_settings=IndexSettings(
+                allow_compression_of_integer_array=True,
+            ),
+        )
+        client.wait_for_task(index_name=INDEX_NAME, task_id=result.task_id)
+
+        settings = client.get_settings(index_name=INDEX_NAME)
+        assert settings.allow_compression_of_integer_array is True
+
+
+class TestApiKeyCrud:
+    def test_api_key_lifecycle(self, client):
+        import json
+        import urllib.request
+
+        base_url = f"http://{_HOST}:{_PORT}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-algolia-api-key": _API_KEY,
+            "x-algolia-application-id": _APP_ID,
+        }
+
+        # Create
+        create_data = json.dumps({
+            "acl": ["search", "browse"],
+            "description": "Python SDK matrix test key",
+            "indexes": [INDEX_NAME],
+        }).encode()
+        req = urllib.request.Request(f"{base_url}/1/keys", data=create_data, headers=headers, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read())
+        assert "key" in result
+
+        key = result["key"]
+
+        # List
+        req = urllib.request.Request(f"{base_url}/1/keys", headers=headers)
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read())
+        assert "keys" in result
+        assert len(result["keys"]) >= 1
+
+        # Get
+        req = urllib.request.Request(f"{base_url}/1/keys/{key}", headers=headers)
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read())
+        assert result.get("value") == key
+
+        # Delete
+        req = urllib.request.Request(f"{base_url}/1/keys/{key}", headers=headers, method="DELETE")
+        with urllib.request.urlopen(req) as resp:
+            pass  # Just verify it doesn't error
 
 
 class TestUserAgent:

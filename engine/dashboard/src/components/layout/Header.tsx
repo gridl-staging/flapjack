@@ -1,3 +1,6 @@
+/**
+ * @module Application header component with branding, connection health indicator, indexing queue panel, and global action buttons.
+ */
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Moon, Sun, Settings, Menu, Loader2, ListTodo, Bug } from 'lucide-react';
@@ -14,6 +17,11 @@ interface HeaderProps {
   onMenuToggle?: () => void;
 }
 
+/**
+ * Top-level application header bar displaying the Flapjack logo, server connection status, indexing queue popover, and toolbar buttons for API docs, dev mode, theme toggle, and connection settings.
+ * 
+ * @param onMenuToggle - Callback fired when the mobile hamburger menu button is clicked.
+ */
 export function Header({ onMenuToggle }: HeaderProps) {
   const { theme, toggleTheme } = useTheme();
   const { apiKey } = useAuth();

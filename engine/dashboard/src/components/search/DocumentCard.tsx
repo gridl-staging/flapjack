@@ -1,9 +1,15 @@
 import { memo, useState, useMemo, lazy, Suspense } from 'react';
+import DOMPurify from 'dompurify';
 import { ChevronDown, ChevronRight, Copy, Check, Trash2, Code } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import type { Document } from '@/lib/types';
+import type { DisplayPreferences, Document } from '@/lib/types';
+
+/** Sanitize highlight HTML — only allow <em> tags used by the search highlighter. */
+function sanitizeHighlightHtml(html: string): string {
+  return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['em'], ALLOWED_ATTR: [] });
+}
 
 // Lazy load Monaco Editor for performance
 const Editor = lazy(() =>
@@ -13,6 +19,8 @@ const Editor = lazy(() =>
 );
 
 const PREVIEW_FIELD_COUNT = 6;
+const HIGHLIGHT_MARKUP_CLASS_NAME =
+  '[&>em]:bg-yellow-200 dark:[&>em]:bg-yellow-800 [&>em]:not-italic [&>em]:font-medium [&>em]:rounded-sm [&>em]:px-0.5';
 
 interface HighlightResultValue {
   value: string;
@@ -22,10 +30,12 @@ interface HighlightResultValue {
 }
 
 type HighlightResult = Record<string, HighlightResultValue | HighlightResultValue[] | Record<string, unknown>>;
+type FieldData = Record<string, unknown>;
 
 interface DocumentCardProps {
   document: Document;
   fieldOrder?: string[];
+  displayPreferences?: DisplayPreferences | null;
   onDelete?: (objectID: string) => void;
   isDeleting?: boolean;
   onClick?: () => void;
@@ -46,7 +56,7 @@ function getFieldDisplay(
   if (hr && typeof hr === 'object' && 'value' in hr) {
     const single = hr as HighlightResultValue;
     return {
-      html: single.value,
+      html: sanitizeHighlightHtml(single.value),
       hasMatch: single.matchLevel !== 'none',
     };
   }
@@ -55,7 +65,7 @@ function getFieldDisplay(
   if (Array.isArray(hr)) {
     const items = hr as HighlightResultValue[];
     return {
-      html: items.map((item) => item.value).join(', '),
+      html: sanitizeHighlightHtml(items.map((item) => item.value).join(', ')),
       hasMatch: items.some((item) => item.matchLevel !== 'none'),
     };
   }
@@ -80,9 +90,56 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function getSafeImageSrc(rawValue: unknown): string | null {
+  if (typeof rawValue !== 'string') {
+    return null;
+  }
+
+  const trimmedValue = rawValue.trim();
+  if (!trimmedValue) {
+    return null;
+  }
+
+  if (trimmedValue.startsWith('/')) {
+    return trimmedValue;
+  }
+
+  try {
+    const parsedUrl = new URL(trimmedValue);
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return null;
+    }
+
+    return trimmedValue;
+  } catch {
+    return null;
+  }
+}
+
+function hasOwnField(fieldData: FieldData, fieldName: string | null | undefined): fieldName is string {
+  if (typeof fieldName !== 'string' || fieldName.length === 0) {
+    return false;
+  }
+
+  return Object.prototype.hasOwnProperty.call(fieldData, fieldName);
+}
+
+function getConfiguredFieldDisplay(
+  fieldData: FieldData,
+  highlightResult: HighlightResult | undefined,
+  fieldName: string | null | undefined
+): { html: string; hasMatch: boolean } | null {
+  if (!hasOwnField(fieldData, fieldName)) {
+    return null;
+  }
+
+  return getFieldDisplay(fieldName, fieldData[fieldName], highlightResult);
+}
+
 export const DocumentCard = memo(function DocumentCard({
   document,
   fieldOrder,
+  displayPreferences,
   onDelete,
   isDeleting,
   onClick,
@@ -101,24 +158,128 @@ export const DocumentCard = memo(function DocumentCard({
     }
   };
 
-  const { objectID, _highlightResult, ...fieldData } = document;
+  const { objectID, _highlightResult, ...rawFieldData } = document;
+  const fieldData = rawFieldData as FieldData;
   const highlightResult = _highlightResult as HighlightResult | undefined;
+  const preferences = displayPreferences ?? null;
+
+  const consumedFields = useMemo(() => {
+    if (!preferences) {
+      return new Set<string>();
+    }
+
+    const consumed = new Set<string>();
+    const configuredFields = [
+      preferences.titleAttribute,
+      preferences.subtitleAttribute,
+      preferences.imageAttribute,
+      ...preferences.tagAttributes,
+    ];
+
+    for (const fieldName of configuredFields) {
+      if (hasOwnField(fieldData, fieldName)) {
+        consumed.add(fieldName);
+      }
+    }
+
+    return consumed;
+  }, [fieldData, preferences]);
+
+  const configuredTitle = useMemo(() => {
+    return getConfiguredFieldDisplay(fieldData, highlightResult, preferences?.titleAttribute);
+  }, [fieldData, highlightResult, preferences?.titleAttribute]);
+
+  const configuredSubtitle = useMemo(() => {
+    return getConfiguredFieldDisplay(fieldData, highlightResult, preferences?.subtitleAttribute);
+  }, [fieldData, highlightResult, preferences?.subtitleAttribute]);
+
+  const configuredImage = useMemo(() => {
+    const imageAttribute = preferences?.imageAttribute;
+    if (!hasOwnField(fieldData, imageAttribute)) {
+      return null;
+    }
+
+    const rawValue = fieldData[imageAttribute];
+    const display = getFieldDisplay(imageAttribute, rawValue, highlightResult);
+    const src = getSafeImageSrc(rawValue);
+
+    return {
+      src,
+      html: display.html,
+    };
+  }, [fieldData, highlightResult, preferences?.imageAttribute]);
+
+  const configuredTags = useMemo(() => {
+    if (!preferences || preferences.tagAttributes.length === 0) {
+      return [];
+    }
+
+    return preferences.tagAttributes.flatMap((tagAttribute) => {
+      if (!hasOwnField(fieldData, tagAttribute)) {
+        return [];
+      }
+
+      const rawValue = fieldData[tagAttribute];
+      if (rawValue === null || rawValue === undefined) {
+        return [];
+      }
+
+      if (Array.isArray(rawValue)) {
+        const tagHighlights = Array.isArray(highlightResult?.[tagAttribute])
+          ? (highlightResult[tagAttribute] as HighlightResultValue[])
+          : [];
+
+        return rawValue.map((item, index) => ({
+          key: `${tagAttribute}-${index}`,
+          html: getFieldDisplay(
+            tagAttribute,
+            item,
+            tagHighlights[index] ? { [tagAttribute]: tagHighlights[index] } : undefined
+          ).html,
+        }));
+      }
+
+      return [
+        {
+          key: tagAttribute,
+          html: getFieldDisplay(tagAttribute, rawValue, highlightResult).html,
+        },
+      ];
+    });
+  }, [fieldData, highlightResult, preferences]);
+
+  const hasConfiguredHeader =
+    Boolean(configuredTitle) ||
+    Boolean(configuredSubtitle) ||
+    Boolean(configuredImage) ||
+    configuredTags.length > 0;
 
   // Use stable field order from parent if provided, falling back to this doc's own keys.
   // This ensures every card in a result set shows fields in the same order.
   const allKeys = useMemo(() => {
-    if (!fieldOrder) return Object.keys(fieldData);
-    const docKeys = new Set(Object.keys(fieldData));
+    if (!fieldOrder) {
+      return Object.keys(fieldData);
+    }
+
+    const docKeys = Object.keys(fieldData);
+    const docKeySet = new Set(docKeys);
+    const canonicalFieldSet = new Set(fieldOrder);
     // Ordered keys present in this doc, then any extras not in the canonical order
-    const ordered = fieldOrder.filter((k) => docKeys.has(k));
-    for (const k of docKeys) {
-      if (!fieldOrder.includes(k)) ordered.push(k);
+    const ordered = fieldOrder.filter((key) => docKeySet.has(key));
+    for (const key of docKeys) {
+      if (!canonicalFieldSet.has(key)) {
+        ordered.push(key);
+      }
     }
     return ordered;
   }, [fieldData, fieldOrder]);
-  const previewKeys = allKeys.slice(0, PREVIEW_FIELD_COUNT);
-  const extraKeys = allKeys.slice(PREVIEW_FIELD_COUNT);
-  const visibleKeys = showAllFields ? allKeys : previewKeys;
+  const filteredKeys = useMemo(
+    () => allKeys.filter((key) => !consumedFields.has(key)),
+    [allKeys, consumedFields]
+  );
+  const previewKeys = filteredKeys.slice(0, PREVIEW_FIELD_COUNT);
+  const extraKeys = filteredKeys.slice(PREVIEW_FIELD_COUNT);
+  const visibleKeys = showAllFields ? filteredKeys : previewKeys;
 
   return (
     <Card
@@ -183,6 +344,58 @@ export const DocumentCard = memo(function DocumentCard({
           </div>
         </div>
 
+        {hasConfiguredHeader && (
+          <div className="mb-3 flex gap-3" data-testid="document-card-configured-header">
+            {configuredImage && (
+              <div className="shrink-0">
+                {configuredImage.src ? (
+                  <img
+                    src={configuredImage.src}
+                    alt=""
+                    className="h-16 w-16 rounded-md object-cover border"
+                    data-testid="document-card-image"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <span
+                    className={`text-xs text-muted-foreground break-words ${HIGHLIGHT_MARKUP_CLASS_NAME}`}
+                    dangerouslySetInnerHTML={{ __html: configuredImage.html }}
+                  />
+                )}
+              </div>
+            )}
+
+            <div className="min-w-0 flex-1">
+              {configuredTitle && (
+                <div
+                  className={`font-semibold leading-tight min-w-0 break-words ${HIGHLIGHT_MARKUP_CLASS_NAME}`}
+                  data-testid="document-card-title"
+                  dangerouslySetInnerHTML={{ __html: configuredTitle.html }}
+                />
+              )}
+              {configuredSubtitle && (
+                <div
+                  className={`text-sm text-muted-foreground mt-1 min-w-0 break-words ${HIGHLIGHT_MARKUP_CLASS_NAME}`}
+                  data-testid="document-card-subtitle"
+                  dangerouslySetInnerHTML={{ __html: configuredSubtitle.html }}
+                />
+              )}
+              {configuredTags.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {configuredTags.map((tag) => (
+                    <Badge key={tag.key} variant="secondary" className="text-xs">
+                      <span
+                        className={`break-words ${HIGHLIGHT_MARKUP_CLASS_NAME}`}
+                        dangerouslySetInnerHTML={{ __html: tag.html }}
+                      />
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Field display with highlighting */}
         {!showJson && (
           <div className="space-y-1.5 text-sm">
@@ -194,7 +407,7 @@ export const DocumentCard = memo(function DocumentCard({
                     {key}:
                   </span>
                   <span
-                    className="min-w-0 break-words [&>em]:bg-yellow-200 dark:[&>em]:bg-yellow-800 [&>em]:not-italic [&>em]:font-medium [&>em]:rounded-sm [&>em]:px-0.5"
+                    className={`min-w-0 break-words ${HIGHLIGHT_MARKUP_CLASS_NAME}`}
                     dangerouslySetInnerHTML={{ __html: html }}
                   />
                 </div>

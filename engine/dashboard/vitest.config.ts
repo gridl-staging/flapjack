@@ -9,8 +9,14 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './tests/setup.ts',
     css: true,
-    // Run unit tests in src/ plus clone-local config parser tests at repo root.
-    include: ['src/**/*.{test,spec}.{ts,tsx}', 'local-instance-config.test.ts'],
+    // Run unit tests in src/ plus clone-local config/startup tests at repo root.
+    include: [
+      'src/**/*.{test,spec}.{ts,tsx}',
+      'local-instance-config.test.ts',
+      'playwright-webserver.test.ts',
+      'vite.config.test.ts',
+      'playwright.config.test.ts',
+    ],
     exclude: ['node_modules', 'dist', 'tests/**/*.spec.ts'],
     coverage: {
       provider: 'v8',

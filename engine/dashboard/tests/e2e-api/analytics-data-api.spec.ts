@@ -1,4 +1,5 @@
 import { test, expect } from '../fixtures/auth.fixture';
+import type { APIRequestContext } from '@playwright/test';
 import { seedAnalytics, deleteIndex, DEFAULT_ANALYTICS_CONFIG } from '../fixtures/analytics-seed';
 import { API_BASE as API, API_HEADERS as H } from '../fixtures/local-instance';
 
@@ -23,7 +24,12 @@ const EXPECTED = {
   gbPct: DEFAULT_ANALYTICS_CONFIG.countryDistribution.GB,
 };
 
-async function skipIfNoServer({ request }: { request: any }) {
+type DailyCount = { date: string; count: number };
+type DailyRate = { rate: number };
+type PlatformCount = { platform: string; count: number };
+type CountryCount = { country: string; count: number };
+
+async function skipIfNoServer({ request }: { request: APIRequestContext }) {
   try {
     const res = await request.get(`${API}/health`, { timeout: 3000 });
     if (!res.ok()) test.skip(true, 'Flapjack server not available');
@@ -60,14 +66,15 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       params: { index: INDEX, startDate, endDate },
       headers: H,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const data = await res.json();
     expect(data.count).toBeGreaterThanOrEqual(EXPECTED.totalSearches * 0.9);
-    expect(data.dates).toBeDefined();
-    expect(data.dates.length).toBeGreaterThan(0);
-    const dailySum = data.dates.reduce((s: number, d: any) => s + d.count, 0);
+    expect(Array.isArray(data.dates)).toBe(true);
+    const dates = data.dates as DailyCount[];
+    expect(dates.length).toBeGreaterThan(0);
+    const dailySum = dates.reduce((s, d) => s + d.count, 0);
     expect(dailySum).toBe(data.count);
-    for (const d of data.dates) {
+    for (const d of dates) {
       expect(d.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(d.count).toBeGreaterThanOrEqual(0);
     }
@@ -79,6 +86,8 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       request.get(`${API}/2/users/count`, { params: { index: INDEX, startDate, endDate }, headers: H }),
       request.get(`${API}/2/searches/count`, { params: { index: INDEX, startDate, endDate }, headers: H }),
     ]);
+    expect(usersRes.status()).toBe(200);
+    expect(countRes.status()).toBe(200);
     const users = await usersRes.json();
     const searches = await countRes.json();
     expect(users.count).toBeGreaterThanOrEqual(EXPECTED.uniqueUsers * 0.9);
@@ -91,12 +100,14 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       params: { index: INDEX, startDate, endDate },
       headers: H,
     });
+    expect(res.status()).toBe(200);
     const data = await res.json();
     expect(data.rate).toBeGreaterThanOrEqual(0);
     expect(data.rate).toBeLessThanOrEqual(1);
     expect(data.rate).toBeCloseTo(EXPECTED.noResultRate, 1);
-    expect(data.dates).toBeDefined();
-    for (const d of data.dates) {
+    expect(Array.isArray(data.dates)).toBe(true);
+    const dates = data.dates as DailyRate[];
+    for (const d of dates) {
       expect(d.rate).toBeGreaterThanOrEqual(0);
       expect(d.rate).toBeLessThanOrEqual(1);
     }
@@ -107,6 +118,7 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       params: { index: INDEX, ...getDateRange(), limit: '20' },
       headers: H,
     });
+    expect(res.status()).toBe(200);
     const data = await res.json();
     expect(data.searches.length).toBeGreaterThan(0);
     for (let i = 1; i < data.searches.length; i++) {
@@ -124,6 +136,7 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       params: { index: INDEX, ...getDateRange(), limit: '50' },
       headers: H,
     });
+    expect(res.status()).toBe(200);
     const data = await res.json();
     expect(data.searches.length).toBeGreaterThan(0);
     for (const s of data.searches) {
@@ -138,20 +151,21 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       request.get(`${API}/2/devices`, { params: { index: INDEX, startDate, endDate }, headers: H }),
       request.get(`${API}/2/searches/count`, { params: { index: INDEX, startDate, endDate }, headers: H }),
     ]);
+    expect(devicesRes.status()).toBe(200);
+    expect(countRes.status()).toBe(200);
     const devices = await devicesRes.json();
     const searches = await countRes.json();
-    const platforms = devices.platforms as any[];
+    const platforms = devices.platforms as PlatformCount[];
     expect(platforms.length).toBeGreaterThanOrEqual(2);
-    const platformSum = platforms.reduce((s: number, p: any) => s + p.count, 0);
+    const platformSum = platforms.reduce((s, p) => s + p.count, 0);
     expect(platformSum).toBe(searches.count);
     const validPlatforms = ['desktop', 'mobile', 'tablet', 'unknown'];
     for (const p of platforms) {
       expect(validPlatforms).toContain(p.platform);
       expect(p.count).toBeGreaterThan(0);
     }
-    const desktop = platforms.find((p: any) => p.platform === 'desktop');
-    expect(desktop).toBeDefined();
-    expect(desktop.count).toBeGreaterThan(platformSum * (EXPECTED.desktopPct - 0.1));
+    const desktopCount = platforms.find((p) => p.platform === 'desktop')?.count ?? 0;
+    expect(desktopCount).toBeGreaterThan(platformSum * (EXPECTED.desktopPct - 0.1));
   });
 
   test('geo breakdown sums to total searches', async ({ request }) => {
@@ -160,14 +174,17 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       request.get(`${API}/2/geo`, { params: { index: INDEX, startDate, endDate }, headers: H }),
       request.get(`${API}/2/searches/count`, { params: { index: INDEX, startDate, endDate }, headers: H }),
     ]);
+    expect(geoRes.status()).toBe(200);
+    expect(countRes.status()).toBe(200);
     const geo = await geoRes.json();
     const searches = await countRes.json();
-    expect(geo.countries.length).toBeGreaterThanOrEqual(3);
+    const countries = geo.countries as CountryCount[];
+    expect(countries.length).toBeGreaterThanOrEqual(3);
     expect(geo.total).toBe(searches.count);
-    const countrySum = geo.countries.reduce((s: number, c: any) => s + c.count, 0);
+    const countrySum = countries.reduce((s, c) => s + c.count, 0);
     expect(countrySum).toBe(geo.total);
-    expect(geo.countries[0].country).toBe('US');
-    for (const c of geo.countries) {
+    expect(countries[0].country).toBe('US');
+    for (const c of countries) {
       expect(c.country).toMatch(/^[A-Z]{2}$/);
       expect(c.count).toBeGreaterThan(0);
     }
@@ -179,6 +196,9 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       request.get(`${API}/2/searches`, { params: { index: INDEX, ...getDateRange(), limit: '5', country: 'US' }, headers: H }),
       request.get(`${API}/2/searches`, { params: { index: INDEX, ...getDateRange(), limit: '5', country: 'GB' }, headers: H }),
     ]);
+    expect(allRes.status()).toBe(200);
+    expect(usRes.status()).toBe(200);
+    expect(gbRes.status()).toBe(200);
     const all = await allRes.json();
     const us = await usRes.json();
     const gb = await gbRes.json();
@@ -192,6 +212,8 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       request.get(`${API}/2/searches`, { params: { index: INDEX, ...getDateRange(), limit: '5' }, headers: H }),
       request.get(`${API}/2/searches`, { params: { index: INDEX, ...getDateRange(), limit: '5', tags: 'platform:desktop' }, headers: H }),
     ]);
+    expect(allRes.status()).toBe(200);
+    expect(desktopRes.status()).toBe(200);
     const all = await allRes.json();
     const desktop = await desktopRes.json();
     expect(desktop.searches[0].count).toBeLessThan(all.searches[0].count);
@@ -203,7 +225,7 @@ test.describe('Analytics Data API Verification (no browser)', () => {
       params: { index: INDEX, ...getDateRange() },
       headers: H,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const data = await res.json();
     expect(data.searches.length).toBeGreaterThan(0);
     for (const s of data.searches) {

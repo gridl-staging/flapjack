@@ -56,6 +56,8 @@ pub enum MergeStrategy {
     CategoryCounts,
     /// HLL sketch merge for unique user counts.
     UserCountHll,
+    /// Sum revenue per currency, merge daily breakdowns by date+currency. Used by conversions/revenue.
+    CurrencyRevenue,
     /// Custom merge for overview (multi-index summary).
     Overview,
     /// No merge needed (local-only endpoints like status).
@@ -76,12 +78,16 @@ pub fn merge_strategy_for_endpoint(endpoint: &str) -> MergeStrategy {
         "clicks/averageClickPosition" => MergeStrategy::WeightedAvg,
         "clicks/positions" => MergeStrategy::Histogram,
         "conversions/conversionRate" => MergeStrategy::Rate,
+        "conversions/addToCartRate" => MergeStrategy::Rate,
+        "conversions/purchaseRate" => MergeStrategy::Rate,
+        "conversions/revenue" => MergeStrategy::CurrencyRevenue,
         "hits" => MergeStrategy::TopK,
         "filters" => MergeStrategy::TopK,
         "filters/noResults" => MergeStrategy::TopK,
         "users/count" => MergeStrategy::UserCountHll,
         "devices" => MergeStrategy::CategoryCounts,
         "geo" => MergeStrategy::CategoryCounts,
+        "countries" => MergeStrategy::CategoryCounts,
         "overview" => MergeStrategy::Overview,
         "status" => MergeStrategy::None,
         _ => {
@@ -141,6 +147,22 @@ mod tests {
     fn strategy_click_through_rate_is_rate() {
         assert!(matches!(
             merge_strategy_for_endpoint("clicks/clickThroughRate"),
+            MergeStrategy::Rate
+        ));
+    }
+
+    #[test]
+    fn strategy_add_to_cart_rate_is_rate() {
+        assert!(matches!(
+            merge_strategy_for_endpoint("conversions/addToCartRate"),
+            MergeStrategy::Rate
+        ));
+    }
+
+    #[test]
+    fn strategy_purchase_rate_is_rate() {
+        assert!(matches!(
+            merge_strategy_for_endpoint("conversions/purchaseRate"),
             MergeStrategy::Rate
         ));
     }
@@ -222,6 +244,22 @@ mod tests {
         assert!(matches!(
             merge_strategy_for_endpoint("geo/US"),
             MergeStrategy::TopK
+        ));
+    }
+
+    #[test]
+    fn strategy_revenue_is_currency_revenue() {
+        assert!(matches!(
+            merge_strategy_for_endpoint("conversions/revenue"),
+            MergeStrategy::CurrencyRevenue
+        ));
+    }
+
+    #[test]
+    fn strategy_countries_is_category_counts() {
+        assert!(matches!(
+            merge_strategy_for_endpoint("countries"),
+            MergeStrategy::CategoryCounts
         ));
     }
 

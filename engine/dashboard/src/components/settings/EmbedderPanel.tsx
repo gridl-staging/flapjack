@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { type ReactNode, memo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -9,18 +9,41 @@ import type { EmbedderConfig, IndexSettings } from '@/lib/types';
 
 interface EmbedderPanelProps {
   embedders: Record<string, EmbedderConfig> | undefined;
+  vectorSearchEnabled: boolean | undefined;
   onChange: (updates: Partial<IndexSettings>) => void;
+}
+
+const EMBEDDER_PANEL_DESCRIPTION = 'Configure embedding models for vector search';
+
+function EmbedderPanelNotice({
+  children,
+  testId,
+}: {
+  children: ReactNode;
+  testId: string;
+}) {
+  return (
+    <SettingSection title="Embedders" description={EMBEDDER_PANEL_DESCRIPTION}>
+      <div data-testid="embedder-panel" className="space-y-3">
+        <p data-testid={testId} className="text-sm text-muted-foreground">
+          {children}
+        </p>
+      </div>
+    </SettingSection>
+  );
 }
 
 export const EmbedderPanel = memo(function EmbedderPanel({
   embedders,
+  vectorSearchEnabled,
   onChange,
 }: EmbedderPanelProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<{ name: string; config: EmbedderConfig } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
-  const entries = Object.entries(embedders || {});
+  const currentEmbedders = embedders ?? {};
+  const entries = Object.entries(currentEmbedders);
 
   function handleAdd() {
     setEditTarget(null);
@@ -34,21 +57,38 @@ export const EmbedderPanel = memo(function EmbedderPanel({
 
   function handleSave(name: string, config: EmbedderConfig) {
     onChange({
-      embedders: { ...(embedders || {}), [name]: config },
+      embedders: { ...currentEmbedders, [name]: config },
     });
   }
 
   function handleConfirmDelete() {
-    if (!deleteTarget || !embedders) return;
-    const { [deleteTarget]: _, ...rest } = embedders;
+    if (!deleteTarget) return;
+    const { [deleteTarget]: _removedEmbedder, ...rest } = currentEmbedders;
     onChange({ embedders: rest });
     setDeleteTarget(null);
+  }
+
+  if (vectorSearchEnabled === undefined) {
+    return (
+      <EmbedderPanelNotice testId="embedder-panel-capability-pending">
+        Waiting for server capability data before configuring embedders.
+      </EmbedderPanelNotice>
+    );
+  }
+
+  if (vectorSearchEnabled === false) {
+    return (
+      <EmbedderPanelNotice testId="embedder-panel-compiled-out">
+        Vector search is not compiled in for this server build. Use Docker or a macOS
+        release to work with embedders in the dashboard.
+      </EmbedderPanelNotice>
+    );
   }
 
   return (
     <SettingSection
       title="Embedders"
-      description="Configure embedding models for vector search"
+      description={EMBEDDER_PANEL_DESCRIPTION}
     >
       <div data-testid="embedder-panel" className="space-y-3">
         {entries.length === 0 && (
@@ -86,7 +126,11 @@ export const EmbedderPanel = memo(function EmbedderPanel({
 
       <ConfirmDialog
         open={!!deleteTarget}
-        onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null);
+          }
+        }}
         title="Delete Embedder"
         description={
           <>

@@ -1,3 +1,6 @@
+/**
+ * @module Authentication gate and login screen that protect the Flapjack dashboard behind Admin API key validation.
+ */
 import { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,6 +11,13 @@ import { KeyRound, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 
 type ValidationState = 'idle' | 'validating' | 'valid' | 'invalid';
 
+/**
+ * Guards the application behind API key authentication.
+ * 
+ * On mount, validates any stored API key against the server. If the key is missing or stale (403), clears it and shows the login screen. While validation is in progress, renders a loading spinner.
+ * 
+ * @param children - Application content to render once authenticated
+ */
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { apiKey, clearAuth } = useAuth();
   const [needsAuth, setNeedsAuth] = useState<boolean | null>(null);
@@ -55,6 +65,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Login screen for entering and validating an Admin API key.
+ * 
+ * Submits the key to the server's indexes endpoint for validation. On success, persists the key via the auth store after a brief visual confirmation delay. Displays contextual help for locating or resetting the key.
+ */
 function AuthScreen() {
   const { setApiKey } = useAuth();
   const [keyInput, setKeyInput] = useState('');

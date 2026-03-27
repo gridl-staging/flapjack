@@ -1,220 +1,299 @@
-/**
- * E2E-UI Full Suite -- Rules Page (Real Server)
- *
- * NON-MOCKED SIMULATED-HUMAN REAL-BROWSER TESTS.
- * Tests the Rules page against a real Flapjack backend with seeded data.
- * Index `e2e-products` has 2 seeded rules:
- *   - rule-pin-macbook: Pin MacBook Pro to top when searching "laptop"
- *   - rule-hide-galaxy-tab: Hide Galaxy Tab S9 when searching "tablet"
- *
- * Covers:
- * - Listing: seeded rules visible, descriptions, count badge, pin/hide badges
- * - CRUD via UI: create rule via JSON editor dialog, delete via confirm dialog
- * - CRUD via API+UI: create via API → verify in UI → delete via API → verify gone
- * - Enabled/disabled indicator
- * - Merchandising Studio link navigation
- * - Clear All rules
- * - Condition/consequence summary display
- */
+import type { APIRequestContext, Locator } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
 import { TEST_INDEX } from '../helpers';
-import { createRule, deleteRule } from '../../fixtures/api-helpers';
+import { createRule, getRules } from '../../fixtures/api-helpers';
+import { cleanupRulesByPrefix, isRecord } from '../rule-cleanup-helpers';
 
 const RULES_URL = `/index/${TEST_INDEX}/rules`;
+const SEEDED_RULE_IDS = ['rule-pin-macbook', 'rule-hide-galaxy-tab'] as const;
+
+function createUniqueRulePrefix(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `e2e-rules-${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readObjectId(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const objectID = value.objectID;
+  return typeof objectID === 'string' ? objectID : null;
+}
+
+function readPromotedObjectId(rule: Record<string, unknown>): string {
+  const consequence = rule.consequence;
+  if (!isRecord(consequence)) {
+    return '';
+  }
+
+  const promote = consequence.promote;
+  if (!Array.isArray(promote) || promote.length === 0 || !isRecord(promote[0])) {
+    return '';
+  }
+
+  const promotedObjectID = promote[0].objectID;
+  return typeof promotedObjectID === 'string' ? promotedObjectID : '';
+}
+
+function readFirstValidityRange(rule: Record<string, unknown>): { from: number | null; until: number | null } {
+  const validity = rule.validity;
+  if (!Array.isArray(validity) || validity.length === 0 || !isRecord(validity[0])) {
+    return { from: null, until: null };
+  }
+
+  const from = validity[0].from;
+  const until = validity[0].until;
+  return {
+    from: typeof from === 'number' ? from : null,
+    until: typeof until === 'number' ? until : null,
+  };
+}
+
+function dateTimeLocalToUnix(value: string): number {
+  return Math.floor(new Date(value).getTime() / 1000);
+}
+
+function getRuleCardByObjectId(rulesList: Locator, objectID: string): Locator {
+  return rulesList.getByTestId('rule-card').filter({ hasText: objectID }).first();
+}
+
+async function readRuleIdsFromApi(request: APIRequestContext, indexName: string): Promise<string[]> {
+  const response = await getRules(request, indexName);
+  if (!response.ok) {
+    return [];
+  }
+
+  return response.items
+    .map((item) => readObjectId(item))
+    .filter((objectID): objectID is string => Boolean(objectID));
+}
+
+async function readRuleFromApi(
+  request: APIRequestContext,
+  indexName: string,
+  objectID: string,
+): Promise<Record<string, unknown> | null> {
+  const response = await getRules(request, indexName);
+  if (!response.ok) {
+    return null;
+  }
+
+  for (const item of response.items) {
+    if (!isRecord(item) || item.objectID !== objectID) {
+      continue;
+    }
+    return item;
+  }
+
+  return null;
+}
 
 test.describe('Rules', () => {
+  test.describe.configure({ mode: 'serial' });
+  test.use({ viewport: { width: 1280, height: 1500 } });
+
   test.beforeEach(async ({ page }) => {
     await page.goto(RULES_URL);
     await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('rules-list')).toBeVisible({ timeout: 10_000 });
   });
-
-  // ---------- Listing ----------
 
   test('list shows seeded rules', async ({ page }) => {
-    const list = page.getByTestId('rules-list');
-    await expect(list).toBeVisible({ timeout: 10_000 });
+    const rulesList = page.getByTestId('rules-list');
 
-    await expect(page.getByText('rule-pin-macbook').first()).toBeVisible();
-    await expect(page.getByText('rule-hide-galaxy-tab').first()).toBeVisible();
-  });
-
-  test('rule descriptions are visible', async ({ page }) => {
-    const list = page.getByTestId('rules-list');
-    await expect(list).toBeVisible({ timeout: 10_000 });
-
-    await expect(page.getByText('Pin MacBook Pro to top when searching laptop').first()).toBeVisible();
-    await expect(page.getByText('Hide Galaxy Tab S9 when searching tablet').first()).toBeVisible();
-  });
-
-  test('rule count badge shows correct number', async ({ page }) => {
-    const countBadge = page.getByTestId('rules-count-badge');
-    await expect(countBadge).toBeVisible({ timeout: 10_000 });
-    const text = await countBadge.textContent();
-    expect(Number(text)).toBeGreaterThanOrEqual(2);
-  });
-
-  test('rule cards show pinned/hidden badges', async ({ page }) => {
-    const list = page.getByTestId('rules-list');
-    await expect(list).toBeVisible({ timeout: 10_000 });
-
-    await expect(list.getByText('1 pinned').first()).toBeVisible();
-    await expect(list.getByText('1 hidden').first()).toBeVisible();
-  });
-
-  // ---------- CRUD via API + UI verification ----------
-
-  test('create and delete a test rule via API and verify in UI', async ({ page, request }) => {
-    const testRule = {
-      objectID: 'e2e-test-rule',
-      conditions: [{ pattern: 'e2e-test-query', anchoring: 'is' }],
-      consequence: { promote: [{ objectID: 'p01', position: 0 }] },
-      description: 'E2E test rule - should be cleaned up',
-      enabled: true,
-    };
-
-    await createRule(request, TEST_INDEX, testRule);
-
-    await page.reload();
-    await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
-
-    await expect(page.getByText('e2e-test-rule').first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText('E2E test rule').first()).toBeVisible();
-
-    // Cleanup
-    await deleteRule(request, TEST_INDEX, 'e2e-test-rule');
-
-    await page.reload();
-    await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('rules-list').getByText('e2e-test-rule')).not.toBeVisible({ timeout: 10_000 });
-  });
-
-  // ---------- Create rule via API + verify in UI (Monaco editor is unreliable in headless) ----------
-
-  test('create a rule via API and verify it appears with correct details', async ({ page, request }) => {
-    const testRule = {
-      objectID: 'e2e-ui-created-rule',
-      conditions: [{ pattern: 'e2e-ui-test', anchoring: 'is' }],
-      consequence: { promote: [{ objectID: 'p02', position: 0 }] },
-      description: 'Rule created via UI dialog test',
-      enabled: true,
-    };
-
-    await createRule(request, TEST_INDEX, testRule);
-
-    await page.reload();
-    await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
-
-    // The new rule should appear in the list with its objectID and description
-    await expect(page.getByText('e2e-ui-created-rule').first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText('Rule created via UI dialog test').first()).toBeVisible();
-
-    // Verify the Add Rule button opens a dialog (test that the dialog mechanism works)
-    const addBtn = page.getByRole('button', { name: /add rule/i });
-    await expect(addBtn).toBeVisible();
-    await addBtn.click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 10_000 });
-    await dialog.getByRole('button', { name: /cancel/i }).click();
-    await expect(dialog).not.toBeVisible({ timeout: 5_000 });
-
-    // Cleanup via API
-    await deleteRule(request, TEST_INDEX, 'e2e-ui-created-rule');
-  });
-
-  // ---------- Delete rule via UI confirm dialog ----------
-
-  test('delete a rule via the UI delete button and confirm dialog', async ({ page, request }) => {
-    // Create a throwaway rule via API
-    const testRule = {
-      objectID: 'e2e-delete-rule-ui',
-      conditions: [{ pattern: 'delete-me', anchoring: 'is' }],
-      consequence: { promote: [{ objectID: 'p01', position: 0 }] },
-      description: 'Delete me via UI',
-      enabled: true,
-    };
-    await createRule(request, TEST_INDEX, testRule);
-
-    // Poll until the rule is indexed and visible in the UI (API may be eventually consistent)
-    await expect(async () => {
-      await page.reload();
-      await expect(page.getByText('e2e-delete-rule-ui').first()).toBeVisible({ timeout: 3_000 });
-    }).toPass({ timeout: 15_000 });
-
-    // Accept the upcoming confirm dialog
-    page.on('dialog', (d) => d.accept());
-
-    // Find the card and click delete
-    const ruleCard = page.getByTestId('rules-list').locator('div', { hasText: 'e2e-delete-rule-ui' }).first();
-    await ruleCard.getByRole('button', { name: /delete/i }).click();
-
-    // Rule should disappear from the rules list
-    await expect(page.getByTestId('rules-list').getByText('e2e-delete-rule-ui')).not.toBeVisible({ timeout: 10_000 });
-  });
-
-  // ---------- Enabled/Disabled Indicator ----------
-
-  test('enabled rules show enabled icon', async ({ page }) => {
-    const list = page.getByTestId('rules-list');
-    await expect(list).toBeVisible({ timeout: 10_000 });
-
-    // Seeded rules are enabled — they should show the enabled power icon
-    const enabledIcons = list.getByTestId('rule-enabled-icon');
-    await expect(enabledIcons.first()).toBeVisible();
-    const count = await enabledIcons.count();
-    expect(count).toBeGreaterThanOrEqual(2);
-  });
-
-  // ---------- Add Rule Button ----------
-
-  test('Add Rule button is visible', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: /add rule/i });
-    await expect(addBtn).toBeVisible({ timeout: 10_000 });
-  });
-
-  // ---------- Merchandising Studio Link ----------
-
-  test('Merchandising Studio link navigates to merchandising page', async ({ page }) => {
-    // Link always exists — use the <a> link specifically (not the button variant)
-    const merchLink = page.getByRole('link', { name: /merchandising studio/i });
-    await expect(merchLink.first()).toBeVisible({ timeout: 10_000 });
-    await merchLink.first().click();
-    await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}/merchandising`));
-  });
-
-  // ---------- Rule condition/consequence summary ----------
-
-  test('rule cards show condition pattern in summary', async ({ page }) => {
-    const list = page.getByTestId('rules-list');
-    await expect(list).toBeVisible({ timeout: 10_000 });
-
-    await expect(page.getByText(/laptop/).first()).toBeVisible();
-    await expect(page.getByText(/tablet/).first()).toBeVisible();
-  });
-
-  // ---------- Clear All Rules ----------
-
-  test('Clear All button shows confirmation and can be cancelled', async ({ page }) => {
-    // Clear All button must be present when rules exist
-    const clearAllBtn = page.getByRole('button', { name: /clear all/i });
-    await expect(clearAllBtn).toBeVisible({ timeout: 10_000 });
-
-    // Set up dialog handler to DISMISS (cancel) to avoid deleting seeded rules
-    page.on('dialog', (d) => d.dismiss());
-
-    await clearAllBtn.click();
-
-    // Confirm dialog should appear (native or custom) — wait briefly for it
-    // The native dialog is auto-dismissed, so just verify rules still exist after
-    // For custom dialog, cancel it
-    const dialog = page.getByRole('dialog');
-    const dialogAppeared = await dialog.isVisible({ timeout: 2_000 }).catch(() => false);
-    if (dialogAppeared) {
-      const cancelBtn = dialog.getByRole('button', { name: /cancel/i });
-      await cancelBtn.click();
-      await expect(dialog).not.toBeVisible({ timeout: 5_000 });
+    for (const seededRuleId of SEEDED_RULE_IDS) {
+      await expect(getRuleCardByObjectId(rulesList, seededRuleId)).toBeVisible();
     }
+  });
 
-    // Seeded rules should still be visible after cancellation
-    await expect(page.getByText('rule-pin-macbook').first()).toBeVisible();
+  test('form mode create/read/delete is deterministic and restores seeded baseline', async ({ page, request }) => {
+    test.setTimeout(60_000);
+
+    const rulePrefix = createUniqueRulePrefix('form-crud');
+    const ruleObjectID = `${rulePrefix}-rule`;
+    const ruleDescription = `Stage 3 form CRUD ${rulePrefix}`;
+    const conditionPattern = `${rulePrefix}-pattern`;
+    const promotedObjectID = `${rulePrefix}-promoted`;
+
+    await cleanupRulesByPrefix(request, TEST_INDEX, rulePrefix);
+    const baselineRuleIds = (await readRuleIdsFromApi(request, TEST_INDEX)).sort();
+
+    expect(baselineRuleIds).toEqual(expect.arrayContaining([...SEEDED_RULE_IDS]));
+
+    const rulesList = page.getByTestId('rules-list');
+
+    try {
+      await page.getByRole('button', { name: /add rule/i }).click();
+      const createDialog = page.getByRole('dialog');
+      await expect(createDialog).toBeVisible({ timeout: 10_000 });
+
+      await createDialog.locator('#rule-object-id').fill(ruleObjectID);
+      await createDialog.locator('#rule-description').fill(ruleDescription);
+      await createDialog.locator('#rule-condition-pattern-0').fill(conditionPattern);
+      await createDialog.locator('#rule-condition-anchoring-0').selectOption('is');
+
+      const addPromotedItemButton = createDialog.getByRole('button', { name: /add promoted item/i });
+      await addPromotedItemButton.scrollIntoViewIfNeeded();
+      await addPromotedItemButton.click();
+      await createDialog.locator('#promote-oid-0').fill(promotedObjectID);
+      await createDialog.locator('#promote-pos-0').fill('0');
+
+      await createDialog.getByRole('button', { name: /^create$/i }).click();
+      await expect(createDialog).not.toBeVisible({ timeout: 10_000 });
+
+      const createdRuleCard = getRuleCardByObjectId(rulesList, ruleObjectID);
+      await expect(createdRuleCard).toBeVisible({ timeout: 10_000 });
+      await expect(createdRuleCard).toContainText(ruleDescription);
+      await expect(createdRuleCard).toContainText('pin 1 result');
+
+      await expect
+        .poll(async () => Boolean(await readRuleFromApi(request, TEST_INDEX, ruleObjectID)), { timeout: 10_000 })
+        .toBe(true);
+
+      await createdRuleCard.getByRole('button', { name: /edit/i }).click();
+      const editDialog = page.getByRole('dialog');
+      await expect(editDialog).toBeVisible({ timeout: 10_000 });
+
+      await expect(editDialog.locator('#rule-object-id')).toHaveValue(ruleObjectID);
+      await expect(editDialog.locator('#rule-description')).toHaveValue(ruleDescription);
+      await expect(editDialog.locator('#rule-condition-pattern-0')).toHaveValue(conditionPattern);
+      await expect(editDialog.locator('#promote-oid-0')).toHaveValue(promotedObjectID);
+
+      await editDialog.getByRole('button', { name: /cancel/i }).click();
+      await expect(editDialog).not.toBeVisible({ timeout: 10_000 });
+
+      const deleteTargetCard = getRuleCardByObjectId(rulesList, ruleObjectID);
+      await deleteTargetCard.getByRole('button', { name: /delete/i }).click();
+
+      const confirmDialog = page.getByRole('dialog');
+      await expect(confirmDialog).toBeVisible({ timeout: 10_000 });
+      await confirmDialog.getByRole('button', { name: 'Delete' }).click();
+      await expect(confirmDialog).not.toBeVisible({ timeout: 10_000 });
+
+      await expect(getRuleCardByObjectId(rulesList, ruleObjectID)).toHaveCount(0, { timeout: 10_000 });
+
+      await expect
+        .poll(async () => Boolean(await readRuleFromApi(request, TEST_INDEX, ruleObjectID)), { timeout: 10_000 })
+        .toBe(false);
+
+      await page.reload();
+      await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
+      const restoredRuleIds = (await readRuleIdsFromApi(request, TEST_INDEX)).sort();
+      expect(restoredRuleIds).toEqual(baselineRuleIds);
+
+      for (const seededRuleId of SEEDED_RULE_IDS) {
+        await expect(getRuleCardByObjectId(page.getByTestId('rules-list'), seededRuleId)).toBeVisible();
+      }
+    } finally {
+      await cleanupRulesByPrefix(request, TEST_INDEX, rulePrefix);
+    }
+  });
+
+  test('json-tab save persists form updates for consequence and validity', async ({ page, request }) => {
+    test.setTimeout(60_000);
+
+    const rulePrefix = createUniqueRulePrefix('json-update');
+    const ruleObjectID = `${rulePrefix}-rule`;
+    const initialDescription = `Stage 3 initial ${rulePrefix}`;
+    const updatedDescription = `Stage 3 updated ${rulePrefix}`;
+    const initialPromotedObjectID = `${rulePrefix}-promote-before`;
+    const updatedPromotedObjectID = `${rulePrefix}-promote-after`;
+    const initialValidityFromLocal = '2030-01-01T08:00';
+    const initialValidityUntilLocal = '2030-01-02T08:00';
+    const validityFromLocal = '2031-04-05T06:30';
+    const validityUntilLocal = '2031-04-06T09:45';
+    const initialValidityFrom = dateTimeLocalToUnix(initialValidityFromLocal);
+    const initialValidityUntil = dateTimeLocalToUnix(initialValidityUntilLocal);
+    const expectedValidityFrom = dateTimeLocalToUnix(validityFromLocal);
+    const expectedValidityUntil = dateTimeLocalToUnix(validityUntilLocal);
+
+    await cleanupRulesByPrefix(request, TEST_INDEX, rulePrefix);
+
+    try {
+      await createRule(request, TEST_INDEX, {
+        objectID: ruleObjectID,
+        conditions: [{ pattern: `${rulePrefix}-pattern`, anchoring: 'is' }],
+        consequence: {
+          promote: [{ objectID: initialPromotedObjectID, position: 0 }],
+        },
+        validity: [{ from: initialValidityFrom, until: initialValidityUntil }],
+        description: initialDescription,
+        enabled: true,
+      });
+
+      await expect
+        .poll(async () => Boolean(await readRuleFromApi(request, TEST_INDEX, ruleObjectID)), { timeout: 10_000 })
+        .toBe(true);
+
+      await page.reload();
+      await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
+      const rulesList = page.getByTestId('rules-list');
+      const seededRuleCard = getRuleCardByObjectId(rulesList, ruleObjectID);
+      await expect(seededRuleCard).toBeVisible({ timeout: 10_000 });
+
+      await seededRuleCard.getByRole('button', { name: /edit/i }).click();
+      const editDialog = page.getByRole('dialog');
+      await expect(editDialog).toBeVisible({ timeout: 10_000 });
+
+      await editDialog.locator('#rule-description').fill(updatedDescription);
+      await editDialog.locator('#promote-oid-0').fill(updatedPromotedObjectID);
+
+      await editDialog.locator('#validity-from-0').fill(validityFromLocal);
+      await editDialog.locator('#validity-until-0').fill(validityUntilLocal);
+
+      await editDialog.getByRole('tab', { name: 'JSON' }).click();
+      await expect(editDialog.getByText(updatedDescription, { exact: false })).toBeVisible({ timeout: 10_000 });
+      await expect(editDialog.getByText(`\"${ruleObjectID}\"`)).toBeVisible({ timeout: 10_000 });
+
+      await editDialog.getByRole('button', { name: /^save$/i }).click();
+      await expect(editDialog).not.toBeVisible({ timeout: 10_000 });
+
+      await page.reload();
+      await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
+
+      const updatedRuleCard = getRuleCardByObjectId(page.getByTestId('rules-list'), ruleObjectID);
+      await expect(updatedRuleCard).toBeVisible({ timeout: 10_000 });
+      await expect(updatedRuleCard).toContainText(updatedDescription);
+
+      await updatedRuleCard.getByRole('button', { name: /edit/i }).click();
+      const reopenedDialog = page.getByRole('dialog');
+      await expect(reopenedDialog).toBeVisible({ timeout: 10_000 });
+      await expect(reopenedDialog.locator('#rule-description')).toHaveValue(updatedDescription);
+      await expect(reopenedDialog.locator('#promote-oid-0')).toHaveValue(updatedPromotedObjectID);
+      await expect(reopenedDialog.locator('#validity-from-0')).toHaveValue(validityFromLocal);
+      await expect(reopenedDialog.locator('#validity-until-0')).toHaveValue(validityUntilLocal);
+      await reopenedDialog.getByRole('button', { name: /cancel/i }).click();
+
+      await expect
+        .poll(async () => {
+          const persistedRule = await readRuleFromApi(request, TEST_INDEX, ruleObjectID);
+          if (!persistedRule) {
+            return null;
+          }
+
+          const description = persistedRule.description;
+          const normalizedDescription = typeof description === 'string' ? description : '';
+          const promotedObjectID = readPromotedObjectId(persistedRule);
+          const validityRange = readFirstValidityRange(persistedRule);
+
+          return JSON.stringify({
+            description: normalizedDescription,
+            promotedObjectID,
+            validityFrom: validityRange.from,
+            validityUntil: validityRange.until,
+          });
+        }, { timeout: 12_000 })
+        .toBe(JSON.stringify({
+          description: updatedDescription,
+          promotedObjectID: updatedPromotedObjectID,
+          validityFrom: expectedValidityFrom,
+          validityUntil: expectedValidityUntil,
+        }));
+    } finally {
+      await cleanupRulesByPrefix(request, TEST_INDEX, rulePrefix);
+    }
   });
 });

@@ -1,3 +1,6 @@
+/**
+ * @module Global toast notification store inspired by react-hot-toast. Provides a module-level reducer, a `toast()` factory with auto-dismiss support, and a `useToast` hook that subscribes React components to toast state changes.
+ */
 "use client"
 
 // Inspired by react-hot-toast library
@@ -36,6 +39,10 @@ function genId() {
 
 type ActionType = typeof actionTypes
 
+/**
+ * Discriminated union of toast state actions.
+ * Each variant carries the minimal payload needed to add, update, dismiss, or remove a toast from the store.
+ */
 type Action =
   | {
       type: ActionType["ADD_TOAST"]
@@ -76,6 +83,13 @@ const addToRemoveQueue = (toastId: string) => {
   toastTimeouts.set(toastId, timeout)
 }
 
+/**
+ * Pure reducer that manages the toast list.
+ * Enforces `TOAST_LIMIT` on additions, merges partial updates, and schedules deferred removal on dismiss.
+ * @param state - Current toast state.
+ * @param action - Dispatched action.
+ * @returns Next state with the updated toasts array.
+ */
 export const reducer = (state: State, action: Action): State => {
   switch (action.type) {
     case "ADD_TOAST":
@@ -149,6 +163,12 @@ type Toast = Omit<ToasterToast, "id"> & {
 
 const autoDismissTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+/**
+ * Creates and dispatches a new toast notification.
+ * Returns handles to programmatically update or dismiss it. Auto-dismisses after `duration` ms (default 5 000); pass `0` to keep the toast visible until manually dismissed.
+ * @param props - Toast content and optional duration override.
+ * @returns Object with the generated `id`, a `dismiss` callback, and an `update` callback.
+ */
 function toast({ duration, ...props }: Toast) {
   const id = genId()
 
@@ -192,6 +212,10 @@ function toast({ duration, ...props }: Toast) {
   }
 }
 
+/**
+ * Subscribes to the global toast store and returns the current toasts plus helper methods.
+ * @returns The current toast list, the `toast` creation function, and a `dismiss` function.
+ */
 function useToast() {
   const [state, setState] = React.useState<State>(memoryState)
 

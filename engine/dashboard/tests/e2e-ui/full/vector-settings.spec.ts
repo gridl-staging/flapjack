@@ -10,46 +10,107 @@
  * - Embedder deletion via confirm dialog
  * - Settings persistence after save + reload
  */
+import type { Page, Response } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
-import { TEST_INDEX } from '../helpers';
 import {
   configureEmbedder,
-  clearEmbedders,
+  createIndex,
+  deleteIndex,
   getSettings,
+  isVectorSearchEnabled,
+  readEmbeddersFromSettings,
   updateSettings,
+  waitForEmbedder,
+  waitForEmbedderRemoval,
 } from '../../fixtures/api-helpers';
 
+async function openVectorTab(page: Page) {
+  await page.getByRole('tab', { name: 'Vector / AI' }).click();
+  await expect(page.getByRole('tabpanel', { name: 'Vector / AI' })).toBeVisible({
+    timeout: 10_000,
+  });
+}
+
+function isSettingsUpdateResponse(response: Response, indexName: string): boolean {
+  return (
+    response.request().method() === 'PUT' &&
+    response.url().includes(`/indexes/${indexName}/settings`) &&
+    [200, 202].includes(response.status())
+  );
+}
+
+async function saveVectorSettings(page: Page, indexName: string): Promise<void> {
+  const saveButton = page.getByRole('button', { name: /save/i });
+  await expect(saveButton).toBeVisible({ timeout: 5_000 });
+  const saveResponsePromise = page.waitForResponse(
+    (response) => isSettingsUpdateResponse(response, indexName),
+    { timeout: 15_000 },
+  );
+  await saveButton.click();
+  await saveResponsePromise;
+}
+
+async function expectVectorCapabilityCompiledOut(page: Page): Promise<void> {
+  await expect(page.getByTestId('search-mode-compiled-out-warning')).toBeVisible();
+  await expect(page.getByTestId('embedder-panel-compiled-out')).toBeVisible();
+  await expect(page.getByRole('option', { name: 'Neural Search' })).toBeDisabled();
+}
+
 test.describe('Vector Search Settings', () => {
-  // Tests modify shared index settings — must run serially (not in parallel)
+  // Tests mutate a dedicated index and still run serially to avoid cross-test state races.
   test.describe.configure({ mode: 'serial' });
 
+  let vectorTestIndex = '';
   let originalSettings: Record<string, unknown>;
+  let vectorSearchEnabled = true;
+
+  const getOriginalVectorMode = (): string => {
+    const originalMode = originalSettings.mode;
+    return typeof originalMode === 'string' ? originalMode : 'keywordSearch';
+  };
+
+  const getOriginalEmbedders = (): Record<string, unknown> => {
+    return readEmbeddersFromSettings(originalSettings);
+  };
+
+  test.beforeAll(async ({ request }) => {
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    vectorTestIndex = `e2e-vector-settings-${uniqueSuffix}`;
+    vectorSearchEnabled = await isVectorSearchEnabled(request);
+    await deleteIndex(request, vectorTestIndex);
+    await createIndex(request, vectorTestIndex);
+  });
 
   test.beforeEach(async ({ request, page }) => {
     // Save original settings for cleanup
-    originalSettings = await getSettings(request, TEST_INDEX);
+    originalSettings = await getSettings(request, vectorTestIndex);
 
     // Seed a userProvided embedder for tests that need existing embedders
-    await configureEmbedder(request, TEST_INDEX, 'default', {
+    await configureEmbedder(request, vectorTestIndex, 'default', {
       source: 'userProvided',
       dimensions: 384,
     });
 
-    await page.goto(`/index/${TEST_INDEX}/settings`);
+    await page.goto(`/index/${vectorTestIndex}/settings`);
     await expect(
       page.getByRole('heading', { name: /settings/i }),
     ).toBeVisible({ timeout: 10_000 });
+    await openVectorTab(page);
   });
 
   test.afterEach(async ({ request }) => {
-    // Restore original settings + explicitly clear vector search fields.
-    // getSettings doesn't return embedders/mode when at defaults, so a plain
-    // PUT roundtrip won't clear them — we must include them explicitly.
-    await updateSettings(request, TEST_INDEX, {
-      ...originalSettings,
-      embedders: {},
-      mode: 'keywordSearch',
+    // Restore only the vector fields this spec mutates so we do not
+    // overwrite unrelated settings from concurrent specs.
+    await updateSettings(request, vectorTestIndex, {
+      embedders: getOriginalEmbedders(),
+      mode: getOriginalVectorMode(),
     });
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (vectorTestIndex) {
+      await deleteIndex(request, vectorTestIndex);
+    }
   });
 
   // ---- Load-and-verify (10.21 vector-settings-1) ----
@@ -57,8 +118,13 @@ test.describe('Vector Search Settings', () => {
   test('displays search mode and embedders sections with seeded data', async ({
     page,
   }) => {
+    if (!vectorSearchEnabled) {
+      await expectVectorCapabilityCompiledOut(page);
+      return;
+    }
+
     // Search Mode section
-    await expect(page.getByText('Search Mode').first()).toBeVisible({
+    await expect(page.getByTestId('search-mode-select')).toBeVisible({
       timeout: 10_000,
     });
 
@@ -78,11 +144,46 @@ test.describe('Vector Search Settings', () => {
     ).toBeVisible();
   });
 
-  // ---- Set search mode (10.21 vector-settings-2) ----
-
-  test('set search mode to Neural Search and verify persistence', async ({
+  test('shows compiled-out messaging when vector capability is disabled', async ({
     page,
   }) => {
+    await page.route('**/health', async (route) => {
+      const response = await route.fetch();
+      const health = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...health,
+          capabilities: {
+            ...health.capabilities,
+            vectorSearch: false,
+            vectorSearchLocal: false,
+          },
+        },
+      });
+    });
+
+    await page.goto(`/index/${vectorTestIndex}/settings`);
+    await expect(
+      page.getByRole('heading', { name: /settings/i }),
+    ).toBeVisible({ timeout: 10_000 });
+    await openVectorTab(page);
+
+    await expect(page.getByTestId('search-mode-compiled-out-warning')).toBeVisible();
+    await expect(page.getByTestId('embedder-panel-compiled-out')).toBeVisible();
+    await expect(
+      page.getByTestId('embedder-panel').getByText('No embedders configured'),
+    ).not.toBeVisible();
+  });
+
+  // ---- Set search mode (10.21 vector-settings-2) ----
+
+  test('set search mode to Neural Search and verify persistence', async ({ page }) => {
+    if (!vectorSearchEnabled) {
+      await expectVectorCapabilityCompiledOut(page);
+      return;
+    }
+
     await expect(page.getByTestId('search-mode-select')).toBeVisible({
       timeout: 10_000,
     });
@@ -90,25 +191,14 @@ test.describe('Vector Search Settings', () => {
     // Select Neural Search
     await page.getByTestId('search-mode-select').selectOption('neuralSearch');
 
-    // Save button should appear
-    const saveBtn = page.getByRole('button', { name: /save/i });
-    await expect(saveBtn).toBeVisible({ timeout: 5_000 });
-
-    // Click Save and wait for response
-    const responsePromise = page.waitForResponse(
-      (resp) =>
-        resp.url().includes('/settings') &&
-        (resp.status() === 200 || resp.status() === 202),
-      { timeout: 15_000 },
-    );
-    await saveBtn.click();
-    await responsePromise;
+    await saveVectorSettings(page, vectorTestIndex);
 
     // Reload and verify persistence
     await page.reload();
     await expect(
       page.getByRole('heading', { name: /settings/i }),
     ).toBeVisible({ timeout: 10_000 });
+    await openVectorTab(page);
     await expect(page.getByTestId('search-mode-select')).toHaveValue(
       'neuralSearch',
       { timeout: 10_000 },
@@ -117,7 +207,12 @@ test.describe('Vector Search Settings', () => {
 
   // ---- Add embedder (10.21 vector-settings-3) ----
 
-  test('add userProvided embedder via dialog', async ({ page }) => {
+  test('add userProvided embedder via dialog', async ({ page, request }) => {
+    if (!vectorSearchEnabled) {
+      await expectVectorCapabilityCompiledOut(page);
+      return;
+    }
+
     await expect(page.getByTestId('add-embedder-btn')).toBeVisible({
       timeout: 10_000,
     });
@@ -144,23 +239,15 @@ test.describe('Vector Search Settings', () => {
     });
     await expect(page.getByTestId('embedder-card-test-emb')).toBeVisible();
 
-    // Save settings
-    const saveBtn = page.getByRole('button', { name: /save/i });
-    await expect(saveBtn).toBeVisible({ timeout: 5_000 });
-    const responsePromise = page.waitForResponse(
-      (resp) =>
-        resp.url().includes('/settings') &&
-        (resp.status() === 200 || resp.status() === 202),
-      { timeout: 15_000 },
-    );
-    await saveBtn.click();
-    await responsePromise;
+    await saveVectorSettings(page, vectorTestIndex);
+    await waitForEmbedder(request, vectorTestIndex, 'test-emb');
 
     // Reload and verify persistence
     await page.reload();
     await expect(
       page.getByRole('heading', { name: /settings/i }),
     ).toBeVisible({ timeout: 10_000 });
+    await openVectorTab(page);
     await expect(page.getByTestId('embedder-card-test-emb')).toBeVisible({
       timeout: 10_000,
     });
@@ -168,7 +255,12 @@ test.describe('Vector Search Settings', () => {
 
   // ---- Delete embedder (10.21 vector-settings-5) ----
 
-  test('delete an embedder via confirm dialog', async ({ page }) => {
+  test('delete an embedder via confirm dialog', async ({ page, request }) => {
+    if (!vectorSearchEnabled) {
+      await expectVectorCapabilityCompiledOut(page);
+      return;
+    }
+
     // Verify seeded embedder exists
     await expect(page.getByTestId('embedder-card-default')).toBeVisible({
       timeout: 10_000,
@@ -188,23 +280,15 @@ test.describe('Vector Search Settings', () => {
       page.getByTestId('embedder-card-default'),
     ).not.toBeVisible({ timeout: 5_000 });
 
-    // Save settings
-    const saveBtn = page.getByRole('button', { name: /save/i });
-    await expect(saveBtn).toBeVisible({ timeout: 5_000 });
-    const responsePromise = page.waitForResponse(
-      (resp) =>
-        resp.url().includes('/settings') &&
-        (resp.status() === 200 || resp.status() === 202),
-      { timeout: 15_000 },
-    );
-    await saveBtn.click();
-    await responsePromise;
+    await saveVectorSettings(page, vectorTestIndex);
+    await waitForEmbedderRemoval(request, vectorTestIndex, 'default');
 
     // Reload and verify persistence
     await page.reload();
     await expect(
       page.getByRole('heading', { name: /settings/i }),
     ).toBeVisible({ timeout: 10_000 });
+    await openVectorTab(page);
     // Should show "No embedders configured" in the embedder panel
     // (scoped to avoid matching the SearchModeSection warning badge)
     await expect(
@@ -214,9 +298,12 @@ test.describe('Vector Search Settings', () => {
 
   // ---- Persistence (10.21 vector-settings-6) ----
 
-  test('embedder settings persist after save and navigation', async ({
-    page,
-  }) => {
+  test('embedder settings persist after save and navigation', async ({ page, request }) => {
+    if (!vectorSearchEnabled) {
+      await expectVectorCapabilityCompiledOut(page);
+      return;
+    }
+
     await expect(page.getByTestId('add-embedder-btn')).toBeVisible({
       timeout: 10_000,
     });
@@ -234,29 +321,21 @@ test.describe('Vector Search Settings', () => {
       timeout: 5_000,
     });
 
-    // Save settings
-    const saveBtn = page.getByRole('button', { name: /save/i });
-    await expect(saveBtn).toBeVisible({ timeout: 5_000 });
-    const responsePromise = page.waitForResponse(
-      (resp) =>
-        resp.url().includes('/settings') &&
-        (resp.status() === 200 || resp.status() === 202),
-      { timeout: 15_000 },
-    );
-    await saveBtn.click();
-    await responsePromise;
+    await saveVectorSettings(page, vectorTestIndex);
+    await waitForEmbedder(request, vectorTestIndex, 'persist-test');
 
     // Navigate away to search page
-    await page.goto(`/index/${TEST_INDEX}`);
+    await page.goto(`/index/${vectorTestIndex}`);
     await expect(
       page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
     ).toBeVisible({ timeout: 15_000 });
 
     // Navigate back to settings
-    await page.goto(`/index/${TEST_INDEX}/settings`);
+    await page.goto(`/index/${vectorTestIndex}/settings`);
     await expect(
       page.getByRole('heading', { name: /settings/i }),
     ).toBeVisible({ timeout: 10_000 });
+    await openVectorTab(page);
 
     // Verify both embedders still present
     await expect(page.getByTestId('embedder-card-default')).toBeVisible({

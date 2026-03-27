@@ -1,7 +1,13 @@
+//! Synonym storage and query-expansion engine supporting Algolia-compatible synonym types (regular, one-way, alt-correction, placeholder) with persistence, text search, and pagination.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// A search synonym rule compatible with the Algolia synonym API.
+///
+/// Variants map to the five Algolia synonym types: regular (bidirectional), one-way,
+/// alt-correction (levels 1 and 2), and placeholder. Each variant carries an `objectID`
+/// used as the storage key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 #[serde(rename_all = "lowercase")]
@@ -63,6 +69,7 @@ impl Synonym {
         }
     }
 
+    /// Check whether any term in this synonym (input, word, synonyms, corrections, replacements, or placeholder) contains the given text as a case-insensitive substring.
     pub fn matches_text(&self, text: &str) -> bool {
         let lower = text.to_lowercase();
         match self {
@@ -135,6 +142,10 @@ impl SynonymStore {
         self.synonyms.get(object_id)
     }
 
+    pub fn values(&self) -> impl Iterator<Item = &Synonym> {
+        self.synonyms.values()
+    }
+
     pub fn insert(&mut self, synonym: Synonym) {
         self.synonyms
             .insert(synonym.object_id().to_string(), synonym);
@@ -148,6 +159,15 @@ impl SynonymStore {
         self.synonyms.clear();
     }
 
+    /// Search and paginate stored synonyms, optionally filtering by query text and synonym type.
+    ///
+    /// When `query` is non-empty, only synonyms matching via `Synonym::matches_text` are included.
+    /// When `synonym_type` is `Some`, only synonyms whose `synonym_type()` equals the given string
+    /// are included.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of the current page of results and the total number of matching synonyms.
     pub fn search(
         &self,
         query: &str,
@@ -185,6 +205,17 @@ impl SynonymStore {
         (page_items, total)
     }
 
+    /// Expand a query string into alternative queries by substituting matching synonym terms.
+    ///
+    /// For `Regular` synonyms, each whitespace-delimited token is checked against the synonym
+    /// list and replaced with every alternative. For `OneWay` synonyms, the input phrase is
+    /// replaced with each target synonym (but not in reverse). Alt-correction and placeholder
+    /// synonyms are not expanded.
+    ///
+    /// # Returns
+    ///
+    /// A vector whose first element is always the original query, followed by any generated
+    /// alternatives. Returns a single-element vector when no synonyms match.
     pub fn expand_query(&self, query: &str) -> Vec<String> {
         let tokens: Vec<&str> = query.split_whitespace().collect();
         let mut expanded = vec![query.to_string()];
@@ -262,6 +293,7 @@ mod tests {
         assert_eq!(s.object_id(), "ow-1");
     }
 
+    /// Verify that `synonym_type` returns the correct Algolia-compatible type tag for each variant.
     #[test]
     fn synonym_type_variants() {
         assert_eq!(regular("r", &["a"]).synonym_type(), "synonym");

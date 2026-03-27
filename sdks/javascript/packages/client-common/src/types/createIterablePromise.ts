@@ -1,3 +1,8 @@
+/**
+ */
+/**
+ * TODO: Document IterableOptions.
+ */
 export type IterableOptions<TResponse> = Partial<{
   /**
    * The function that runs right after the API call has been resolved, allows you to do anything with the response before `validate`.

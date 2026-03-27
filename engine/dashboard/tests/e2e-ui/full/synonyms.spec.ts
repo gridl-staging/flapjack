@@ -86,11 +86,18 @@ test.describe('Synonyms', () => {
     await expect(dialog).not.toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/test = testing = qa/).first()).toBeVisible({ timeout: 10_000 });
 
-    // Cleanup: delete the synonym
-    page.on('dialog', (d) => d.accept());
+    // Cleanup: delete the synonym via ConfirmDialog
     const synonymCard = page.getByTestId('synonyms-list').locator('div', { hasText: 'test = testing = qa' }).first();
     await synonymCard.getByRole('button', { name: /Delete/i }).click();
-    await expect(page.getByText('test = testing = qa')).not.toBeVisible({ timeout: 10_000 });
+
+    const confirmDialog = page.getByRole('dialog');
+    await expect(confirmDialog).toBeVisible({ timeout: 5_000 });
+    await confirmDialog.getByRole('button', { name: 'Delete' }).click();
+    await expect(confirmDialog).not.toBeVisible({ timeout: 5_000 });
+
+    await expect(
+      page.getByTestId('synonyms-list').locator('div', { hasText: 'test = testing = qa' })
+    ).toHaveCount(0, { timeout: 10_000 });
   });
 
   // ---------- Create one-way synonym via UI ----------

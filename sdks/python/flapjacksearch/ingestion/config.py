@@ -1,3 +1,5 @@
+"""
+"""
 from os import environ
 from typing import Optional
 
@@ -8,6 +10,7 @@ from flapjacksearch.http.user_agent import UserAgent
 
 
 class IngestionConfig(BaseConfig):
+    """TODO: Document IngestionConfig."""
     def __init__(
         self, app_id: Optional[str], api_key: Optional[str], region: str = ""
     ) -> None:

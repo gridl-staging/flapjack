@@ -1,3 +1,4 @@
+//! Statistical testing utilities for A/B experiments: delta-method and Welch z/t-tests, Bayesian beta-binomial comparison, CUPED variance reduction, interleaving preference scoring, SRM detection, guard-rail alerting, and sample-size estimation.
 use std::collections::{HashMap, HashSet};
 
 // ── Result Structs ──────────────────────────────────────────────────
@@ -19,6 +20,15 @@ pub struct StatGate {
 }
 
 impl StatGate {
+    /// Construct a readiness gate that checks whether both minimum sample-size and minimum-duration thresholds have been met.
+    ///
+    /// # Arguments
+    ///
+    /// * `control_searches` - Observed searches in the control arm.
+    /// * `variant_searches` - Observed searches in the variant arm.
+    /// * `required_per_arm` - Minimum searches required in each arm.
+    /// * `elapsed_days` - Days elapsed since experiment start.
+    /// * `minimum_days` - Minimum calendar days before results may be read.
     pub fn new(
         control_searches: u64,
         variant_searches: u64,
@@ -586,6 +596,15 @@ fn regularized_incomplete_beta(a: f64, b: f64, x: f64) -> f64 {
     }
 }
 
+/// Evaluate the Lentz continued-fraction expansion for the regularized incomplete beta function I_x(a, b).
+///
+/// Converges within `MAX_ITERS` iterations to relative tolerance `EPS`. Uses the modified Lentz algorithm with floor `FPMIN` to avoid division by zero.
+///
+/// # Arguments
+///
+/// * `a` - First shape parameter (> 0).
+/// * `b` - Second shape parameter (> 0).
+/// * `x` - Evaluation point in (0, 1).
 fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
     const MAX_ITERS: usize = 200;
     const EPS: f64 = 3.0e-7;
@@ -656,6 +675,21 @@ fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
 /// Controlled Experiments by Utilizing Pre-Experiment Data."
 pub const CUPED_MIN_MATCHED_USERS: usize = 100;
 
+/// Apply CUPED (Controlled-experiment Using Pre-Existing Data) variance reduction to per-user experiment metric tuples.
+///
+/// Adjust each matched user's observed rate by subtracting θ·(Xᵢ − X̄), where θ = Cov(Y, X) / Var(X). Users without a covariate entry pass through unchanged.
+///
+/// Return the original values unmodified when fewer than `CUPED_MIN_MATCHED_USERS` users match or Var(X) ≈ 0.
+///
+/// # Arguments
+///
+/// * `experiment_values` - Per-user `(clicks, searches)` tuples.
+/// * `user_ids` - User identifier for each tuple, same length as `experiment_values`.
+/// * `covariates` - Pre-experiment metric keyed by user ID.
+///
+/// # Returns
+///
+/// A new vector of `(adjusted_clicks, searches)` tuples with the same length as the input.
 pub fn cuped_adjust(
     experiment_values: &[(f64, f64)],
     user_ids: &[String],
@@ -838,6 +872,7 @@ mod tests {
 
     // ── Delta method z-test ─────────────────────────────────────────
 
+    /// Verify that the delta-method z-test detects significance and positive relative improvement for a large CTR difference (10% vs 14%) at n = 5000 per arm.
     #[test]
     fn delta_method_returns_significant_for_large_effect() {
         let control: Vec<(f64, f64)> = (0..5000)
@@ -1201,6 +1236,7 @@ mod tests {
 
     // ── CUPED Variance Reduction ────────────────────────────────────
 
+    /// Verify that CUPED adjustment reduces per-user rate variance when pre-experiment covariates are strongly correlated with the experiment metric.
     #[test]
     fn cuped_adjustment_reduces_variance() {
         // Construct correlated pre/post data where CUPED should help.
@@ -1246,6 +1282,7 @@ mod tests {
         );
     }
 
+    /// Verify that CUPED returns the original values unchanged when all covariates are identical (Var(X) = 0).
     #[test]
     fn cuped_adjustment_zero_covariance_returns_original() {
         // Uncorrelated data: pre-experiment metric is random noise, not correlated
@@ -1284,6 +1321,7 @@ mod tests {
         }
     }
 
+    /// Verify that positively correlated covariates produce a positive θ, increasing rates for low-covariate users and decreasing rates for high-covariate users.
     #[test]
     fn cuped_theta_sign_is_correct() {
         // Positive covariance: higher pre-metric → higher post-metric → theta > 0
@@ -1314,6 +1352,7 @@ mod tests {
         );
     }
 
+    /// Verify that CUPED adjusts only users with covariate data and passes unmatched users through unchanged when coverage exceeds CUPED_MIN_MATCHED_USERS.
     #[test]
     fn cuped_adjustment_partial_coverage() {
         // 200 users, but only first 120 have pre-experiment data (above MIN_MATCHED_USERS=100)
@@ -1350,6 +1389,7 @@ mod tests {
 
     // ── Interleaving preference scoring tests ───────────────────────────
 
+    /// Verify that variant (Team B) winning more queries produces a negative ΔAB and correct win/tie tallies.
     #[test]
     fn interleaving_preference_score_variant_wins() {
         // Variant (Team B) wins more queries → negative ΔAB
@@ -1370,6 +1410,7 @@ mod tests {
         assert_eq!(result.ties, 0);
     }
 
+    /// Verify that control (Team A) winning more queries produces a positive ΔAB.
     #[test]
     fn interleaving_preference_score_control_wins() {
         // Control (Team A) wins more queries → positive ΔAB
@@ -1389,6 +1430,7 @@ mod tests {
         assert_eq!(result.ties, 0);
     }
 
+    /// Verify that equal win counts produce a ΔAB of zero and ties are counted separately.
     #[test]
     fn interleaving_preference_score_tie() {
         let per_query = vec![
@@ -1408,6 +1450,7 @@ mod tests {
         );
     }
 
+    /// Verify that a lopsided split (25 vs 5 wins) reaches significance at α = 0.05 using the normal-approximation sign test.
     #[test]
     fn interleaving_sign_test_significant() {
         // 30 queries, 25 won by B, 5 by A → should be significant
@@ -1426,6 +1469,7 @@ mod tests {
         );
     }
 
+    /// Verify that a near-even split (6 vs 4 wins) at small n does not reach significance at α = 0.05.
     #[test]
     fn interleaving_sign_test_not_significant() {
         // 10 queries, 6 won by B, 4 by A → should NOT be significant (too few, too balanced)
@@ -1444,6 +1488,7 @@ mod tests {
         );
     }
 
+    /// Verify that ties are excluded from the sign test denominator so only non-tied queries determine significance.
     #[test]
     fn interleaving_sign_test_ignores_ties() {
         // 3 ties + 20 wins by B + 2 wins by A → ties excluded from sign test

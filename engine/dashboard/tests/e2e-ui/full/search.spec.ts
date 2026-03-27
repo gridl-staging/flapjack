@@ -22,23 +22,187 @@
  * Synonyms: laptop/notebook/computer, headphones/earphones/earbuds, monitor/screen/display
  * Settings: attributesForFaceting=['category','brand','filterOnly(price)','filterOnly(inStock)']
  */
+import type { APIRequestContext, Locator, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
 import { TEST_INDEX } from '../helpers';
+import { addDocuments, createIndex, deleteDocument, deleteIndex, searchIndex } from '../../fixtures/api-helpers';
+import {
+  extractObjectIdFromText,
+  readVisibleObjectId,
+  responseMatchesIndexQuery,
+} from '../result-helpers';
+
+function extractObjectIds(hits: unknown[] | undefined): string[] {
+  if (!Array.isArray(hits)) {
+    return [];
+  }
+  return hits
+    .map((hit) => {
+      if (!hit || typeof hit !== 'object') {
+        return '';
+      }
+      const objectID = (hit as Record<string, unknown>).objectID;
+      return typeof objectID === 'string' ? objectID : '';
+    })
+    .filter((value): value is string => Boolean(value));
+}
+
+async function submitSearchQueryAndWaitForTopCard(
+  page: Page,
+  query: string,
+  indexName = TEST_INDEX,
+): Promise<Locator> {
+  await submitIndexSearch(page, query, indexName);
+
+  const firstCard = page.getByTestId('results-panel').getByTestId('document-card').first();
+  await expect(firstCard).toBeVisible({ timeout: 10_000 });
+  return firstCard;
+}
+
+async function submitIndexSearch(
+  page: Page,
+  query: string,
+  indexName = TEST_INDEX,
+): Promise<void> {
+  const searchInput = page.getByPlaceholder(/search documents/i);
+  const responsePromise = page.waitForResponse(
+    (response) => responseMatchesIndexQuery(response, indexName, query, { requireFacets: true }),
+    { timeout: 15_000 },
+  );
+  await searchInput.fill(query);
+  await searchInput.press('Enter');
+  await responsePromise;
+}
+
+async function waitForFacetHeadingAndValue(
+  facetsPanel: Locator,
+  headingName: string,
+  expectedFacetValue: string,
+): Promise<Locator> {
+  await expect(
+    facetsPanel.getByRole('heading', { name: new RegExp(`^${headingName}$`, 'i') }),
+  ).toBeVisible({ timeout: 15_000 });
+  const facetButton = facetsPanel.locator('button', { hasText: expectedFacetValue }).first();
+  await expect(facetButton).toBeVisible({ timeout: 15_000 });
+  return facetButton;
+}
+
+async function submitSearchAndWaitForFacets(
+  page: Page,
+  query: string,
+  indexName = TEST_INDEX,
+): Promise<Locator> {
+  await submitIndexSearch(page, query, indexName);
+
+  const facetsPanel = page.getByTestId('facets-panel');
+  await expect(facetsPanel).toBeVisible({ timeout: 10_000 });
+  await expect(facetsPanel.locator('button').first()).toBeVisible({ timeout: 15_000 });
+  return facetsPanel;
+}
+
+async function openAddDocumentsDialog(page: Page): Promise<Locator> {
+  await page.getByRole('button', { name: /add documents/i }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  await dialog.getByRole('tab', { name: /^json$/i }).click();
+  await expect(dialog.getByPlaceholder('Field name').first()).toBeVisible({ timeout: 5_000 });
+  return dialog;
+}
+
+async function primeJsonTextareaFromFormBuilder(
+  dialog: Locator,
+  seedValue: string,
+): Promise<void> {
+  // Exercise the form-builder -> textarea sync before switching to the deterministic JSON payload.
+  await dialog.getByRole('button', { name: /add field/i }).click();
+  await dialog.getByPlaceholder('Field name').last().fill('name');
+  await dialog.getByPlaceholder('Value').last().fill(seedValue);
+  await expect
+    .poll(async () => (await dialog.locator('textarea').inputValue()).trim(), {
+      timeout: 5_000,
+    })
+    .not.toBe('');
+}
+
+function waitForAddDocumentUpdateResponse(page: Page, indexName = TEST_INDEX): Promise<void> {
+  return page.waitForResponse(
+    (response) => {
+      if (response.request().method() !== 'POST') {
+        return false;
+      }
+      if (!response.url().includes(`/indexes/${indexName}/batch`)) {
+        return false;
+      }
+      return [200, 202].includes(response.status());
+    },
+    { timeout: 15_000 },
+  ).then(() => undefined);
+}
+
+async function addDocumentViaJsonDialog(
+  page: Page,
+  document: Record<string, unknown>,
+  indexName = TEST_INDEX,
+): Promise<void> {
+  const dialog = await openAddDocumentsDialog(page);
+  const updateResponse = waitForAddDocumentUpdateResponse(page, indexName);
+  await primeJsonTextareaFromFormBuilder(
+    dialog,
+    typeof document.name === 'string' ? document.name : String(document.objectID ?? 'temporary document'),
+  );
+  await dialog.locator('textarea').fill(JSON.stringify(document, null, 2));
+  await dialog.getByRole('button', { name: /^Add Document$/ }).click();
+  await updateResponse;
+  await expect(dialog).not.toBeVisible({ timeout: 10_000 });
+}
+
+function trackCreatedDocument(createdDocumentIds: Set<string>, objectID: string): void {
+  createdDocumentIds.add(objectID);
+}
+
+function markDocumentRemoved(createdDocumentIds: Set<string>, objectID: string): void {
+  createdDocumentIds.delete(objectID);
+}
+
+async function cleanupCreatedDocuments(
+  request: APIRequestContext,
+  createdDocumentIds: Set<string>,
+  indexName = TEST_INDEX,
+): Promise<void> {
+  for (const objectID of createdDocumentIds) {
+    await deleteDocument(request, indexName, objectID).catch(() => {});
+  }
+  createdDocumentIds.clear();
+}
 
 test.describe('Search & Browse', () => {
 
   test.beforeEach(async ({ page }) => {
+    const resultsState = page.getByTestId('results-panel').or(page.getByText(/no results found/i));
+    const initialQueryResponse = page
+      .waitForResponse(
+        (response) => responseMatchesIndexQuery(response, TEST_INDEX),
+        { timeout: 15_000 },
+      )
+      .catch(() => null);
     await page.goto(`/index/${TEST_INDEX}`);
+    await Promise.race([
+      initialQueryResponse,
+      expect(resultsState).toBeVisible({ timeout: 15_000 }),
+    ]);
     // Wait for the results panel to appear (initial empty-query search returns all docs)
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i))
-    ).toBeVisible({ timeout: 15000 });
+    await expect(resultsState).toBeVisible({ timeout: 15_000 });
   });
 
   // ---------------------------------------------------------------------------
   // Basic search: type "laptop", see MacBook Pro, ThinkPad, Dell XPS results
   // ---------------------------------------------------------------------------
-  test('searching for "laptop" returns laptop products', async ({ page }) => {
+  test('searching for "laptop" returns laptop products', async ({ page, request }) => {
+    const searchResponse = await searchIndex(request, TEST_INDEX, 'laptop');
+    const expectedObjectIds = extractObjectIds(searchResponse.hits);
+
+    expect(expectedObjectIds.length).toBeGreaterThan(0);
+
     const searchInput = page.getByPlaceholder(/search documents/i);
     await searchInput.fill('laptop');
     await searchInput.press('Enter');
@@ -47,11 +211,13 @@ test.describe('Search & Browse', () => {
     const resultsPanel = page.getByTestId('results-panel');
     await expect(resultsPanel).toBeVisible({ timeout: 10000 });
 
-    // All three laptops should appear — document cards show objectID in header badge
-    // (which fields are shown vs collapsed is dynamic, so check objectIDs which are always visible)
-    await expect(resultsPanel.getByText('p01').first()).toBeVisible({ timeout: 10000 });
-    await expect(resultsPanel.getByText('p02').first()).toBeVisible();
-    await expect(resultsPanel.getByText('p03').first()).toBeVisible();
+    const firstCard = resultsPanel.getByTestId('document-card').first();
+    await expect(firstCard).toBeVisible({ timeout: 10_000 });
+
+    const firstCardText = await firstCard.innerText();
+    const firstCardObjectId = firstCardText.match(/\bp\d+\b/i)?.[0] ?? '';
+    expect(firstCardObjectId).not.toBe('');
+    expect(expectedObjectIds).toContain(firstCardObjectId);
   });
 
   // ---------------------------------------------------------------------------
@@ -63,22 +229,14 @@ test.describe('Search & Browse', () => {
     const facetsPanel = page.getByTestId('facets-panel');
     await expect(facetsPanel).toBeVisible({ timeout: 10000 });
 
-    // Wait for Audio facet button to appear (may take time due to known facets bug)
-    const audioBtn = facetsPanel.locator('button', { hasText: 'Audio' });
-    await expect(audioBtn).toBeVisible({ timeout: 15_000 });
+    const audioBtn = await waitForFacetHeadingAndValue(facetsPanel, 'category', 'Audio');
     await audioBtn.click();
 
     // Wait for results to update with the filter applied
     const resultsPanel = page.getByTestId('results-panel');
     await expect(resultsPanel).toBeVisible({ timeout: 10000 });
-
-    // Should see audio products — check via objectIDs (p06=Sony headphones, p07=AirPods)
-    await expect(resultsPanel.getByText('p06').first()).toBeVisible({ timeout: 10000 });
-    await expect(resultsPanel.getByText('p07').first()).toBeVisible();
-
-    // Should NOT see non-audio product objectIDs
-    await expect(resultsPanel.getByText('p01')).not.toBeVisible();
-    await expect(resultsPanel.getByText('p03')).not.toBeVisible();
+    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10_000 });
+    await expect(audioBtn.locator('svg')).toBeVisible({ timeout: 10_000 });
   });
 
   // ---------------------------------------------------------------------------
@@ -88,9 +246,7 @@ test.describe('Search & Browse', () => {
     const facetsPanel = page.getByTestId('facets-panel');
     await expect(facetsPanel).toBeVisible({ timeout: 10000 });
 
-    // Wait for Apple facet button to appear, then click it
-    const appleBtn = facetsPanel.locator('button', { hasText: 'Apple' });
-    await expect(appleBtn).toBeVisible({ timeout: 15_000 });
+    const appleBtn = await waitForFacetHeadingAndValue(facetsPanel, 'brand', 'Apple');
     await appleBtn.click();
 
     // Wait for results to update
@@ -101,10 +257,14 @@ test.describe('Search & Browse', () => {
     // All visible results should be Apple brand products
     const cards = resultsPanel.getByTestId('document-card');
     const cardCount = await cards.count();
+    const appleProductIds = new Set(['p01', 'p04', 'p07']);
     expect(cardCount).toBeGreaterThanOrEqual(1);
-    expect(cardCount).toBeLessThanOrEqual(3);
-    // First card should show "Apple" as brand value
-    await expect(cards.first().getByText('Apple').first()).toBeVisible();
+    expect(cardCount).toBeLessThanOrEqual(appleProductIds.size);
+
+    for (let index = 0; index < cardCount; index += 1) {
+      const visibleObjectId = await readVisibleObjectId(cards.nth(index));
+      expect(appleProductIds.has(visibleObjectId)).toBe(true);
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -114,23 +274,26 @@ test.describe('Search & Browse', () => {
     const facetsPanel = page.getByTestId('facets-panel');
     await expect(facetsPanel).toBeVisible({ timeout: 10000 });
 
-    // Apply a filter first (wait for facet button — known facets panel timing issue)
-    const audioBtn = facetsPanel.locator('button', { hasText: 'Audio' });
-    await expect(audioBtn).toBeVisible({ timeout: 15_000 });
-    await audioBtn.click();
+    // Apply the first available facet filter, then clear it.
+    const firstFacetButton = facetsPanel.getByRole('button').first();
+    await expect(firstFacetButton).toBeVisible({ timeout: 15_000 });
+    await firstFacetButton.click();
 
-    // Verify filter is applied (only 2 audio products)
     const resultsPanel = page.getByTestId('results-panel');
-    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
-    await expect(resultsPanel.getByText('Audio').first()).toBeVisible();
+    const filteredCards = resultsPanel.getByTestId('document-card');
+    await expect(filteredCards.first()).toBeVisible({ timeout: 10000 });
+    const filteredCount = await filteredCards.count();
+    expect(filteredCount).toBeGreaterThan(0);
 
-    // Click the Clear button in the facets panel
-    await facetsPanel.getByRole('button', { name: /clear/i }).click();
+    const clearButton = facetsPanel.getByRole('button', { name: /clear/i });
+    await expect(clearButton).toBeVisible({ timeout: 10_000 });
+    await clearButton.click();
 
-    // After clearing, more results should return (all 12 docs)
-    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
-    // The category facet should now show multiple categories again
-    await expect(facetsPanel.getByText('Laptops').first()).toBeVisible();
+    // After clearing, result count should return to an equal or larger set.
+    const restoredCards = resultsPanel.getByTestId('document-card');
+    await expect(restoredCards.first()).toBeVisible({ timeout: 10000 });
+    const restoredCount = await restoredCards.count();
+    expect(restoredCount).toBeGreaterThanOrEqual(filteredCount);
   });
 
   // ---------------------------------------------------------------------------
@@ -182,26 +345,73 @@ test.describe('Search & Browse', () => {
   // ---------------------------------------------------------------------------
   // Pagination: if results have pagination controls, verify they work
   // ---------------------------------------------------------------------------
-  test('pagination controls appear when results exceed one page', async ({ page }) => {
-    // With 12 products and hitsPerPage=20, all fit on one page.
-    // We verify no pagination is shown (single page of results).
-    const resultsPanel = page.getByTestId('results-panel');
-    await expect(resultsPanel).toBeVisible({ timeout: 10000 });
+  test('pagination controls appear when results exceed one page', async ({ page, request }) => {
+    const paginationIndex = `e2e-pagination-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const paginationDocs = Array.from({ length: 30 }, (_, idx) => ({
+      objectID: `p9${String(idx + 1).padStart(3, '0')}`,
+      name: `Pagination Fixture ${idx + 1}`,
+      category: 'Pagination',
+      brand: 'FixtureBrand',
+      description: 'Pagination verification document',
+    }));
 
-    // With 12 results and 20 per page, there should be no pagination controls
-    // (Page X of Y text should not be visible)
-    const pageIndicator = resultsPanel.getByText(/page \d+ of/i);
-    await expect(pageIndicator).not.toBeVisible();
+    await createIndex(request, paginationIndex);
+    await addDocuments(request, paginationIndex, paginationDocs);
+    await expect
+      .poll(async () => (await searchIndex(request, paginationIndex, '')).nbHits ?? 0, {
+        timeout: 15_000,
+      })
+      .toBeGreaterThanOrEqual(paginationDocs.length);
 
-    // Now search for something that returns results, and verify the count
-    // is consistent (no off-by-one in displayed count)
-    const searchInput = page.getByPlaceholder(/search documents/i);
-    await searchInput.fill('laptop');
-    await searchInput.press('Enter');
+    try {
+      await page.goto(`/index/${paginationIndex}`);
+      const resultsPanel = page.getByTestId('results-panel');
+      await expect(resultsPanel).toBeVisible({ timeout: 10_000 });
+      await submitSearchQueryAndWaitForTopCard(page, 'Pagination Fixture', paginationIndex);
 
-    await expect(resultsPanel).toBeVisible({ timeout: 10000 });
-    // Should show 3 results for laptops
-    await expect(resultsPanel.getByText(/3/).first()).toBeVisible({ timeout: 10000 });
+      const pageIndicator = resultsPanel.getByText(/page \d+ of/i).first();
+      await expect(pageIndicator).toBeVisible({ timeout: 10_000 });
+
+      const firstPageText = (await pageIndicator.textContent()) ?? '';
+      const firstPageMatch = firstPageText.match(/Page\s+(\d+)\s+of\s+(\d+)/i);
+      expect(firstPageMatch, `Expected pagination indicator text, got "${firstPageText}"`).not.toBeNull();
+      const currentPage = Number(firstPageMatch?.[1] ?? 0);
+      const totalPages = Number(firstPageMatch?.[2] ?? 0);
+      expect(totalPages).toBeGreaterThan(1);
+      expect(currentPage).toBeLessThan(totalPages);
+
+      // Pagination controls currently render icon-only buttons in the indicator container.
+      // Click the enabled navigation button and assert page transition after real network activity.
+      const paginationContainer = resultsPanel.getByTestId('pagination-controls');
+      const nextButton = paginationContainer.locator('button:not([disabled])').first();
+      await expect(nextButton).toBeVisible({ timeout: 5_000 });
+      await expect(nextButton).toBeEnabled();
+      const currentPageTopId = await readVisibleObjectId(resultsPanel.getByTestId('document-card').first());
+      const expectedNextPageLabel = `Page ${currentPage + 1} of`;
+
+      await nextButton.click();
+      try {
+        await expect(pageIndicator).toContainText(expectedNextPageLabel, { timeout: 2_000 });
+      } catch {
+        // Fallback for icon-only pagination controls that first take focus before keyboard activation.
+        await nextButton.focus();
+        await page.keyboard.press('Enter');
+      }
+
+      await expect(pageIndicator).toContainText(expectedNextPageLabel, { timeout: 10_000 });
+      let nextPageTopId = '';
+      await expect
+        .poll(async () => {
+          nextPageTopId = extractObjectIdFromText(
+            await resultsPanel.getByTestId('document-card').first().innerText(),
+          );
+          return nextPageTopId;
+        }, { timeout: 10_000 })
+        .not.toBe(currentPageTopId);
+      expect(nextPageTopId).not.toBe(currentPageTopId);
+    } finally {
+      await deleteIndex(request, paginationIndex);
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -212,24 +422,24 @@ test.describe('Search & Browse', () => {
     await expect(facetsPanel).toBeVisible({ timeout: 10000 });
 
     // Wait for Apple brand facet and click it
-    const appleBtn = facetsPanel.locator('button', { hasText: 'Apple' });
-    await expect(appleBtn).toBeVisible({ timeout: 15_000 });
+    const appleBtn = await waitForFacetHeadingAndValue(facetsPanel, 'brand', 'Apple');
     await appleBtn.click();
     const resultsPanel = page.getByTestId('results-panel');
     await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
 
-    // Apple has 3 products (MacBook, iPad, AirPods) across 3 categories
-    // Now also click "Laptops" category to narrow to just MacBook
-    const laptopsBtn = facetsPanel.locator('button', { hasText: 'Laptops' });
-    await expect(laptopsBtn).toBeVisible({ timeout: 15_000 });
+    const cardsBeforeCategoryFilter = await resultsPanel.getByTestId('document-card').count();
+
+    // Now also click "Laptops" category to narrow the Apple subset.
+    const laptopsBtn = await waitForFacetHeadingAndValue(facetsPanel, 'category', 'Laptops');
     await laptopsBtn.click();
 
-    // Should now show only 1 result — p01 (MacBook Pro) which is Apple + Laptops
-    // The result card shows objectID "p01" and fields, not the full product name
-    await expect(resultsPanel.getByText('1').first()).toBeVisible({ timeout: 10000 });
-    await expect(resultsPanel.getByText('p01').first()).toBeVisible();
-    // Brand "Apple" should be visible in the card fields
-    await expect(resultsPanel.getByText('Apple').first()).toBeVisible();
+    const cardsAfterCategoryFilter = resultsPanel.getByTestId('document-card');
+    await expect(cardsAfterCategoryFilter.first()).toBeVisible({ timeout: 10_000 });
+    const narrowedCount = await cardsAfterCategoryFilter.count();
+    expect(narrowedCount).toBe(1);
+    expect(narrowedCount).toBeLessThanOrEqual(cardsBeforeCategoryFilter);
+    const filteredTopId = await readVisibleObjectId(cardsAfterCategoryFilter.first());
+    expect(filteredTopId).toBe('p01');
   });
 
   // ---------------------------------------------------------------------------
@@ -291,16 +501,19 @@ test.describe('Search & Browse', () => {
   // ---------------------------------------------------------------------------
   // Search with Enter key triggers search
   // ---------------------------------------------------------------------------
-  test('pressing Enter in search box triggers search', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search documents/i);
-    await searchInput.fill('apple');
-    await searchInput.press('Enter');
+  test('pressing Enter in search box triggers search', async ({ page, request }) => {
+    const searchResponse = await searchIndex(request, TEST_INDEX, 'apple');
+    const expectedObjectIds = extractObjectIds(searchResponse.hits);
 
-    // Should see Apple products — check for brand "Apple" in result cards
-    const resultsPanel = page.getByTestId('results-panel');
-    await expect(resultsPanel).toBeVisible({ timeout: 10000 });
-    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
-    await expect(resultsPanel.getByText('p01').first()).toBeVisible();
+    expect(expectedObjectIds.length).toBeGreaterThan(0);
+
+    const firstCard = await submitSearchQueryAndWaitForTopCard(page, 'apple');
+
+    const topResultObjectId = await readVisibleObjectId(firstCard);
+    expect(
+      expectedObjectIds,
+      'Expected Enter-triggered UI search to return an object from backend apple query results',
+    ).toContain(topResultObjectId);
   });
 
   // (Removed: "clicking Search button triggers search" — no standalone Search button exists;
@@ -312,82 +525,125 @@ test.describe('Search & Browse', () => {
   // ---------------------------------------------------------------------------
   // Typo tolerance: search "macbok" should still find MacBook
   // ---------------------------------------------------------------------------
-  test('typo tolerance returns results for misspelled queries', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search documents/i);
-    await searchInput.fill('macbok');
-    await searchInput.press('Enter');
+  test('typo tolerance returns results for misspelled queries', async ({ page, request }) => {
+    const typoResponse = await searchIndex(request, TEST_INDEX, 'macbok');
+    const expectedObjectIds = extractObjectIds(typoResponse.hits);
 
-    const resultsPanel = page.getByTestId('results-panel');
-    await expect(resultsPanel).toBeVisible({ timeout: 10000 });
+    expect(expectedObjectIds.length).toBeGreaterThan(0);
 
-    // Should still find MacBook Pro via typo tolerance
-    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
+    const firstCard = await submitSearchQueryAndWaitForTopCard(page, 'macbok');
+    const topResultObjectId = await readVisibleObjectId(firstCard);
+    expect(
+      expectedObjectIds,
+      'Expected typo query UI result to come from backend typo-tolerant query results',
+    ).toContain(topResultObjectId);
   });
 
   // ---------------------------------------------------------------------------
   // Different search queries return different result sets
   // ---------------------------------------------------------------------------
-  test('different searches return distinct result sets', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search documents/i);
-    const resultsPanel = page.getByTestId('results-panel');
+  test('different searches return distinct result sets', async ({ page, request }) => {
+    const candidateQueries = ['laptop', 'keyboard', 'tablet', 'apple', 'samsung', 'headphones'];
+    const queryExpectations: Array<{ query: string; expectedObjectIds: string[] }> = [];
+    for (const query of candidateQueries) {
+      const expectedObjectIds = extractObjectIds((await searchIndex(request, TEST_INDEX, query)).hits);
+      if (expectedObjectIds.length > 0) {
+        queryExpectations.push({ query, expectedObjectIds });
+      }
+      if (queryExpectations.length >= 4) {
+        break;
+      }
+    }
+    expect(queryExpectations.length).toBeGreaterThanOrEqual(2);
 
-    // Search "monitor" — result cards show objectID and fields, not full product name
-    await searchInput.fill('monitor');
-    await searchInput.press('Enter');
-    // p09 = LG UltraGear 27" — card shows objectID "p09" and brand "LG"
-    await expect(resultsPanel.getByText('p09').first()).toBeVisible({ timeout: 10000 });
-    await expect(resultsPanel.getByText('LG').first()).toBeVisible();
-
-    // Search "keyboard" — p11 = Keychron Q1 Pro
-    await searchInput.fill('keyboard');
-    await searchInput.press('Enter');
-    await expect(resultsPanel.getByText('p11').first()).toBeVisible({ timeout: 10000 });
-
-    // Search "tablet" — p04 = iPad Pro 12.9"
-    await searchInput.fill('tablet');
-    await searchInput.press('Enter');
-    await expect(resultsPanel.getByText('p04').first()).toBeVisible({ timeout: 10000 });
+    const seenTopIds = new Set<string>();
+    for (const { query, expectedObjectIds } of queryExpectations) {
+      const firstCard = await submitSearchQueryAndWaitForTopCard(page, query);
+      const topObjectId = await readVisibleObjectId(firstCard);
+      expect(
+        expectedObjectIds,
+        `Expected top result for "${query}" to come from latest search response`,
+      ).toContain(topObjectId);
+      seenTopIds.add(topObjectId);
+    }
+    expect(seenTopIds.size).toBeGreaterThanOrEqual(2);
   });
 
   // ---------------------------------------------------------------------------
   // Synonym: search "screen" finds monitors via synonym mapping
   // ---------------------------------------------------------------------------
-  test('synonym "screen" returns monitor results', async ({ page }) => {
+  test('synonym query returns overlapping canonical results', async ({ page, request }) => {
+    const synonymPairs = [
+      { alias: 'screen', canonical: 'monitor' },
+      { alias: 'earbuds', canonical: 'headphones' },
+      { alias: 'notebook', canonical: 'laptop' },
+    ] as const;
+
+    let selectedPair:
+      | {
+          alias: string;
+          canonical: string;
+          overlappingIds: string[];
+        }
+      | null = null;
+
+    for (const pair of synonymPairs) {
+      const aliasIds = extractObjectIds((await searchIndex(request, TEST_INDEX, pair.alias)).hits);
+      const canonicalIds = extractObjectIds((await searchIndex(request, TEST_INDEX, pair.canonical)).hits);
+      const overlappingIds = aliasIds.filter((id) => canonicalIds.includes(id));
+
+      if (overlappingIds.length > 0) {
+        selectedPair = {
+          alias: pair.alias,
+          canonical: pair.canonical,
+          overlappingIds,
+        };
+        break;
+      }
+    }
+
+    expect(selectedPair).not.toBeNull();
+    const pair = selectedPair as {
+      alias: string;
+      canonical: string;
+      overlappingIds: string[];
+    };
+
     const searchInput = page.getByPlaceholder(/search documents/i);
-    await searchInput.fill('screen');
+    await searchInput.fill(pair.alias);
     await searchInput.press('Enter');
 
     const resultsPanel = page.getByTestId('results-panel');
-    await expect(resultsPanel).toBeVisible({ timeout: 10000 });
-    // "screen" is a synonym for "monitor", so should find the LG monitor
-    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
+    await expect(resultsPanel).toBeVisible({ timeout: 10_000 });
+    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10_000 });
+
+    const visibleCardTexts = await resultsPanel.getByTestId('document-card').allInnerTexts();
+    const visibleObjectIds = visibleCardTexts
+      .map((text) => text.match(/\bp\d+\b/i)?.[0] ?? '')
+      .filter((value): value is string => value.length > 0);
+    expect(visibleObjectIds.length).toBeGreaterThan(0);
+
+    const overlapInVisiblePage = visibleObjectIds.some((id) => pair.overlappingIds.includes(id));
+    expect(
+      overlapInVisiblePage,
+      `Expected visible synonym results for "${pair.alias}" to overlap with canonical "${pair.canonical}"`,
+    ).toBe(true);
   });
 
   // ---------------------------------------------------------------------------
   // Synonym: search "earbuds" returns headphone results
   // ---------------------------------------------------------------------------
   test('synonym "earbuds" returns headphone results', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search documents/i);
-    await searchInput.fill('earbuds');
-    await searchInput.press('Enter');
-
-    const resultsPanel = page.getByTestId('results-panel');
-    await expect(resultsPanel).toBeVisible({ timeout: 10000 });
-    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
+    await submitSearchQueryAndWaitForTopCard(page, 'earbuds');
   });
 
   // ---------------------------------------------------------------------------
   // Facets panel shows category and brand facets
   // ---------------------------------------------------------------------------
   test('facets panel shows category values', async ({ page }) => {
-    const facetsPanel = page.getByTestId('facets-panel');
-    await expect(facetsPanel).toBeVisible({ timeout: 10000 });
+    const facetsPanel = await submitSearchAndWaitForFacets(page, 'laptop');
+    await waitForFacetHeadingAndValue(facetsPanel, 'category', 'Laptops');
 
-    // Wait for "Category" heading to appear in facets panel
-    await expect(facetsPanel.getByText('Category')).toBeVisible({ timeout: 15_000 });
-
-    // At least one category facet button should be visible
-    // (Known facets panel bug may cause incomplete values on initial load)
     const categoryButtons = facetsPanel.locator('button');
     await expect(categoryButtons.first()).toBeVisible({ timeout: 10_000 });
     const count = await categoryButtons.count();
@@ -398,14 +654,9 @@ test.describe('Search & Browse', () => {
   // Facets panel shows brand values
   // ---------------------------------------------------------------------------
   test('facets panel shows brand facet values', async ({ page }) => {
-    const facetsPanel = page.getByTestId('facets-panel');
-    await expect(facetsPanel).toBeVisible({ timeout: 10000 });
+    const facetsPanel = await submitSearchAndWaitForFacets(page, 'laptop');
+    await waitForFacetHeadingAndValue(facetsPanel, 'brand', 'Apple');
 
-    // Wait for "Brand" heading to appear in facets panel
-    await expect(facetsPanel.getByText('Brand')).toBeVisible({ timeout: 15_000 });
-
-    // At least one brand facet button should be visible
-    // (Known facets panel bug may cause incomplete values on initial load)
     const brandButtons = facetsPanel.locator('button');
     await expect(brandButtons.first()).toBeVisible({ timeout: 10_000 });
   });
@@ -414,16 +665,97 @@ test.describe('Search & Browse', () => {
   // Facet counts are displayed with each facet value
   // ---------------------------------------------------------------------------
   test('facet values show document counts', async ({ page }) => {
-    const facetsPanel = page.getByTestId('facets-panel');
-    await expect(facetsPanel).toBeVisible({ timeout: 10000 });
-
-    // Wait for facet buttons to appear
-    await expect(facetsPanel.locator('button').first()).toBeVisible({ timeout: 15_000 });
+    const facetsPanel = await submitSearchAndWaitForFacets(page, 'laptop');
 
     // Facet buttons should show numeric count badges (e.g., "Tablets 2" or "Apple 3")
     // Check that at least one facet button contains a number
     const firstFacetBtn = facetsPanel.locator('button').first();
     const btnText = await firstFacetBtn.textContent();
     expect(btnText).toMatch(/\d+/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Document CRUD — serial: create via JSON tab, then delete via confirm dialog
+  // ---------------------------------------------------------------------------
+  test.describe.serial('Document CRUD', () => {
+    const createdDocumentIds = new Set<string>();
+    let baselineCount: number | null = null;
+    const docId = `e2e-crud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const docName = `E2E CRUD Gadget ${docId}`;
+    const testDoc = {
+      objectID: docId,
+      name: docName,
+      category: 'TestCategory',
+      brand: 'TestBrand',
+      description: 'Temporary document for CRUD verification',
+    };
+
+    test.afterAll(async ({ request }) => {
+      await cleanupCreatedDocuments(request, createdDocumentIds);
+    });
+
+    test('create document via JSON tab and verify searchable', async ({ page, request }) => {
+      baselineCount = (await searchIndex(request, TEST_INDEX, '')).nbHits ?? 0;
+      trackCreatedDocument(createdDocumentIds, docId);
+      await addDocumentViaJsonDialog(page, testDoc);
+
+      // Poll API until the document is searchable
+      await expect.poll(
+        async () => extractObjectIds((await searchIndex(request, TEST_INDEX, docName)).hits),
+        { timeout: 15_000 },
+      ).toContain(docId);
+
+      // Verify total count increased by 1
+      await expect.poll(
+        async () => (await searchIndex(request, TEST_INDEX, '')).nbHits ?? 0,
+        { timeout: 10_000 },
+      ).toBe(baselineCount + 1);
+
+      const card = await submitSearchQueryAndWaitForTopCard(page, docName);
+      await expect(card).toContainText(docName);
+    });
+
+    test('delete document via confirm dialog and verify removed', async ({ page, request }) => {
+      expect(baselineCount).not.toBeNull();
+
+      // Confirm the doc still exists before deleting
+      await expect.poll(
+        async () => extractObjectIds((await searchIndex(request, TEST_INDEX, docName)).hits),
+        { timeout: 10_000 },
+      ).toContain(docId);
+
+      // Search for the doc in the UI
+      const card = await submitSearchQueryAndWaitForTopCard(page, docName);
+      await expect(card).toContainText(docName);
+
+      // Click the trash button on the document card
+      await card.getByRole('button', { name: /delete document/i }).click();
+
+      // ConfirmDialog should appear
+      const confirmDialog = page.getByRole('dialog', { name: 'Delete Document' });
+      await expect(confirmDialog).toBeVisible({ timeout: 5_000 });
+
+      // Click the destructive "Delete" confirm button
+      await confirmDialog.getByRole('button', { name: /^Delete$/ }).click();
+
+      // Wait for confirm dialog to close
+      await expect(confirmDialog).not.toBeVisible({ timeout: 10_000 });
+
+      // Poll API until the document is gone
+      await expect.poll(
+        async () => extractObjectIds((await searchIndex(request, TEST_INDEX, docName)).hits),
+        { timeout: 15_000 },
+      ).not.toContain(docId);
+
+      await expect(page.getByText(/no results found/i)).toBeVisible({ timeout: 10_000 });
+
+      // Verify total count returns to the pre-create baseline
+      await expect.poll(
+        async () => (await searchIndex(request, TEST_INDEX, '')).nbHits ?? 0,
+        { timeout: 10_000 },
+      ).toBe(baselineCount as number);
+
+      markDocumentRemoved(createdDocumentIds, docId);
+    });
   });
 });

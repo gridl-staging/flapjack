@@ -1,32 +1,25 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Home, Key, Activity, ArrowRightLeft, ScrollText, X, Database, ChevronDown, ChevronRight, Lightbulb, BarChart3 } from 'lucide-react';
+import { X, Database, ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEffect, useState } from 'react';
 import { useIndexes } from '@/hooks/useIndexes';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { SidebarSection } from './SidebarSection';
+import { MAX_VISIBLE_INDEXES } from './sidebar-index-constants';
+import { SIDEBAR_SECTION_DEFINITIONS, type SidebarSectionDefinition } from './sidebar-nav';
 
 interface SidebarProps {
   open?: boolean;
   onClose?: () => void;
 }
 
-const navItems = [
-  { to: '/overview', icon: Home, label: 'Overview' },
-  { to: '/logs', icon: ScrollText, label: 'API Logs' },
-  { to: '/migrate', icon: ArrowRightLeft, label: 'Migrate' },
-  { to: '/keys', icon: Key, label: 'API Keys' },
-  { to: '/query-suggestions', icon: Lightbulb, label: 'Query Suggestions' },
-  { to: '/experiments', icon: Database, label: 'Experiments' },
-  { to: '/metrics', icon: BarChart3, label: 'Metrics' },
-  { to: '/system', icon: Activity, label: 'System' },
-];
-
-const MAX_VISIBLE_INDEXES = 5;
+const INDEX_SECTION_ID = 'indexes';
 
 export function Sidebar({ open, onClose }: SidebarProps) {
   const location = useLocation();
   const { data: indexes } = useIndexes();
   const [showAllIndexes, setShowAllIndexes] = useState(false);
+  const totalIndexesCount = indexes?.length ?? 0;
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -37,7 +30,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     ? indexes
     : indexes?.slice(0, MAX_VISIBLE_INDEXES);
 
-  const hasMoreIndexes = (indexes?.length || 0) > MAX_VISIBLE_INDEXES;
+  const hasMoreIndexes = totalIndexesCount > MAX_VISIBLE_INDEXES;
+  const hiddenIndexesCount = Math.max(0, totalIndexesCount - (visibleIndexes?.length ?? 0));
+  const hiddenIndexesLabel = `${hiddenIndexesCount} more ${hiddenIndexesCount === 1 ? 'index' : 'indexes'}`;
 
   return (
     <>
@@ -71,77 +66,76 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </button>
         </div>
 
-        <nav className="space-y-2">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-primary/15 text-primary font-semibold'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                )
-              }
-            >
-              <item.icon className="h-5 w-5" />
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-
-        {/* Indexes section */}
-        {indexes && indexes.length > 0 && (
-          <div className="mt-6" data-testid="sidebar-indexes">
-            <div className="px-4 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5" data-testid="sidebar-indexes-header">
-              Indexes
+        {SIDEBAR_SECTION_DEFINITIONS.map((section) => (
+          <SidebarSection
+            key={section.id}
+            sectionId={section.id}
+            heading={renderSectionHeading(section)}
+            headingLabel={section.heading}
+            items={section.items}
+            headingTestId={`sidebar-section-heading-${section.id}`}
+            headingSuffix={section.id === INDEX_SECTION_ID ? (
               <InfoTooltip content="Each index is an isolated search collection with its own data, settings, and access controls." side="right" />
-            </div>
-            <div className="space-y-1">
-              {visibleIndexes?.map((index) => {
-                const indexPath = `/index/${encodeURIComponent(index.uid)}`;
-                const isActive = location.pathname.startsWith(indexPath);
-                return (
-                  <NavLink
-                    key={index.uid}
-                    to={indexPath}
-                    className={cn(
-                      'flex items-center gap-3 px-4 py-1.5 rounded-md text-sm transition-colors',
-                      isActive
-                        ? 'bg-primary/15 text-primary font-semibold'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                    )}
-                    data-testid={`sidebar-index-${index.uid}`}
+            ) : undefined}
+            sectionTestId={`sidebar-section-${section.id}`}
+          >
+            {section.id === INDEX_SECTION_ID && indexes && indexes.length > 0 && (
+              <div className="space-y-1" data-testid="sidebar-indexes">
+                {visibleIndexes?.map((index) => {
+                  const indexPath = `/index/${encodeURIComponent(index.uid)}`;
+                  const isActive = isIndexPathActive(location.pathname, indexPath);
+                  return (
+                    <NavLink
+                      key={index.uid}
+                      to={indexPath}
+                      className={cn(
+                        'flex items-center gap-3 px-4 py-1.5 rounded-md text-sm transition-colors',
+                        isActive
+                          ? 'bg-primary/15 text-primary font-semibold'
+                          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                      )}
+                      data-testid={`sidebar-index-${index.uid}`}
+                    >
+                      <Database className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{index.uid}</span>
+                    </NavLink>
+                  );
+                })}
+                {hasMoreIndexes && (
+                  <button
+                    onClick={() => setShowAllIndexes(!showAllIndexes)}
+                    className="flex items-center gap-3 px-4 py-1.5 rounded-md text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors w-full"
+                    data-testid="sidebar-show-all-indexes"
                   >
-                    <Database className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{index.uid}</span>
-                  </NavLink>
-                );
-              })}
-              {hasMoreIndexes && (
-                <button
-                  onClick={() => setShowAllIndexes(!showAllIndexes)}
-                  className="flex items-center gap-3 px-4 py-1.5 rounded-md text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors w-full"
-                  data-testid="sidebar-show-all-indexes"
-                >
-                  {showAllIndexes ? (
-                    <>
-                      <ChevronDown className="h-3 w-3" />
-                      Show less
-                    </>
-                  ) : (
-                    <>
-                      <ChevronRight className="h-3 w-3" />
-                      Show all ({indexes.length})
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
+                    {showAllIndexes ? (
+                      <>
+                        <ChevronDown className="h-3 w-3" />
+                        Show less
+                      </>
+                    ) : (
+                      <>
+                        <ChevronRight className="h-3 w-3" />
+                        Show all ({hiddenIndexesLabel})
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            )}
+          </SidebarSection>
+        ))}
       </aside>
     </>
   );
+}
+
+function renderSectionHeading(section: SidebarSectionDefinition) {
+  if (section.id === INDEX_SECTION_ID) {
+    return <span data-testid="sidebar-indexes-header">{section.heading}</span>;
+  }
+  return section.heading;
+}
+
+function isIndexPathActive(pathname: string, indexPath: string) {
+  return pathname === indexPath || pathname.startsWith(`${indexPath}/`);
 }

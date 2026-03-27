@@ -1,3 +1,6 @@
+/**
+ * @module React Query hooks for performing full-text search and facet search against a Flapjack index via the Algolia-compatible REST API.
+ */
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import api from '@/lib/api';
 import type { SearchParams, SearchResponse, Document } from '@/lib/types';
@@ -10,6 +13,18 @@ interface UseSearchOptions {
   keepPrevious?: boolean;
 }
 
+/**
+ * Executes a search query against a specific index using React Query.
+ * 
+ * Sends a POST to `/1/indexes/{indexName}/query` with the given search params (analytics disabled by default). The query is always treated as stale and retries are disabled. When `keepPrevious` is true, the previous result set is shown as placeholder data while a new query loads.
+ * 
+ * @param options.indexName - Target index to search against; query is disabled when empty.
+ * @param options.params - Search parameters forwarded in the request body.
+ * @param options.enabled - Whether the query should execute (default `true`).
+ * @param options.userToken - Optional user token sent via the `x-algolia-usertoken` header for personalization/analytics.
+ * @param options.keepPrevious - When true, retains the previous result set as placeholder data during refetches.
+ * @returns A React Query result containing a `SearchResponse<T>` with hits and metadata.
+ */
 export function useSearch<T = Document>({ indexName, params, enabled = true, userToken, keepPrevious }: UseSearchOptions) {
   return useQuery({
     queryKey: ['search', indexName, params],

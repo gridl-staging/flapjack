@@ -1,3 +1,6 @@
+pub mod algolia_filters;
+#[cfg(feature = "decompound")]
+pub mod decompound;
 pub mod executor;
 pub mod filter;
 pub mod fuzzy;

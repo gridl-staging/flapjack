@@ -1,11 +1,7 @@
-//! Consolidated ranking integration tests moved inline from engine/tests/test_ranking.rs.
-//!
-//! Merged from (all deleted):
-//!   - test_sort.rs        (explicit sort by field: asc, desc, missing values, nested, float)
-//!   - test_distinct.rs    (attribute_for_distinct: dedup, top-N, disabled, filters, ranking)
-//!   - test_custom_ranking.rs (custom_ranking setting: desc, asc, multiple, missing values)
+//! Consolidated integration tests for ranking behavior including explicit field sorting, attribute-for-distinct deduplication, custom ranking settings, typo tiers, BM25 tuning, exact-vs-prefix tiers, and attribute bucket hard tiers.
 
 use crate::index::settings::{DistinctValue, IndexSettings};
+use crate::integ_tests::search_compat::SearchCompat;
 use crate::types::{Document, FieldValue, Filter, Sort, SortOrder};
 use crate::IndexManager;
 use serde_json::json;
@@ -23,6 +19,9 @@ struct SortFixture {
 
 static PRICE_FIXTURE: tokio::sync::OnceCell<SortFixture> = tokio::sync::OnceCell::const_new();
 
+/// Return a lazily-initialized shared fixture containing five documents with ascending prices (5–200) across two brands.
+///
+/// The fixture is created once via a `tokio::sync::OnceCell` and reused across all sort tests that operate on the same dataset. The backing `TempDir` is kept alive for the lifetime of the process.
 async fn get_price_fixture() -> &'static SortFixture {
     PRICE_FIXTURE.get_or_init(|| async {
         let tmp = TempDir::new().unwrap();
@@ -131,6 +130,7 @@ async fn test_sort_with_text_query() {
     assert_eq!(prices, vec![10, 50, 100]);
 }
 
+/// Verify that sorting combined with a numeric greater-than-or-equal filter returns only matching documents in the requested sort order.
 #[tokio::test]
 async fn test_sort_with_numeric_filter() {
     let f = get_price_fixture().await;
@@ -166,6 +166,7 @@ async fn test_sort_string_field() {
     assert_eq!(titles[1], "Cheap Widget");
 }
 
+/// Verify that documents missing the sort field are placed first when sorting in ascending order, rather than causing a panic or being dropped.
 #[tokio::test]
 async fn test_sort_missing_field_handled() {
     let tmp = TempDir::new().unwrap();
@@ -189,6 +190,7 @@ async fn test_sort_missing_field_handled() {
     assert_eq!(first_title, "No Price", "Missing values sort first in asc");
 }
 
+/// Verify that sorting works on dot-separated nested field paths (e.g. `meta.score`), ordering documents by the nested value.
 #[tokio::test]
 async fn test_sort_nested_field() {
     let tmp = TempDir::new().unwrap();
@@ -215,6 +217,7 @@ async fn test_sort_nested_field() {
     assert_eq!(ids, vec!["3", "1", "2"]);
 }
 
+/// Verify that explicit sort-by-field works correctly on floating-point values, ordering documents by descending `rating`.
 #[tokio::test]
 async fn test_sort_float_field() {
     let tmp = TempDir::new().unwrap();
@@ -245,6 +248,7 @@ async fn test_sort_float_field() {
 // From test_distinct.rs — attribute_for_distinct tests
 // ============================================================
 
+/// Verify that `attribute_for_distinct` with `distinct=true` collapses multiple documents sharing the same `product_id` into a single representative, keeping only the highest-ranked variant.
 #[tokio::test]
 async fn test_distinct_deduplicates_variants() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -340,6 +344,7 @@ async fn test_distinct_deduplicates_variants() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Verify that `distinct` set to an integer N returns up to N documents per distinct group, ranked by custom ranking within each group.
 #[tokio::test]
 async fn test_distinct_keeps_top_n_per_group() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -385,6 +390,7 @@ async fn test_distinct_keeps_top_n_per_group() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Verify that setting `distinct` to `false` (or passing `distinct_level=0`) bypasses deduplication and returns all matching documents.
 #[tokio::test]
 async fn test_distinct_disabled_returns_all() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -424,6 +430,7 @@ async fn test_distinct_disabled_returns_all() -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+/// Verify that documents lacking the `attribute_for_distinct` field are excluded from distinct-grouped results rather than forming their own group.
 #[tokio::test]
 async fn test_distinct_missing_field_skips_doc() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -469,6 +476,7 @@ async fn test_distinct_missing_field_skips_doc() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+/// Verify that distinct grouping works correctly on integer-valued fields, grouping documents with the same integer `category_id` together.
 #[tokio::test]
 async fn test_distinct_numeric_field_rounds() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -518,6 +526,7 @@ async fn test_distinct_numeric_field_rounds() -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+/// Verify that distinct grouping on float-valued fields rounds to a common bucket, so documents with close but not identical float values (e.g. 99.2 and 99.3) are grouped together.
 #[tokio::test]
 async fn test_distinct_float_field_rounds() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -566,6 +575,7 @@ async fn test_distinct_float_field_rounds() -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+/// Verify that facet filters are applied before distinct grouping, so only documents matching the filter participate in deduplication.
 #[tokio::test]
 async fn test_distinct_with_filters() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -632,6 +642,7 @@ async fn test_distinct_with_filters() -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+/// Verify that after distinct deduplication, the surviving representatives from different groups are ordered by custom ranking (popularity) rather than insertion order.
 #[tokio::test]
 async fn test_distinct_preserves_ranking() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
@@ -676,6 +687,7 @@ async fn test_distinct_preserves_ranking() -> Result<(), Box<dyn std::error::Err
 // From test_custom_ranking.rs — custom_ranking setting tests
 // ============================================================
 
+/// Verify that `custom_ranking: ["desc(popularity)"]` orders search results by descending popularity when all documents match the query.
 #[tokio::test]
 async fn test_custom_ranking_desc() {
     let temp = TempDir::new().unwrap();
@@ -710,6 +722,7 @@ async fn test_custom_ranking_desc() {
     assert_eq!(results.documents[2].document.id, "1");
 }
 
+/// Verify that `custom_ranking: ["asc(price)"]` orders search results by ascending price when all documents match the query.
 #[tokio::test]
 async fn test_custom_ranking_asc() {
     let temp = TempDir::new().unwrap();
@@ -744,6 +757,7 @@ async fn test_custom_ranking_asc() {
     assert_eq!(results.documents[2].document.id, "3");
 }
 
+/// Verify that multiple custom ranking criteria are applied in declaration order: first by `desc(category_rank)`, then by `asc(price)` as tiebreaker within the same category rank.
 #[tokio::test]
 async fn test_custom_ranking_multiple() {
     let temp = TempDir::new().unwrap();
@@ -783,6 +797,7 @@ async fn test_custom_ranking_multiple() {
     assert_eq!(results.documents[3].document.id, "1");
 }
 
+/// Verify that documents missing a custom ranking field are sorted last, behind documents that have the field, rather than causing errors or receiving a default high value.
 #[tokio::test]
 async fn test_custom_ranking_missing_values() {
     let temp = TempDir::new().unwrap();
@@ -815,4 +830,634 @@ async fn test_custom_ranking_missing_values() {
     assert_eq!(results.documents[0].document.id, "3");
     assert_eq!(results.documents[1].document.id, "1");
     assert_eq!(results.documents[2].document.id, "2");
+}
+
+/// Verify that an exact match always outranks a typo match regardless of BM25 score.
+///
+/// Doc 2 has a single exact `"iphone"` in attribute 8, while Doc 1 has `"iPhome"` (1-typo) repeated ten times in attribute 1 for a much higher BM25 score. The typo tier must override BM25.
+#[tokio::test]
+async fn test_typo_tier_exact_beats_higher_scoring_typo() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec![
+            "a1".to_string(),
+            "a2".to_string(),
+            "a3".to_string(),
+            "a4".to_string(),
+            "a5".to_string(),
+            "a6".to_string(),
+            "a7".to_string(),
+            "a8".to_string(),
+        ]),
+        query_type: "prefixNone".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    let docs = vec![
+        json!({
+            "_id": "1",
+            "a1": "iPhome iPhome iPhome iPhome iPhome iPhome iPhome iPhome iPhome iPhome",
+            "a2": "filler",
+            "a3": "filler",
+            "a4": "filler",
+            "a5": "filler",
+            "a6": "filler",
+            "a7": "filler",
+            "a8": "filler"
+        }),
+        json!({
+            "_id": "2",
+            "a1": "filler",
+            "a2": "filler",
+            "a3": "filler",
+            "a4": "filler",
+            "a5": "filler",
+            "a6": "filler",
+            "a7": "filler",
+            "a8": "iphone"
+        }),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| crate::types::Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let results = manager.search("test", "iphone", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert!(ids.contains(&"1"));
+    assert!(ids.contains(&"2"));
+    assert_eq!(
+        ids[0], "2",
+        "Exact match must outrank typo match regardless of BM25 score"
+    );
+}
+
+/// Verify that a 1-typo match outranks a 2-typo match even when the 2-typo document has a higher BM25 score from term repetition.
+///
+/// Doc 2 has `"keyboarr"` (1 edit from `"keyboard"`), while Doc 1 has `"kexboarr"` (2 edits) repeated for high term frequency. The typo bucket tier must take precedence.
+#[tokio::test]
+async fn test_typo_tier_one_typo_beats_two_typos() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec!["title".to_string(), "description".to_string()]),
+        query_type: "prefixNone".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    // Doc 1: "kexboarr" = 2 typos from "keyboard" (x for y, r for d), repeated
+    //        for high BM25 score via tf.
+    // Doc 2: "keyboarr" = 1 typo from "keyboard" (r for d), in both fields
+    //        but NO exact "keyboard" anywhere — ensures bucket 1, not 0.
+    let docs = vec![
+        json!({
+            "_id": "1",
+            "title": "kexboarr kexboarr kexboarr kexboarr",
+            "description": "two typos in a high-scoring field"
+        }),
+        json!({
+            "_id": "2",
+            "title": "keyboarr cover",
+            "description": "keyboarr accessories"
+        }),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| crate::types::Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let results = manager.search("test", "keyboard", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert!(
+        ids.contains(&"1"),
+        "2-typo doc should match via fuzzy search"
+    );
+    assert!(
+        ids.contains(&"2"),
+        "1-typo doc should match via fuzzy search"
+    );
+    assert_eq!(
+        ids[0], "2",
+        "1-typo match (bucket 1) must outrank 2-typo match (bucket 2) even when 2-typo BM25 is higher"
+    );
+}
+
+/// BM25 tuning test (A0a): relevance-path scores should be adjusted from Tantivy's
+/// default `b=0.75` toward short-field behavior (`b=0.4`).
+///
+/// We compare:
+/// - relevance path (`sort = None`): stage-2 ranking applies BM25 tuning
+/// - explicit field sort path (`sort = ByField`): stage-2 ranking is bypassed,
+///   leaving raw Tantivy scores untouched.
+///
+/// For the same matching docs:
+/// - short doc score should be reduced by tuning (penalize short-doc bias)
+/// - longer doc score should be increased by tuning
+#[tokio::test]
+async fn test_bm25_short_field_length_correction() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec!["title".to_string()]),
+        query_type: "prefixNone".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    // "simple" has tf=1 for "wallet" in a 2-word title (gets short-doc BM25 bonus).
+    // "featured" has tf=2 for "wallet" in a 6-word title (higher relevance but
+    // heavily penalized by length normalization at b=0.75).
+    // This pair is intentionally chosen so b=0.75 prefers "simple", while
+    // b=0.4 should prefer "featured".
+    let docs = vec![
+        json!({"_id": "simple", "title": "Leather Wallet"}),
+        json!({"_id": "featured", "title": "Premium Wallet Collection Wallet Gift Set"}),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| crate::types::Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let relevance_results = manager.search("test", "wallet", None, None, 10).unwrap();
+    let raw_results = manager
+        .search("test", "wallet", None, Some(&sort_asc("title")), 10)
+        .unwrap();
+
+    let ids: Vec<&str> = relevance_results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    // Both docs must appear in results
+    assert!(ids.contains(&"simple"), "simple doc should match 'wallet'");
+    assert!(
+        ids.contains(&"featured"),
+        "featured doc should match 'wallet'"
+    );
+
+    let relevance_simple = relevance_results
+        .documents
+        .iter()
+        .find(|d| d.document.id == "simple")
+        .unwrap()
+        .score;
+    let relevance_featured = relevance_results
+        .documents
+        .iter()
+        .find(|d| d.document.id == "featured")
+        .unwrap()
+        .score;
+    let raw_simple = raw_results
+        .documents
+        .iter()
+        .find(|d| d.document.id == "simple")
+        .unwrap()
+        .score;
+    let raw_featured = raw_results
+        .documents
+        .iter()
+        .find(|d| d.document.id == "featured")
+        .unwrap()
+        .score;
+
+    // Relevance path must apply score tuning relative to raw Tantivy scores.
+    assert!(
+        relevance_simple < raw_simple,
+        "short-doc score should be reduced by BM25 length normalization tuning"
+    );
+    assert!(
+        relevance_featured > raw_featured,
+        "longer-doc score should be increased by BM25 length normalization tuning"
+    );
+
+    assert_eq!(
+        ids[0], "featured",
+        "Doc with higher tf for query term must rank above shorter doc after BM25 length correction"
+    );
+}
+
+// ============================================================
+// Stage 3: Exact-vs-Prefix tier (A0c)
+// ============================================================
+
+/// An exact word match must outrank prefix-only matches regardless of BM25 score.
+/// With prefixLast, a single-word query means that word is the last (and only) term,
+/// so it is prefix-eligible. Doc "run" (exact) must beat "running running running"
+/// (prefix match with higher BM25).
+#[tokio::test]
+async fn test_exact_word_beats_prefix_match() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec!["title".to_string()]),
+        query_type: "prefixLast".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    let docs = vec![
+        json!({"_id": "exact", "title": "run"}),
+        json!({"_id": "prefix_running", "title": "running running running running running"}),
+        json!({"_id": "prefix_runner", "title": "runner runner runner runner runner"}),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let results = manager.search("test", "run", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert!(
+        ids.len() >= 2,
+        "Should match exact and prefix docs, got: {:?}",
+        ids
+    );
+    assert_eq!(
+        ids[0], "exact",
+        "Exact word match 'run' must rank above prefix matches 'running'/'runner' regardless of BM25. Got: {:?}",
+        ids
+    );
+}
+
+/// Multi-word query with prefixLast: only the last term is prefix-eligible.
+/// "red shoe" → "red" is non-prefix (must be exact/fuzzy), "shoe" is prefix-eligible.
+/// Doc A: exact "red" + exact "shoe" → exact_vs_prefix = 0
+/// Doc B: exact "red" + "shoes" (prefix on last word) → exact_vs_prefix = 1
+/// Doc C: exact "red" + "shoelace" (prefix on last word) → exact_vs_prefix = 1
+/// A must rank above B and C. B and C are in the same prefix bucket, tiebreak by BM25.
+#[tokio::test]
+async fn test_exact_vs_prefix_multiword_prefix_last() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec!["title".to_string()]),
+        query_type: "prefixLast".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    let docs = vec![
+        // Doc A: exact matches for both words
+        json!({"_id": "exact_both", "title": "red shoe"}),
+        // Doc B: exact "red" + prefix match "shoes" (higher BM25 from repetition)
+        json!({"_id": "prefix_shoes", "title": "red shoes shoes shoes shoes shoes"}),
+        // Doc C: exact "red" + prefix match "shoelace" (also high BM25)
+        json!({"_id": "prefix_shoelace", "title": "red shoelace shoelace shoelace shoelace"}),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let results = manager.search("test", "red shoe", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert!(
+        ids.len() >= 2,
+        "Should match docs with 'red' and 'shoe*', got: {:?}",
+        ids
+    );
+    assert_eq!(
+        ids[0], "exact_both",
+        "Doc with exact matches for all terms must rank above prefix matches. Got: {:?}",
+        ids
+    );
+}
+
+// ============================================================
+// Stage 3: Attribute bucket hard tier (A0d)
+// ============================================================
+
+/// Match in searchableAttributes[0] (title) must always outrank match in
+/// searchableAttributes[1] (description), regardless of BM25 score.
+/// Doc A: match only in description with high BM25 (term repeated 10x).
+/// Doc B: match in title with low BM25 (single mention).
+/// Doc B must rank above Doc A because title > description as hard tier.
+#[tokio::test]
+async fn test_attribute_bucket_hard_tier() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec!["title".to_string(), "description".to_string()]),
+        query_type: "prefixNone".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    let docs = vec![
+        // Doc A: match in description only (high BM25 from repetition), filler in title
+        json!({
+            "_id": "desc_match",
+            "title": "something completely unrelated here",
+            "description": "wallet wallet wallet wallet wallet wallet wallet wallet wallet wallet"
+        }),
+        // Doc B: match in title (low BM25, single mention), filler in description
+        json!({
+            "_id": "title_match",
+            "title": "wallet",
+            "description": "something completely unrelated here filler text padding"
+        }),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let results = manager.search("test", "wallet", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert!(
+        ids.len() >= 2,
+        "Both docs should match 'wallet', got: {:?}",
+        ids
+    );
+    assert_eq!(
+        ids[0], "title_match",
+        "Match in title (attr 0) must outrank match in description (attr 1) regardless of BM25. Got: {:?}",
+        ids
+    );
+}
+
+/// Doc with match in both title (attr 0) and description (attr 1) should get
+/// attribute bucket 0 (best match wins).
+#[tokio::test]
+async fn test_attribute_bucket_multi_attribute_match() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec!["title".to_string(), "description".to_string()]),
+        query_type: "prefixNone".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    let docs = vec![
+        // Doc A: match in both title and description
+        json!({
+            "_id": "both_attrs",
+            "title": "wallet holder",
+            "description": "wallet wallet wallet wallet wallet"
+        }),
+        // Doc B: match only in description (high BM25)
+        json!({
+            "_id": "desc_only",
+            "title": "something else entirely",
+            "description": "wallet wallet wallet wallet wallet wallet wallet wallet"
+        }),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let results = manager.search("test", "wallet", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert!(
+        ids.len() >= 2,
+        "Both docs should match 'wallet', got: {:?}",
+        ids
+    );
+    assert_eq!(
+        ids[0], "both_attrs",
+        "Doc with match in title (attr 0) should rank above doc with match only in description (attr 1). Got: {:?}",
+        ids
+    );
+}
+
+/// `unordered()` should preserve attribute priority while disabling only the
+/// intra-attribute word-position penalty.
+#[tokio::test]
+async fn test_unordered_searchable_attribute_preserves_attribute_priority() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let docs = vec![
+        json!({
+            "_id": "description_match",
+            "title": "other text",
+            "description": "wallet wallet wallet wallet wallet wallet wallet wallet wallet wallet"
+        }),
+        json!({
+            "_id": "title_match",
+            "title": "wallet",
+            "description": "filler words only"
+        }),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| Document::from_json(&v).unwrap())
+        .collect();
+
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec![
+            "unordered(title)".to_string(),
+            "description".to_string(),
+        ]),
+        query_type: "prefixNone".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    let results = manager.search("test", "wallet", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert_eq!(
+        ids[0], "title_match",
+        "unordered(title) should still outrank a later description match because unordered() must keep attribute priority"
+    );
+}
+
+/// With prefixLast, non-last terms are not prefix-eligible. A title token like
+/// "redness" must not count as an attribute-0 match for query term "red".
+/// The doc with true title exact match must outrank a high-BM25 doc that only
+/// has the exact terms in description.
+#[tokio::test]
+async fn test_attribute_bucket_ignores_non_prefix_term_prefix_last() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec!["title".to_string(), "description".to_string()]),
+        query_type: "prefixLast".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    let docs = vec![
+        // True attr-0 match: exact words in title.
+        json!({
+            "_id": "title_exact",
+            "title": "red shoe",
+            "description": "filler text"
+        }),
+        // Prefix leak candidate: title has only prefix for non-prefix-eligible term "red".
+        // Exact terms exist in description with high tf to maximize BM25 pressure.
+        json!({
+            "_id": "prefix_leak_candidate",
+            "title": "redness",
+            "description": "red shoe red shoe red shoe red shoe red shoe red shoe red shoe red shoe red shoe red shoe"
+        }),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let results = manager.search("test", "red shoe", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert!(
+        ids.len() >= 2,
+        "Both docs should match query terms, got: {:?}",
+        ids
+    );
+    assert_eq!(
+        ids[0], "title_exact",
+        "Non-prefix term prefix in title must not elevate attribute bucket under prefixLast. Got: {:?}",
+        ids
+    );
+}
+
+/// Short query terms below typo thresholds must not count fuzzy matches toward
+/// higher-priority attribute buckets. For query "cat" (len=3), "cut" in title
+/// is not a valid typo match, so this doc should still be treated as matching
+/// in description (attr 1), not title (attr 0).
+#[tokio::test]
+async fn test_attribute_bucket_respects_short_word_typo_thresholds() {
+    let temp = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp.path());
+    manager.create_tenant("test").unwrap();
+
+    let settings = IndexSettings {
+        searchable_attributes: Some(vec!["title".to_string(), "description".to_string()]),
+        query_type: "prefixNone".to_string(),
+        min_word_size_for_1_typo: 4,
+        min_word_size_for_2_typos: 8,
+        ..Default::default()
+    };
+    settings
+        .save(temp.path().join("test/settings.json"))
+        .unwrap();
+
+    let docs = vec![
+        // Should remain attr-1: title has short-word typo only ("cut"), description has exact match.
+        json!({
+            "_id": "short_typo_title",
+            "title": "cut",
+            "description": "cat cat cat cat cat cat cat cat cat cat"
+        }),
+        // True attr-0 exact match.
+        json!({
+            "_id": "exact_title",
+            "title": "cat",
+            "description": "filler filler filler"
+        }),
+    ];
+    let docs: Vec<_> = docs
+        .into_iter()
+        .map(|v| Document::from_json(&v).unwrap())
+        .collect();
+    manager.add_documents_sync("test", docs).await.unwrap();
+
+    let results = manager.search("test", "cat", None, None, 10).unwrap();
+    let ids: Vec<&str> = results
+        .documents
+        .iter()
+        .map(|d| d.document.id.as_str())
+        .collect();
+
+    assert!(
+        ids.len() >= 2,
+        "Both docs should match query through exact title/description terms, got: {:?}",
+        ids
+    );
+    assert_eq!(
+        ids[0], "exact_title",
+        "Short-word typo in title must not be treated as attr-0 match for bucket ranking. Got: {:?}",
+        ids
+    );
 }

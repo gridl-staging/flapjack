@@ -1,5 +1,10 @@
+/**
+ */
 import type { Cache, CacheEvents } from '../types';
 
+/**
+ * TODO: Document createNullCache.
+ */
 export function createNullCache(): Cache {
   return {
     get<TValue>(

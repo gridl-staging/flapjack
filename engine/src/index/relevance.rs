@@ -1,3 +1,4 @@
+//! Relevance configuration for controlling per-attribute search weights, supporting both explicit overrides and positional exponential decay defaults.
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,6 +20,16 @@ impl RelevanceConfig {
         Ok(config)
     }
 
+    /// Compute per-attribute search weights from the ordered searchable-attributes list.
+    ///
+    /// For each attribute in `searchable_attributes`, use the explicit weight from
+    /// `attribute_weights` if one exists; otherwise assign a default weight of
+    /// `100^(-position)`, giving exponential decay by list order (1.0, 0.01, 0.0001, …).
+    ///
+    /// # Returns
+    ///
+    /// A map from attribute name to its resolved weight. Returns an empty map when
+    /// `searchable_attributes` is `None`.
     pub fn derive_weights(&self) -> HashMap<String, f32> {
         let mut weights = HashMap::new();
 

@@ -1,13 +1,29 @@
+//! Convert documents between JSON, internal `Document`, and Tantivy representations, handling field splitting for search vs. filter indexes and geo-location extraction.
 use crate::error::{FlapjackError, Result};
 use crate::index::facet_translation::{extract_facet_paths, is_hierarchical_facet};
 use crate::index::schema::Schema;
 use crate::index::settings::IndexSettings;
+#[cfg(feature = "decompound")]
+use crate::query::decompound::decompound_for_lang;
+use crate::text_normalization::{is_camel_case_attr_path, split_camel_case_words};
 use crate::types::{Document, DocumentId, FieldValue};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use tantivy::schema::{Field, OwnedValue};
 use tantivy::TantivyDocument;
 
+/// Convert raw JSON into a `TantivyDocument` using explicit field handles.
+///
+/// Extracts `_id` or `objectID` as the document identifier, splits remaining fields into search and filter JSON objects, copies the search object into the exact-match field, and indexes string and hierarchical facet values.
+///
+/// # Arguments
+///
+/// * `json` - A JSON object containing the document. Must have an `_id` or `objectID` string field.
+/// * `id_field` .. `facets_field` - Pre-resolved Tantivy field handles.
+///
+/// # Errors
+///
+/// Returns `FlapjackError::InvalidDocument` if the input is not a JSON object, or `FlapjackError::MissingField` if neither `_id` nor `objectID` is present.
 pub fn json_to_tantivy_doc(
     json: &Value,
     id_field: Field,
@@ -77,6 +93,13 @@ pub struct DocumentConverter {
 }
 
 impl DocumentConverter {
+    /// Create a converter by resolving the required Tantivy field handles from the schema.
+    ///
+    /// Geo-location fields (`_geo_lat`, `_geo_lng`) are optional; all other fields must be present.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FlapjackError::FieldNotFound` if any required field (`_id`, `_json_search`, `_json_filter`, `_json_exact`, `_facets`) is missing from `tantivy_schema`.
     pub fn new(_schema: &Schema, tantivy_schema: &tantivy::schema::Schema) -> Result<Self> {
         let id_field = tantivy_schema
             .get_field("_id")
@@ -107,6 +130,18 @@ impl DocumentConverter {
         })
     }
 
+    /// Convert an internal `Document` into a `TantivyDocument` ready for indexing.
+    ///
+    /// Extracts `_geoloc` into dedicated latitude/longitude fields, applies camel-case splitting and decompound expansion to the search copy, splits fields into search and filter JSON objects, injects `objectID` into the filter object, and indexes facet paths for all fields in the settings' facet set.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` - The source document.
+    /// * `settings` - Optional index settings controlling text transformations and facet configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JSON-to-BTreeMap conversion fails.
     pub fn to_tantivy(
         &self,
         doc: &Document,
@@ -134,7 +169,20 @@ impl DocumentConverter {
             }
         }
 
-        let (search_json, mut filter_json) = split_by_type(&json_fields);
+        let mut search_json = json_fields.clone();
+        if let Some(settings) = settings {
+            apply_camel_case_splitting(&mut search_json, "", &settings.camel_case_attributes);
+
+            #[cfg(feature = "decompound")]
+            if let Some(decompounded_attributes) = &settings.decompounded_attributes {
+                if !decompounded_attributes.is_empty() {
+                    apply_decompound_expansion(&mut search_json, "", decompounded_attributes);
+                }
+            }
+        }
+
+        let (search_json, _) = split_by_type(&search_json);
+        let (_, mut filter_json) = split_by_type(&json_fields);
         if let Value::Object(ref mut filter_map) = filter_json {
             filter_map.insert("objectID".to_string(), Value::String(doc.id.clone()));
         }
@@ -164,19 +212,24 @@ impl DocumentConverter {
                     s.as_str()
                 };
                 vec![format!("/{}/{}", field_name, truncated)]
+            } else if let Value::Number(n) = value {
+                vec![format!("/{}/{}", field_name, n)]
+            } else if let Value::Bool(b) = value {
+                vec![format!("/{}/{}", field_name, b)]
             } else if let Value::Array(arr) = value {
                 arr.iter()
-                    .filter_map(|item| {
-                        if let Value::String(s) = item {
+                    .filter_map(|item| match item {
+                        Value::String(s) => {
                             let truncated = if s.len() > 1000 {
                                 &s[..1000]
                             } else {
                                 s.as_str()
                             };
                             Some(format!("/{}/{}", field_name, truncated))
-                        } else {
-                            None
                         }
+                        Value::Number(n) => Some(format!("/{}/{}", field_name, n)),
+                        Value::Bool(b) => Some(format!("/{}/{}", field_name, b)),
+                        _ => None,
                     })
                     .collect()
             } else {
@@ -191,6 +244,13 @@ impl DocumentConverter {
         Ok(tantivy_doc)
     }
 
+    /// Reconstruct an internal `Document` from a `TantivyDocument`.
+    ///
+    /// Reads the document ID from the `_id` field and rebuilds the field map from the `_json_filter` object. The `_ignored_doc_id` parameter is unused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `_id` or `_json_filter` fields are missing or malformed.
     pub fn from_tantivy(
         &self,
         tantivy_doc: TantivyDocument,
@@ -219,6 +279,143 @@ impl DocumentConverter {
     }
 }
 
+/// Split camelCase tokens in-place within string fields that match the configured attribute paths.
+///
+/// Recurses into objects and arrays. Only transforms `Value::String` nodes whose accumulated dot-separated path appears in `camel_case_attributes`.
+fn apply_camel_case_splitting(value: &mut Value, path: &str, camel_case_attributes: &[String]) {
+    if camel_case_attributes.is_empty() {
+        return;
+    }
+    match value {
+        Value::String(text) => {
+            if is_camel_case_attr_path(path, camel_case_attributes) {
+                *text = split_camel_case_words(text);
+            }
+        }
+        Value::Object(map) => {
+            for (field_name, child) in map.iter_mut() {
+                let child_path = if path.is_empty() {
+                    field_name.clone()
+                } else {
+                    format!("{}.{}", path, field_name)
+                };
+                apply_camel_case_splitting(child, &child_path, camel_case_attributes);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                apply_camel_case_splitting(item, path, camel_case_attributes);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Expand compound words in-place by appending decompounded tokens to matching string fields.
+///
+/// Recurses into objects and arrays. For each string field whose attribute path matches an entry in `decompounded_attributes`, every whitespace-delimited token is decompounded for each configured language and the resulting parts are appended to the original text separated by spaces.
+#[cfg(feature = "decompound")]
+fn apply_decompound_expansion(
+    value: &mut Value,
+    path: &str,
+    decompounded_attributes: &std::collections::HashMap<String, Vec<String>>,
+) {
+    if decompounded_attributes.is_empty() {
+        return;
+    }
+
+    match value {
+        Value::String(text) => {
+            let languages = is_decompound_attr_path(path, decompounded_attributes);
+            if languages.is_empty() {
+                return;
+            }
+
+            let mut extras = Vec::<String>::new();
+            for token in text.split_whitespace() {
+                let lower = token.to_lowercase();
+                let stripped: String = lower
+                    .chars()
+                    .skip_while(|c| !c.is_alphanumeric())
+                    .collect::<String>()
+                    .trim_end_matches(|c: char| !c.is_alphanumeric())
+                    .to_string();
+                if stripped.is_empty() {
+                    continue;
+                }
+                for lang in &languages {
+                    if let Some(parts) = decompound_for_lang(&stripped, lang) {
+                        for part in parts {
+                            if !extras.iter().any(|p| p == &part) {
+                                extras.push(part);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !extras.is_empty() {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(&extras.join(" "));
+            }
+        }
+        Value::Object(map) => {
+            for (field_name, child) in map.iter_mut() {
+                let child_path = if path.is_empty() {
+                    field_name.clone()
+                } else {
+                    format!("{}.{}", path, field_name)
+                };
+                apply_decompound_expansion(child, &child_path, decompounded_attributes);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                apply_decompound_expansion(item, path, decompounded_attributes);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Return the list of language codes for which a given attribute path should be decompounded.
+///
+/// Matches exact paths and dot-prefixed children (e.g., path `"desc.body"` matches attribute `"desc"`).
+#[cfg(feature = "decompound")]
+fn is_decompound_attr_path(
+    path: &str,
+    decompounded_attributes: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    decompounded_attributes
+        .iter()
+        .filter_map(|(lang, attributes)| {
+            if attributes.iter().any(|attr| {
+                path == attr
+                    || path
+                        .strip_prefix(attr.as_str())
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            }) {
+                Some(lang.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Convert a Tantivy `OwnedValue::Object` into a flat field map.
+///
+/// Null values inside the object are silently skipped.
+///
+/// # Returns
+///
+/// A `HashMap<String, FieldValue>` of the object's entries.
+///
+/// # Errors
+///
+/// Returns `FlapjackError::InvalidDocument` if `value` is not an `OwnedValue::Object`.
 fn owned_value_to_fields(
     value: &OwnedValue,
 ) -> Result<std::collections::HashMap<String, FieldValue>> {
@@ -238,6 +435,9 @@ fn owned_value_to_fields(
     }
 }
 
+/// Convert a single Tantivy `OwnedValue` into a `FieldValue`.
+///
+/// Returns `None` for `Null` and unrecognized variants. Booleans are converted to their string representation. `U64` values are cast to `i64`.
 fn owned_to_field_value(value: &OwnedValue) -> Option<FieldValue> {
     match value {
         OwnedValue::Null => None,
@@ -274,111 +474,10 @@ fn owned_to_field_value(value: &OwnedValue) -> Option<FieldValue> {
 fn fields_to_json(fields: &std::collections::HashMap<String, FieldValue>) -> Value {
     let mut map = Map::new();
     for (key, value) in fields {
-        let json_value = field_value_to_json(value);
+        let json_value = crate::types::field_value_to_json_value(value);
         map.insert(key.clone(), json_value);
     }
     Value::Object(map)
-}
-
-fn field_value_to_json(value: &FieldValue) -> Value {
-    match value {
-        FieldValue::Object(map) => {
-            let mut obj = Map::new();
-            for (k, v) in map {
-                obj.insert(k.clone(), field_value_to_json(v));
-            }
-            Value::Object(obj)
-        }
-        FieldValue::Array(items) => Value::Array(items.iter().map(field_value_to_json).collect()),
-        FieldValue::Text(s) => Value::String(s.clone()),
-        FieldValue::Integer(i) => Value::Number(serde_json::Number::from(*i)),
-        FieldValue::Float(f) => serde_json::Number::from_f64(*f)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
-        FieldValue::Date(d) => Value::Number(serde_json::Number::from(*d)),
-        FieldValue::Facet(s) => Value::String(s.clone()),
-    }
-}
-
-#[allow(dead_code)]
-fn json_to_fields(json: &Value) -> Result<std::collections::HashMap<String, FieldValue>> {
-    let mut fields = std::collections::HashMap::new();
-
-    if let Value::Object(obj) = json {
-        for (key, val) in obj {
-            let field_value = match val {
-                Value::String(s) => FieldValue::Text(s.clone()),
-                Value::Number(n) => {
-                    if let Some(i) = n.as_i64() {
-                        FieldValue::Integer(i)
-                    } else if let Some(f) = n.as_f64() {
-                        FieldValue::Float(f)
-                    } else {
-                        continue;
-                    }
-                }
-                Value::Bool(_) => continue,
-                Value::Null => continue,
-                Value::Array(_) => continue,
-                Value::Object(_) => continue,
-            };
-            fields.insert(key.clone(), field_value);
-        }
-    }
-
-    Ok(fields)
-}
-
-#[allow(dead_code)]
-fn json_to_fields_full(json: &Value) -> Result<std::collections::HashMap<String, FieldValue>> {
-    let mut fields = std::collections::HashMap::new();
-
-    if let Value::Object(obj) = json {
-        for (key, val) in obj {
-            if let Some(field_value) = json_value_to_field_value(val) {
-                fields.insert(key.clone(), field_value);
-            }
-        }
-    }
-
-    Ok(fields)
-}
-
-#[allow(dead_code)]
-fn json_value_to_field_value(val: &Value) -> Option<FieldValue> {
-    match val {
-        Value::String(s) => Some(FieldValue::Text(s.clone())),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(FieldValue::Integer(i))
-            } else {
-                n.as_f64().map(FieldValue::Float)
-            }
-        }
-        Value::Array(arr) => {
-            let items: Vec<FieldValue> = arr.iter().filter_map(json_value_to_field_value).collect();
-            if items.is_empty() {
-                None
-            } else {
-                Some(FieldValue::Array(items))
-            }
-        }
-        Value::Object(obj) => {
-            let mut nested = std::collections::HashMap::new();
-            for (k, v) in obj {
-                if let Some(field_val) = json_value_to_field_value(v) {
-                    nested.insert(k.clone(), field_val);
-                }
-            }
-            if nested.is_empty() {
-                None
-            } else {
-                Some(FieldValue::Object(nested))
-            }
-        }
-        Value::Null => None,
-        Value::Bool(_) => None,
-    }
 }
 
 fn json_to_btree(value: &Value) -> Result<BTreeMap<String, OwnedValue>> {
@@ -396,11 +495,13 @@ fn json_to_btree(value: &Value) -> Result<BTreeMap<String, OwnedValue>> {
     }
 }
 
-#[allow(dead_code)]
-fn btree_to_vec(btree: BTreeMap<String, OwnedValue>) -> Vec<(String, OwnedValue)> {
-    btree.into_iter().collect()
-}
-
+/// Convert a `serde_json::Value` into a Tantivy `OwnedValue`.
+///
+/// Numbers are stored as `I64` when they fit, falling back to `U64`, then `F64`.
+///
+/// # Errors
+///
+/// Returns `FlapjackError::InvalidDocument` if a JSON number cannot be represented in any numeric type.
 fn json_value_to_owned(value: &Value) -> Result<OwnedValue> {
     match value {
         Value::Null => Ok(OwnedValue::Null),
@@ -431,6 +532,9 @@ fn json_value_to_owned(value: &Value) -> Result<OwnedValue> {
     }
 }
 
+/// Extract a latitude/longitude pair from a `_geoloc` JSON value.
+///
+/// Accepts an object with `lat` and `lng` numeric fields, or an array whose first element is such an object. Returns `None` if the value is missing, malformed, or outside the valid coordinate range (lat \[-90, 90\], lng \[-180, 180\]).
 fn extract_geoloc(value: &Value) -> Option<(f64, f64)> {
     match value {
         Value::Object(map) => {
@@ -453,6 +557,9 @@ fn extract_geoloc(value: &Value) -> Option<(f64, f64)> {
     }
 }
 
+/// Partition a JSON value into a search component and a filter component.
+///
+/// Strings appear in both. Numbers and booleans appear only in the filter component. Arrays of strings are joined with spaces for search while the original array is kept for filtering. Null values are dropped from both. Objects are recursed into, with null-valued keys omitted.
 fn split_by_type(value: &Value) -> (Value, Value) {
     match value {
         Value::Object(map) => {
@@ -612,62 +719,6 @@ mod tests {
         let fields = owned_value_to_fields(&obj).unwrap();
         assert_eq!(fields.len(), 1);
         assert!(fields.contains_key("a"));
-    }
-
-    // ── field_value_to_json ──────────────────────────────────────────────
-
-    #[test]
-    fn fv_text_to_json() {
-        let v = field_value_to_json(&FieldValue::Text("hello".to_string()));
-        assert_eq!(v, json!("hello"));
-    }
-
-    #[test]
-    fn fv_integer_to_json() {
-        let v = field_value_to_json(&FieldValue::Integer(42));
-        assert_eq!(v, json!(42));
-    }
-
-    #[test]
-    fn fv_float_to_json() {
-        let v = field_value_to_json(&FieldValue::Float(2.5));
-        assert_eq!(v, json!(2.5));
-    }
-
-    #[test]
-    fn fv_float_nan_to_json_null() {
-        let v = field_value_to_json(&FieldValue::Float(f64::NAN));
-        assert_eq!(v, Value::Null);
-    }
-
-    #[test]
-    fn fv_date_to_json() {
-        let v = field_value_to_json(&FieldValue::Date(1000));
-        assert_eq!(v, json!(1000));
-    }
-
-    #[test]
-    fn fv_facet_to_json() {
-        let v = field_value_to_json(&FieldValue::Facet("Electronics".to_string()));
-        assert_eq!(v, json!("Electronics"));
-    }
-
-    #[test]
-    fn fv_array_to_json() {
-        let arr = FieldValue::Array(vec![
-            FieldValue::Text("a".to_string()),
-            FieldValue::Integer(1),
-        ]);
-        let v = field_value_to_json(&arr);
-        assert_eq!(v, json!(["a", 1]));
-    }
-
-    #[test]
-    fn fv_object_to_json() {
-        let mut map = HashMap::new();
-        map.insert("x".to_string(), FieldValue::Integer(1));
-        let v = field_value_to_json(&FieldValue::Object(map));
-        assert_eq!(v, json!({"x": 1}));
     }
 
     // ── fields_to_json roundtrip ─────────────────────────────────────────
@@ -885,90 +936,5 @@ mod tests {
         let filter_obj = f.as_object().unwrap();
         assert!(search_obj.get("removed").is_none());
         assert!(filter_obj.get("removed").is_none());
-    }
-
-    // ── json_value_to_field_value ────────────────────────────────────────
-
-    #[test]
-    fn jv_string_to_text() {
-        assert_eq!(
-            json_value_to_field_value(&json!("hello")),
-            Some(FieldValue::Text("hello".to_string()))
-        );
-    }
-
-    #[test]
-    fn jv_integer_to_integer() {
-        assert_eq!(
-            json_value_to_field_value(&json!(42)),
-            Some(FieldValue::Integer(42))
-        );
-    }
-
-    #[test]
-    fn jv_float_to_float() {
-        assert_eq!(
-            json_value_to_field_value(&json!(2.5)),
-            Some(FieldValue::Float(2.5))
-        );
-    }
-
-    #[test]
-    fn jv_null_returns_none() {
-        assert_eq!(json_value_to_field_value(&Value::Null), None);
-    }
-
-    #[test]
-    fn jv_bool_returns_none() {
-        assert_eq!(json_value_to_field_value(&json!(true)), None);
-    }
-
-    #[test]
-    fn jv_empty_array_returns_none() {
-        assert_eq!(json_value_to_field_value(&json!([])), None);
-    }
-
-    #[test]
-    fn jv_array_of_nulls_returns_none() {
-        assert_eq!(json_value_to_field_value(&json!([null, null])), None);
-    }
-
-    #[test]
-    fn jv_nested_object() {
-        let v = json!({"x": 1, "y": "two"});
-        match json_value_to_field_value(&v) {
-            Some(FieldValue::Object(map)) => {
-                assert_eq!(map.get("x"), Some(&FieldValue::Integer(1)));
-                assert_eq!(map.get("y"), Some(&FieldValue::Text("two".to_string())));
-            }
-            other => panic!("expected Object, got {:?}", other),
-        }
-    }
-
-    // ── json_to_fields (basic) ───────────────────────────────────────────
-
-    #[test]
-    fn json_to_fields_basic_types() {
-        let v = json!({"name": "Widget", "price": 10, "weight": 1.5});
-        let fields = json_to_fields(&v).unwrap();
-        assert_eq!(
-            fields.get("name"),
-            Some(&FieldValue::Text("Widget".to_string()))
-        );
-        assert_eq!(fields.get("price"), Some(&FieldValue::Integer(10)));
-        assert_eq!(fields.get("weight"), Some(&FieldValue::Float(1.5)));
-    }
-
-    #[test]
-    fn json_to_fields_skips_non_primitives() {
-        let v = json!({"name": "Widget", "tags": ["a", "b"], "meta": {"x": 1}, "flag": true, "nil": null});
-        let fields = json_to_fields(&v).unwrap();
-        assert_eq!(fields.len(), 1); // only "name"
-    }
-
-    #[test]
-    fn json_to_fields_non_object_gives_empty() {
-        let fields = json_to_fields(&json!("string")).unwrap();
-        assert!(fields.is_empty());
     }
 }

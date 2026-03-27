@@ -56,6 +56,7 @@ pub struct EdgeNgramTokenStream<T> {
 }
 
 impl<T: TokenStream> TokenStream for EdgeNgramTokenStream<T> {
+    /// TODO: Document EdgeNgramTokenStream.advance.
     fn advance(&mut self) -> bool {
         loop {
             if let Some(ref token) = self.current_token {

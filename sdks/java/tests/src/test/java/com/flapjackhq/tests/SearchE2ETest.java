@@ -347,6 +347,142 @@ public class SearchE2ETest {
         try { Thread.sleep(500); } catch (InterruptedException e) { /* ignore */ }
     }
 
+    // --- Browse Cursor Pagination ---
+
+    @Test
+    @Order(17)
+    void testBrowseCursorPagination() {
+        BrowseResponse<Map> response = client.browse(
+            TEST_INDEX,
+            new BrowseParamsObject().setHitsPerPage(2),
+            Map.class
+        );
+        assertNotNull(response);
+        assertNotNull(response.getHits());
+        assertEquals(2, response.getHits().size(), "Should return 2 hits per page");
+        assertNotNull(response.getCursor(), "Should have cursor for next page");
+        assertFalse(response.getCursor().isEmpty(), "Cursor should not be empty");
+
+        // Follow cursor
+        BrowseResponse<Map> page2 = client.browse(
+            TEST_INDEX,
+            new BrowseParamsObject().setCursor(response.getCursor()).setHitsPerPage(2),
+            Map.class
+        );
+        assertNotNull(page2.getHits());
+        assertTrue(page2.getHits().size() >= 1, "Second page should have at least 1 hit");
+    }
+
+    // --- Stage 1 Settings Round-Trip ---
+
+    @Test
+    @Order(18)
+    void testSettingsNumericAttributesForFilteringRoundtrip() {
+        IndexSettings newSettings = new IndexSettings()
+            .setNumericAttributesForFiltering(Arrays.asList("price", "rating"));
+        client.setSettings(TEST_INDEX, newSettings);
+        try { Thread.sleep(500); } catch (InterruptedException e) { /* ignore */ }
+
+        SettingsResponse settings = client.getSettings(TEST_INDEX);
+        assertNotNull(settings.getNumericAttributesForFiltering(),
+            "numericAttributesForFiltering should be set");
+        assertTrue(settings.getNumericAttributesForFiltering().contains("price"),
+            "Should contain 'price'");
+        assertTrue(settings.getNumericAttributesForFiltering().contains("rating"),
+            "Should contain 'rating'");
+    }
+
+    @Test
+    @Order(19)
+    void testSettingsUnorderedSearchableAttributesRoundtrip() {
+        IndexSettings newSettings = new IndexSettings()
+            .setSearchableAttributes(Arrays.asList("unordered(name)", "brand", "unordered(description)"));
+        client.setSettings(TEST_INDEX, newSettings);
+        try { Thread.sleep(500); } catch (InterruptedException e) { /* ignore */ }
+
+        SettingsResponse settings = client.getSettings(TEST_INDEX);
+        assertTrue(settings.getSearchableAttributes().contains("unordered(name)"),
+            "Should contain 'unordered(name)'");
+        assertTrue(settings.getSearchableAttributes().contains("unordered(description)"),
+            "Should contain 'unordered(description)'");
+
+        // Restore
+        client.setSettings(TEST_INDEX, new IndexSettings()
+            .setSearchableAttributes(Arrays.asList("name", "brand", "category")));
+        try { Thread.sleep(300); } catch (InterruptedException e) { /* ignore */ }
+    }
+
+    @Test
+    @Order(20)
+    void testSettingsAllowCompressionOfIntegerArrayRoundtrip() {
+        IndexSettings newSettings = new IndexSettings()
+            .setAllowCompressionOfIntegerArray(true);
+        client.setSettings(TEST_INDEX, newSettings);
+        try { Thread.sleep(500); } catch (InterruptedException e) { /* ignore */ }
+
+        SettingsResponse settings = client.getSettings(TEST_INDEX);
+        assertTrue(settings.getAllowCompressionOfIntegerArray(),
+            "allowCompressionOfIntegerArray should be true");
+    }
+
+    // --- API Key CRUD ---
+
+    @Test
+    @Order(21)
+    void testApiKeyCrud() throws Exception {
+        String host = System.getenv("FLAPJACK_HOST");
+        if (host == null || host.isEmpty()) host = "localhost";
+        String portStr = System.getenv("FLAPJACK_PORT");
+        int port = (portStr != null && !portStr.isEmpty()) ? Integer.parseInt(portStr) : 7700;
+        String baseUrl = "http://" + host + ":" + port;
+
+        // Create key via HTTP
+        java.net.http.HttpClient httpClient = java.net.http.HttpClient.newHttpClient();
+
+        java.net.http.HttpRequest createReq = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create(baseUrl + "/1/keys"))
+            .header("Content-Type", "application/json")
+            .header("x-algolia-api-key", System.getenv("FLAPJACK_API_KEY") != null ? System.getenv("FLAPJACK_API_KEY") : "test-api-key")
+            .header("x-algolia-application-id", System.getenv("FLAPJACK_APP_ID") != null ? System.getenv("FLAPJACK_APP_ID") : "test-app")
+            .POST(java.net.http.HttpRequest.BodyPublishers.ofString(
+                "{\"acl\":[\"search\",\"browse\"],\"description\":\"Java SDK matrix test key\",\"indexes\":[\"" + TEST_INDEX + "\"]}"
+            ))
+            .build();
+
+        java.net.http.HttpResponse<String> createResp = httpClient.send(createReq, java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, createResp.statusCode(), "Create key should return 200");
+
+        // Extract key from JSON response
+        String body = createResp.body();
+        int keyStart = body.indexOf("\"key\":\"") + 7;
+        int keyEnd = body.indexOf("\"", keyStart);
+        String key = body.substring(keyStart, keyEnd);
+        assertFalse(key.isEmpty(), "Key should not be empty");
+
+        // List keys
+        java.net.http.HttpRequest listReq = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create(baseUrl + "/1/keys"))
+            .header("x-algolia-api-key", System.getenv("FLAPJACK_API_KEY") != null ? System.getenv("FLAPJACK_API_KEY") : "test-api-key")
+            .header("x-algolia-application-id", System.getenv("FLAPJACK_APP_ID") != null ? System.getenv("FLAPJACK_APP_ID") : "test-app")
+            .GET()
+            .build();
+
+        java.net.http.HttpResponse<String> listResp = httpClient.send(listReq, java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, listResp.statusCode());
+        assertTrue(listResp.body().contains("\"keys\""), "List response should contain keys array");
+
+        // Delete key
+        java.net.http.HttpRequest deleteReq = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create(baseUrl + "/1/keys/" + key))
+            .header("x-algolia-api-key", System.getenv("FLAPJACK_API_KEY") != null ? System.getenv("FLAPJACK_API_KEY") : "test-api-key")
+            .header("x-algolia-application-id", System.getenv("FLAPJACK_APP_ID") != null ? System.getenv("FLAPJACK_APP_ID") : "test-app")
+            .DELETE()
+            .build();
+
+        java.net.http.HttpResponse<String> deleteResp = httpClient.send(deleteReq, java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, deleteResp.statusCode(), "Delete key should return 200");
+    }
+
     // --- Save and Search Synonyms ---
 
     @Test

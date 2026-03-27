@@ -1,7 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// A/B test experiment linking a control arm to a single variant arm on a given index.
+///
+/// Supports two mutually exclusive variant modes:
+/// - **Mode A** — query-time parameter overrides (`queryOverrides`) applied to the same index.
+/// - **Mode B** — a completely separate index (`indexName`) for the variant, optionally with team-debiased interleaving.
+///
+/// All JSON (de)serialization uses camelCase field names.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Experiment {
     pub id: String,
@@ -15,6 +23,8 @@ pub struct Experiment {
     pub created_at: i64,
     pub started_at: Option<i64>,
     pub ended_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_at: Option<i64>,
     pub minimum_days: u32,
     pub winsorization_cap: Option<f64>,
     pub conclusion: Option<ExperimentConclusion>,
@@ -23,6 +33,7 @@ pub struct Experiment {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ExperimentStatus {
     Draft,
@@ -32,6 +43,7 @@ pub enum ExperimentStatus {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ExperimentArm {
     pub name: String,
@@ -42,8 +54,10 @@ pub struct ExperimentArm {
 /// Query-time parameters overridable per variant arm (Mode A).
 /// All fields optional — only set what differs from the main index settings.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct QueryOverrides {
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
     pub typo_tolerance: Option<serde_json::Value>,
     pub enable_synonyms: Option<bool>,
     pub enable_rules: Option<bool>,
@@ -56,6 +70,7 @@ pub struct QueryOverrides {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum PrimaryMetric {
     Ctr,
@@ -66,6 +81,7 @@ pub enum PrimaryMetric {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ExperimentConclusion {
     pub winner: Option<String>,
@@ -93,8 +109,45 @@ pub enum ExperimentError {
     Json(#[from] serde_json::Error),
 }
 
+const MAX_NAME_LEN: usize = 256;
+
+/// Validate that a user-supplied name is non-empty, at most 256 characters, and free of path separators (`/`, `\`) or `..` sequences.
+///
+/// # Arguments
+///
+/// * `value` — The string to validate.
+/// * `field` — A human-readable field label included in error messages.
+///
+/// # Errors
+///
+/// Returns `ExperimentError::InvalidConfig` when the value is empty, too long, or contains path-traversal characters.
+fn validate_safe_name(value: &str, field: &str) -> Result<(), ExperimentError> {
+    if value.is_empty() {
+        return Err(ExperimentError::InvalidConfig(format!(
+            "{field} must not be empty"
+        )));
+    }
+    if value.len() > MAX_NAME_LEN {
+        return Err(ExperimentError::InvalidConfig(format!(
+            "{field} must not exceed {MAX_NAME_LEN} characters"
+        )));
+    }
+    if value.contains('/') || value.contains('\\') || value.contains("..") {
+        return Err(ExperimentError::InvalidConfig(format!(
+            "{field} must not contain path separators or '..'"
+        )));
+    }
+    Ok(())
+}
+
 impl Experiment {
+    /// TODO: Document Experiment.validate.
     pub fn validate(&self) -> Result<(), ExperimentError> {
+        validate_safe_name(&self.name, "name")?;
+        validate_safe_name(&self.index_name, "indexName")?;
+        if let Some(ref idx) = self.variant.index_name {
+            validate_safe_name(idx, "variant.indexName")?;
+        }
         if self.traffic_split <= 0.0 || self.traffic_split >= 1.0 {
             return Err(ExperimentError::InvalidConfig(
                 "trafficSplit must be in (0.0, 1.0) exclusive".to_string(),
@@ -128,6 +181,9 @@ impl Experiment {
 mod tests {
     use super::*;
 
+    /// Create a minimal valid experiment fixture for unit tests.
+    ///
+    /// Returns an Experiment with sensible defaults configured in Mode A (query overrides).
     fn valid_experiment() -> Experiment {
         Experiment {
             id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -152,6 +208,7 @@ mod tests {
             created_at: 1700000000000,
             started_at: None,
             ended_at: None,
+            stopped_at: None,
             minimum_days: 14,
             winsorization_cap: None,
             conclusion: None,
@@ -296,6 +353,49 @@ mod tests {
         let mut e = valid_experiment();
         e.interleaving = None;
         assert!(e.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_name_rejects_empty() {
+        let mut e = valid_experiment();
+        e.name = "".to_string();
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_too_long() {
+        let mut e = valid_experiment();
+        e.name = "x".repeat(257);
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_index_name_rejects_path_traversal() {
+        let mut e = valid_experiment();
+        e.index_name = "../../etc".to_string();
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_index_name_rejects_slash() {
+        let mut e = valid_experiment();
+        e.index_name = "foo/bar".to_string();
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_variant_index_rejects_path_traversal() {
+        let mut e = valid_experiment();
+        e.variant.query_overrides = None;
+        e.variant.index_name = Some("../secret".to_string());
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn validate_index_name_rejects_empty() {
+        let mut e = valid_experiment();
+        e.index_name = "".to_string();
+        assert!(e.validate().is_err());
     }
 
     #[test]

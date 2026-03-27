@@ -16,9 +16,9 @@ pub mod seed;
 pub mod types;
 pub mod writer;
 
-pub use collector::AnalyticsCollector;
+pub use collector::{AnalyticsCollector, DebugEvent};
 pub use config::AnalyticsConfig;
-pub use query::AnalyticsQueryEngine;
+pub use query::{AnalyticsQueryEngine, AnalyticsQueryParams};
 
 use once_cell::sync::OnceCell;
 use std::sync::Arc;

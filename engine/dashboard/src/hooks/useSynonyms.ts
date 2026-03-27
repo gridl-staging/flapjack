@@ -1,3 +1,6 @@
+/**
+ * @module React Query hooks for searching, saving, deleting, and clearing synonyms on a Flapjack index.
+ */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import type { Synonym, SynonymSearchResponse } from '@/lib/types';
@@ -25,6 +28,12 @@ export function useSynonyms({ indexName, query = '', type, page = 0, hitsPerPage
   });
 }
 
+/**
+ * Returns a mutation that creates or updates a synonym by PUT-ing it to the index endpoint.
+ * Invalidates the synonyms query cache and shows a toast on success or failure.
+ * @param indexName - Target index name.
+ * @returns A TanStack Query mutation whose `mutate` accepts a `Synonym` object.
+ */
 export function useSaveSynonym(indexName: string) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -51,6 +60,12 @@ export function useSaveSynonym(indexName: string) {
   });
 }
 
+/**
+ * Returns a mutation that deletes a single synonym by its object ID.
+ * Invalidates the synonyms query cache and shows a toast on success or failure.
+ * @param indexName - Target index name.
+ * @returns A TanStack Query mutation whose `mutate` accepts the synonym `objectID` string.
+ */
 export function useDeleteSynonym(indexName: string) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -76,6 +91,12 @@ export function useDeleteSynonym(indexName: string) {
   });
 }
 
+/**
+ * Returns a mutation that removes all synonyms from the given index.
+ * Invalidates the synonyms query cache and shows a toast on success or failure.
+ * @param indexName - Target index name.
+ * @returns A TanStack Query mutation (no arguments needed for `mutate`).
+ */
 export function useClearSynonyms(indexName: string) {
   const queryClient = useQueryClient();
   const { toast } = useToast();

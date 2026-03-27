@@ -1,8 +1,13 @@
+/**
+ */
 import type { Cache } from './cache';
 import type { Host } from './host';
 import type { Logger } from './logger';
 import type { EndRequest, Headers, QueryParameters, Request, Requester, Response } from './requester';
 
+/**
+ * TODO: Document RequestOptions.
+ */
 export type RequestOptions = Pick<Request, 'cacheable'> & {
   /**
    * Custom timeout for the request. Note that, in normal situations
@@ -61,6 +66,9 @@ export type FlapjackAgent = {
   add: (options: FlapjackAgentOptions) => FlapjackAgent;
 };
 
+/**
+ * TODO: Document Timeouts.
+ */
 export type Timeouts = {
   /**
    * Timeout in milliseconds before the connection is established.
@@ -78,6 +86,9 @@ export type Timeouts = {
   write: number;
 };
 
+/**
+ * TODO: Document TransporterOptions.
+ */
 export type TransporterOptions = {
   /**
    * The cache of the hosts. Usually used to persist

@@ -1,8 +1,11 @@
+"""
+"""
 from random import shuffle
 from typing import List, Optional, cast
 
 
 class Host:
+    """TODO: Document Host."""
     TTL = 300.0
 
     def __init__(
@@ -29,6 +32,7 @@ class Host:
 
 
 class HostsCollection:
+    """TODO: Document HostsCollection."""
     def __init__(self, hosts: List[Host], reorder_hosts=False) -> None:
         self._hosts = hosts
 

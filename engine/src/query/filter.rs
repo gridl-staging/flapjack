@@ -6,8 +6,6 @@ use tantivy::query::{AllQuery, BooleanQuery, Occur, Query};
 use tantivy::schema::Schema;
 
 pub struct FilterCompiler {
-    #[allow(dead_code)]
-    schema: Schema,
     query_parser: tantivy::query::QueryParser,
 }
 
@@ -18,20 +16,18 @@ impl FilterCompiler {
             .expect("_json_filter field must exist in schema");
 
         let query_parser = tantivy::query::QueryParser::new(
-            schema.clone(),
+            schema,
             vec![json_filter_field],
             tantivy::tokenizer::TokenizerManager::default(),
         );
 
-        FilterCompiler {
-            schema,
-            query_parser,
-        }
+        FilterCompiler { query_parser }
     }
 
     const MAX_FILTER_DEPTH: usize = 10;
     const MAX_BOOLEAN_CLAUSES: usize = 1000;
 
+    /// TODO: Document FilterCompiler.compile.
     pub fn compile(
         &self,
         filter: &Filter,
@@ -62,6 +58,7 @@ impl FilterCompiler {
         }
     }
 
+    /// TODO: Document FilterCompiler.is_valid_for_facet_set.
     fn is_valid_for_facet_set(&self, filter: &Filter, facet_set: &HashSet<String>) -> bool {
         match filter {
             Filter::Equals { field, value } => {
@@ -87,6 +84,7 @@ impl FilterCompiler {
         }
     }
 
+    /// TODO: Document FilterCompiler.to_query_string.
     fn to_query_string(&self, filter: &Filter) -> Result<String> {
         match filter {
             Filter::Equals { field, value } => match value {
@@ -173,6 +171,7 @@ impl FilterCompiler {
         }
     }
 
+    /// TODO: Document FilterCompiler.format_value.
     fn format_value(&self, value: &crate::types::FieldValue) -> String {
         match value {
             crate::types::FieldValue::Object(_) => {
@@ -204,6 +203,7 @@ impl FilterCompiler {
         }
     }
 
+    /// TODO: Document FilterCompiler.count_clauses.
     fn count_clauses(&self, filter: &Filter) -> usize {
         fn count_recursive(filter: &Filter) -> usize {
             match filter {
@@ -223,6 +223,7 @@ impl FilterCompiler {
         count_recursive(filter)
     }
 
+    /// TODO: Document FilterCompiler.compile_with_hybrid.
     fn compile_with_hybrid(&self, filter: &Filter, depth: usize) -> Result<Box<dyn Query>> {
         if depth > Self::MAX_FILTER_DEPTH {
             return Err(crate::error::FlapjackError::InvalidQuery(format!(
@@ -298,6 +299,7 @@ mod tests {
         assert_eq!(c.count_clauses(&f), 1);
     }
 
+    /// Test: Count clauses in an AND filter with three Equals children.
     #[test]
     fn count_clauses_and_of_three() {
         let c = make_compiler();
@@ -318,6 +320,7 @@ mod tests {
         assert_eq!(c.count_clauses(&f), 3);
     }
 
+    /// Test: Count clauses in a nested And(Or(...), Not(...)) structure.
     #[test]
     fn count_clauses_nested() {
         let c = make_compiler();

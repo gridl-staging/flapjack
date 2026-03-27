@@ -25,6 +25,7 @@
  * - ESLint enforced via tests/e2e-ui/eslint.config.mjs
  */
 import { test, expect } from '../../fixtures/auth.fixture';
+import { seedAnalytics, deleteIndex, DEFAULT_ANALYTICS_CONFIG } from '../../fixtures/analytics-seed';
 
 const INDEX = 'e2e-products';
 const ANALYTICS_URL = `/index/${INDEX}/analytics`;
@@ -377,14 +378,9 @@ test.describe('Analytics', () => {
     // Verify the filters table has rows (the seeded analytics data includes filter usage)
     await expect(filtersTable.locator('table tbody tr').first()).toBeVisible({ timeout: 10_000 });
 
-    // The "Filters Causing No Results" section is data-dependent — it only renders
-    // when the server returns filter analytics with no-result data. Verify if present.
+    // Shared seed data has top filters but no no-result filters.
     const noResultFilters = page.getByTestId('filters-no-results');
-    const isVisible = await noResultFilters.isVisible().catch(() => false);
-    if (isVisible) {
-      await expect(noResultFilters.getByText('Filters Causing No Results')).toBeVisible();
-      await expect(noResultFilters.locator('table tbody tr').first()).toBeVisible();
-    }
+    await expect(noResultFilters).toHaveCount(0);
   });
 
   // ---------- Breadcrumb Navigation ----------
@@ -411,9 +407,9 @@ test.describe('Analytics', () => {
     // Click the index name link — should navigate to /index/{indexName}
     await breadcrumb.getByText(INDEX).click();
     await expect(page).toHaveURL(new RegExp(`/index/${INDEX}`));
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i))
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: INDEX, exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByPlaceholder('Search documents...')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeVisible();
   });
 
   // ---------- Date Range Label ----------
@@ -517,5 +513,107 @@ test.describe('Analytics', () => {
     // After completion, button should show "Update" and be enabled again
     await expect(flushBtn).toContainText('Update', { timeout: 15_000 });
     await expect(flushBtn).toBeEnabled();
+  });
+
+  // ---------- Conversions Tab ----------
+
+  test('Conversions tab loads with KPI cards', async ({ page }) => {
+    await page.getByTestId('tab-conversions').click();
+
+    const kpiCards = page.getByTestId('conversion-kpi-cards');
+    await expect(kpiCards).toBeVisible({ timeout: 10_000 });
+
+    // All four KPI cards should be present
+    await expect(page.getByTestId('kpi-conversion-rate')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('kpi-add-to-cart-rate')).toBeVisible();
+    await expect(page.getByTestId('kpi-purchase-rate')).toBeVisible();
+    await expect(page.getByTestId('kpi-revenue')).toBeVisible();
+  });
+
+  test('Conversions tab shows conversion rate chart', async ({ page }) => {
+    await page.getByTestId('tab-conversions').click();
+
+    const chart = page.getByTestId('conversion-rate-chart');
+    await expect(chart).toBeVisible({ timeout: 10_000 });
+    await expect(chart.getByText('Conversion Rate Over Time')).toBeVisible();
+
+    // Shared seed data renders conversion history; empty state is not expected.
+    await expect(chart.locator('svg')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('Conversions tab shows add-to-cart and purchase charts with empty revenue breakdown state', async ({ page }) => {
+    await page.getByTestId('tab-conversions').click();
+
+    const atcChart = page.getByTestId('atc-rate-chart');
+    await expect(atcChart).toBeVisible({ timeout: 10_000 });
+    await expect(atcChart.getByText('Add-to-Cart Rate Over Time')).toBeVisible();
+    await expect(atcChart.locator('svg')).toBeVisible({ timeout: 10_000 });
+
+    const purchaseChart = page.getByTestId('purchase-rate-chart');
+    await expect(purchaseChart).toBeVisible({ timeout: 10_000 });
+    await expect(purchaseChart.getByText('Purchase Rate Over Time')).toBeVisible();
+    await expect(purchaseChart.locator('svg')).toBeVisible({ timeout: 10_000 });
+
+    await expect(page.getByTestId('revenue-breakdown')).toHaveCount(0);
+  });
+
+  test('Conversions tab shows country filter', async ({ page }) => {
+    await page.getByTestId('tab-conversions').click();
+
+    const countryFilter = page.getByTestId('conversion-country-filter');
+    await expect(countryFilter).toBeVisible({ timeout: 10_000 });
+
+    // Default value should be "All Countries"
+    await expect(countryFilter).toContainText('All Countries');
+  });
+
+  test('Conversions KPI cards show titles', async ({ page }) => {
+    await page.getByTestId('tab-conversions').click();
+
+    await expect(page.getByTestId('kpi-conversion-rate')).toBeVisible({ timeout: 10_000 });
+
+    // KPI cards should show their titles
+    await expect(
+      page.getByTestId('kpi-conversion-rate').getByRole('heading', { name: 'Conversion Rate', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId('kpi-add-to-cart-rate').getByRole('heading', { name: 'Add-to-Cart Rate', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId('kpi-purchase-rate').getByRole('heading', { name: 'Purchase Rate', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId('kpi-revenue').getByRole('heading', { name: 'Revenue', exact: true }),
+    ).toBeVisible();
+  });
+
+  test('Clear Analytics confirm path clears seeded analytics and shows reset state for isolated index', async ({ page, request }) => {
+    const isolatedIndex = `e2e-analytics-clear-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await seedAnalytics(request, { ...DEFAULT_ANALYTICS_CONFIG, indexName: isolatedIndex });
+
+    try {
+      await page.goto(`/index/${isolatedIndex}/analytics`);
+      await expect(page.getByTestId('analytics-heading')).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId('kpi-total-searches').getByTestId('kpi-value')).toBeVisible({ timeout: 10_000 });
+
+      const clearBtn = page.getByTestId('clear-btn');
+      await expect(clearBtn).toBeVisible({ timeout: 10_000 });
+      await clearBtn.click();
+
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible({ timeout: 5_000 });
+      await expect(dialog.getByText(isolatedIndex)).toBeVisible();
+      await dialog.getByRole('button', { name: 'Clear', exact: true }).click();
+
+      await expect(page.getByText('Analytics cleared')).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByTestId('error-state')).toContainText('Unable to load analytics data. Try again.');
+      await expect(page.getByTestId('kpi-total-searches')).toHaveCount(0);
+      await expect(page.getByTestId('kpi-unique-users')).toHaveCount(0);
+      await expect(page.getByTestId('kpi-no-result-rate')).toHaveCount(0);
+      await expect(page.getByTestId('search-volume-chart')).toHaveCount(0);
+      await expect(page.getByTestId('top-searches-overview')).toHaveCount(0);
+    } finally {
+      await deleteIndex(request, isolatedIndex).catch(() => {});
+    }
   });
 });

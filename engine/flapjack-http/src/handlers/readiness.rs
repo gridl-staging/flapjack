@@ -1,0 +1,147 @@
+use crate::error_response::HandlerError;
+use crate::tenant_dirs::visible_tenant_dir_names;
+use axum::{extract::State, http::StatusCode, Json};
+use std::sync::Arc;
+
+use super::AppState;
+
+fn first_visible_tenant_to_probe(mut visible_tenants: Vec<String>) -> Option<String> {
+    visible_tenants.sort();
+    visible_tenants.into_iter().next()
+}
+
+fn readiness_service_unavailable() -> HandlerError {
+    HandlerError::Custom {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        message: "Service unavailable".to_string(),
+    }
+}
+
+/// TODO: Document ready.
+pub async fn ready(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, HandlerError> {
+    let visible_tenants = visible_tenant_dir_names(&state.manager.base_path).map_err(|error| {
+        tracing::warn!(
+            "readiness probe failed to inspect tenant dirs at {:?}: {}",
+            state.manager.base_path,
+            error
+        );
+        readiness_service_unavailable()
+    })?;
+
+    let Some(first_visible_tenant) = first_visible_tenant_to_probe(visible_tenants) else {
+        return Ok(Json(serde_json::json!({ "ready": true })));
+    };
+
+    state
+        .manager
+        .search(&first_visible_tenant, "", None, None, 1)
+        .map_err(|error| {
+            tracing::warn!(
+                "readiness probe failed to search tenant {}: {}",
+                first_visible_tenant,
+                error
+            );
+            readiness_service_unavailable()
+        })?;
+
+    Ok(Json(serde_json::json!({ "ready": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::TestStateBuilder;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+
+    /// TODO: Document readiness_response_json.
+    async fn readiness_response_json(app: Router) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn ready_returns_ready_when_no_visible_tenants_exist() {
+        let tmp = TempDir::new().unwrap();
+        let state = TestStateBuilder::new(&tmp).build_shared();
+        let app = Router::new()
+            .route("/health/ready", get(ready))
+            .with_state(state);
+
+        let (status, body) = readiness_response_json(app).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, serde_json::json!({ "ready": true }));
+    }
+
+    #[tokio::test]
+    async fn ready_returns_ready_when_first_visible_tenant_is_searchable() {
+        let tmp = TempDir::new().unwrap();
+        let state = TestStateBuilder::new(&tmp).build_shared();
+        state.manager.create_tenant("products").unwrap();
+        let app = Router::new()
+            .route("/health/ready", get(ready))
+            .with_state(state);
+
+        let (status, body) = readiness_response_json(app).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, serde_json::json!({ "ready": true }));
+    }
+
+    /// TODO: Document ready_returns_canonical_503_when_visible_tenant_discovery_fails.
+    #[tokio::test]
+    async fn ready_returns_canonical_503_when_visible_tenant_discovery_fails() {
+        let tmp = TempDir::new().unwrap();
+        let data_file = tmp.path().join("not-a-directory");
+        std::fs::write(&data_file, "x").unwrap();
+        let base_state = TestStateBuilder::new(&tmp).build();
+        let state = Arc::new(AppState {
+            manager: flapjack::IndexManager::new(&data_file),
+            ..base_state
+        });
+        let app = Router::new()
+            .route("/health/ready", get(ready))
+            .with_state(state);
+
+        let (status, body) = readiness_response_json(app).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "message": "Service unavailable",
+                "status": 503
+            }),
+            "canonical readiness failures must keep the shared 503 envelope stable"
+        );
+    }
+
+    #[test]
+    fn first_visible_tenant_probe_sorts_names_before_selection() {
+        assert_eq!(
+            first_visible_tenant_to_probe(vec!["zeta".to_string(), "alpha".to_string()]),
+            Some("alpha".to_string())
+        );
+    }
+}

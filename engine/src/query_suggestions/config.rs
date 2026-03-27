@@ -1,3 +1,4 @@
+//! Manages Query Suggestions configuration files, build status records, and newline-delimited JSON logs stored in a .query_suggestions directory with path traversal protection.
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ fn default_min_letters() -> usize {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct QsFacet {
     pub attribute: String,
@@ -18,6 +20,7 @@ pub struct QsFacet {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct QsSourceIndex {
     pub index_name: String,
@@ -36,6 +39,7 @@ pub struct QsSourceIndex {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct QsConfig {
     pub index_name: String,
@@ -51,6 +55,7 @@ pub struct QsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct BuildStatus {
     pub index_name: String,
@@ -61,6 +66,7 @@ pub struct BuildStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     pub timestamp: String,
@@ -79,6 +85,15 @@ pub struct QsConfigStore {
     dir: PathBuf,
 }
 
+fn validate_store_index_name(index_name: &str) -> std::io::Result<()> {
+    crate::validate_index_name(index_name).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid indexName '{}': {}", index_name, e),
+        )
+    })
+}
+
 impl QsConfigStore {
     pub fn new(base_dir: &Path) -> Self {
         let dir = base_dir.join(".query_suggestions");
@@ -89,31 +104,40 @@ impl QsConfigStore {
         std::fs::create_dir_all(&self.dir)
     }
 
-    fn config_path(&self, index_name: &str) -> PathBuf {
-        self.dir.join(format!("{}.json", index_name))
+    fn config_path(&self, index_name: &str) -> std::io::Result<PathBuf> {
+        validate_store_index_name(index_name)?;
+        Ok(self.dir.join(format!("{}.json", index_name)))
     }
 
-    fn status_path(&self, index_name: &str) -> PathBuf {
-        self.dir.join(format!("{}.status.json", index_name))
+    fn status_path(&self, index_name: &str) -> std::io::Result<PathBuf> {
+        validate_store_index_name(index_name)?;
+        Ok(self.dir.join(format!("{}.status.json", index_name)))
     }
 
-    fn log_path(&self, index_name: &str) -> PathBuf {
-        self.dir.join(format!("{}.log.jsonl", index_name))
+    fn log_path(&self, index_name: &str) -> std::io::Result<PathBuf> {
+        validate_store_index_name(index_name)?;
+        Ok(self.dir.join(format!("{}.log.jsonl", index_name)))
     }
 
     pub fn config_exists(&self, index_name: &str) -> bool {
-        self.config_path(index_name).exists()
+        self.config_path(index_name)
+            .map(|path| path.exists())
+            .unwrap_or(false)
     }
 
     pub fn save_config(&self, config: &QsConfig) -> std::io::Result<()> {
         self.ensure_dir()?;
-        let path = self.config_path(&config.index_name);
+        validate_store_index_name(&config.index_name)?;
+        for source in &config.source_indices {
+            validate_store_index_name(&source.index_name)?;
+        }
+        let path = self.config_path(&config.index_name)?;
         let json = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
     pub fn load_config(&self, index_name: &str) -> std::io::Result<Option<QsConfig>> {
-        let path = self.config_path(index_name);
+        let path = self.config_path(index_name)?;
         if !path.exists() {
             return Ok(None);
         }
@@ -123,6 +147,11 @@ impl QsConfigStore {
         Ok(Some(config))
     }
 
+    /// Load all query suggestions configs from disk, excluding .status.json and .log.jsonl files.
+    ///
+    /// # Returns
+    ///
+    /// Vector of all successfully deserialized QsConfig objects, or empty vector if directory does not exist. Silently skips malformed files.
     pub fn list_configs(&self) -> std::io::Result<Vec<QsConfig>> {
         if !self.dir.exists() {
             return Ok(vec![]);
@@ -149,7 +178,7 @@ impl QsConfigStore {
     }
 
     pub fn delete_config(&self, index_name: &str) -> std::io::Result<bool> {
-        let path = self.config_path(index_name);
+        let path = self.config_path(index_name)?;
         if path.exists() {
             std::fs::remove_file(path)?;
             Ok(true)
@@ -158,8 +187,22 @@ impl QsConfigStore {
         }
     }
 
+    /// Load the build status for an index, or return a default status if not found.
+    ///
+    /// # Arguments
+    ///
+    /// * `index_name` - The query suggestions index name.
+    ///
+    /// # Returns
+    ///
+    /// BuildStatus with persisted state if file exists and is valid, otherwise default BuildStatus with is_running=false and no timestamps. Never returns an error.
     pub fn load_status(&self, index_name: &str) -> BuildStatus {
-        let path = self.status_path(index_name);
+        let Ok(path) = self.status_path(index_name) else {
+            return BuildStatus {
+                index_name: index_name.to_string(),
+                ..Default::default()
+            };
+        };
         if path.exists() {
             if let Ok(json) = std::fs::read_to_string(&path) {
                 if let Ok(status) = serde_json::from_str::<BuildStatus>(&json) {
@@ -175,17 +218,23 @@ impl QsConfigStore {
 
     pub fn save_status(&self, status: &BuildStatus) -> std::io::Result<()> {
         self.ensure_dir()?;
-        let path = self.status_path(&status.index_name);
+        let path = self.status_path(&status.index_name)?;
         let json = serde_json::to_string(status).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
+    /// Write log entries to an index's log file in newline-delimited JSON format.
+    ///
+    /// # Arguments
+    ///
+    /// * `index_name` - The query suggestions index name.
+    /// * `entries` - Log entries to append; no-op if empty.
     pub fn append_log(&self, index_name: &str, entries: &[LogEntry]) -> std::io::Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
         self.ensure_dir()?;
-        let path = self.log_path(index_name);
+        let path = self.log_path(index_name)?;
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -199,7 +248,7 @@ impl QsConfigStore {
 
     /// Truncate log to at most `max_lines` most-recent entries.
     pub fn truncate_log(&self, index_name: &str, max_lines: usize) -> std::io::Result<()> {
-        let path = self.log_path(index_name);
+        let path = self.log_path(index_name)?;
         if !path.exists() {
             return Ok(());
         }
@@ -213,8 +262,19 @@ impl QsConfigStore {
         std::fs::write(path, new_content)
     }
 
+    /// Load all log entries for an index from its log file in order.
+    ///
+    /// # Arguments
+    ///
+    /// * `index_name` - The query suggestions index name.
+    ///
+    /// # Returns
+    ///
+    /// Vector of LogEntry objects in file order, or empty vector if log file does not exist or cannot be read.
     pub fn read_logs(&self, index_name: &str) -> Vec<LogEntry> {
-        let path = self.log_path(index_name);
+        let Ok(path) = self.log_path(index_name) else {
+            return vec![];
+        };
         if !path.exists() {
             return vec![];
         }
@@ -235,6 +295,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Create a test QsConfig with one source index and default parameters.
     fn make_config(index_name: &str, source: &str) -> QsConfig {
         QsConfig {
             index_name: index_name.to_string(),
@@ -316,6 +377,7 @@ mod tests {
         assert_eq!(loaded.last_built_at.unwrap(), "2026-02-19T12:00:00Z");
     }
 
+    /// Verify that log entries can be appended and read back in order with all fields preserved.
     #[test]
     fn log_append_and_read() {
         let tmp = TempDir::new().unwrap();
@@ -340,6 +402,7 @@ mod tests {
         assert_eq!(logs[0].message, "Build started");
     }
 
+    /// Verify that truncate_log correctly retains only the most recent entries when the log exceeds max_lines.
     #[test]
     fn log_truncates_to_max_lines() {
         let tmp = TempDir::new().unwrap();
@@ -358,5 +421,43 @@ mod tests {
         assert_eq!(logs.len(), 5);
         assert_eq!(logs[0].message, "entry 5");
         assert_eq!(logs[4].message, "entry 9");
+    }
+
+    #[test]
+    fn save_config_rejects_path_traversal_index_name() {
+        let tmp = TempDir::new().unwrap();
+        let store = QsConfigStore::new(tmp.path());
+        let cfg = make_config("../keys", "products");
+
+        let err = store
+            .save_config(&cfg)
+            .expect_err("path traversal index name must be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            !tmp.path().join("keys.json").exists(),
+            "must not create files outside .query_suggestions directory"
+        );
+    }
+
+    /// Verify that save_status rejects index names with path traversal patterns.
+    #[test]
+    fn save_status_rejects_path_traversal_index_name() {
+        let tmp = TempDir::new().unwrap();
+        let store = QsConfigStore::new(tmp.path());
+        let status = BuildStatus {
+            index_name: "../keys".to_string(),
+            is_running: true,
+            last_built_at: None,
+            last_successful_built_at: None,
+        };
+
+        let err = store
+            .save_status(&status)
+            .expect_err("path traversal index name must be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            !tmp.path().join("keys.status.json").exists(),
+            "must not create files outside .query_suggestions directory"
+        );
     }
 }

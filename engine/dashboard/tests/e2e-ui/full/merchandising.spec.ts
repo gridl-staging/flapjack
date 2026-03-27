@@ -1,315 +1,239 @@
-/**
- * E2E-UI Full Suite -- Merchandising Studio Page (Real Server)
- *
- * NON-MOCKED SIMULATED-HUMAN REAL-BROWSER TESTS.
- * Tests the Merchandising Studio against a real Flapjack backend with seeded data.
- *
- * Covers:
- * - Search for products and see results
- * - Pin button visible and functional
- * - Hide button visible and functional
- * - Pinning a result shows pin badge and moves to position 1
- * - Hiding a result shows hidden count
- * - Pin + hide combination
- * - Save as rule → cross-page verification on Rules page
- * - Different queries return different results
- * - Results summary hit count
- * - How It Works help card
- */
+import type { APIRequestContext, Locator, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
-import { API_BASE, API_HEADERS, TEST_INDEX } from '../helpers';
-import { getRules, deleteRule } from '../../fixtures/api-helpers';
+import { deleteIndex, getRules } from '../../fixtures/api-helpers';
+import { readVisibleObjectId, responseMatchesIndexQuery } from '../result-helpers';
+import { createIsolatedMerchandisingLifecycleScenario } from '../scenario-helpers';
+import { cleanupRulesByDescriptionPrefix, isRecord } from '../rule-cleanup-helpers';
 
-const MERCH_URL = `/index/${TEST_INDEX}/merchandising`;
+interface MerchRuleSnapshot {
+  objectID: string;
+  description: string;
+  conditionPattern: string;
+  conditionAnchoring: string;
+  promoted: Array<{ objectID: string; position: number }>;
+  hidden: string[];
+}
+
+interface MerchLifecycleResult {
+  pinnedObjectID: string;
+  hiddenObjectID: string;
+  expectedPinnedPosition: number;
+  expectedVisibleOrder: string[];
+}
+
+function createUniqueRuleDescriptionPrefix(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `e2e-merch-rule-${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readMerchRuleSnapshot(value: unknown): MerchRuleSnapshot | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const objectID = value.objectID;
+  const description = value.description;
+  if (typeof objectID !== 'string' || typeof description !== 'string') {
+    return null;
+  }
+
+  const conditions = Array.isArray(value.conditions) ? value.conditions : [];
+  const firstCondition = conditions.find((condition) => isRecord(condition));
+  if (!firstCondition || typeof firstCondition.pattern !== 'string' || typeof firstCondition.anchoring !== 'string') {
+    return null;
+  }
+
+  const consequence = isRecord(value.consequence) ? value.consequence : {};
+  const promote = Array.isArray(consequence.promote) ? consequence.promote : [];
+  const hide = Array.isArray(consequence.hide) ? consequence.hide : [];
+
+  const promoted: Array<{ objectID: string; position: number }> = [];
+  for (const candidate of promote) {
+    if (!isRecord(candidate) || typeof candidate.objectID !== 'string' || typeof candidate.position !== 'number') {
+      return null;
+    }
+    promoted.push({ objectID: candidate.objectID, position: candidate.position });
+  }
+
+  const hidden: string[] = [];
+  for (const candidate of hide) {
+    if (!isRecord(candidate) || typeof candidate.objectID !== 'string') {
+      return null;
+    }
+    hidden.push(candidate.objectID);
+  }
+
+  return {
+    objectID,
+    description,
+    conditionPattern: firstCondition.pattern,
+    conditionAnchoring: firstCondition.anchoring,
+    promoted,
+    hidden,
+  };
+}
+
+function getMerchCardByObjectID(cards: Locator, objectID: string): Locator {
+  return cards.filter({ hasText: objectID }).first();
+}
+
+async function waitForMerchSearch(page: Page, indexName: string, query: string): Promise<void> {
+  const searchInput = page.getByTestId('merch-search-input');
+  const searchResponsePromise = page.waitForResponse(
+    (response) => responseMatchesIndexQuery(response, indexName, query),
+    { timeout: 15_000 },
+  );
+
+  await searchInput.fill(query);
+  await page.getByRole('button', { name: /^search$/i }).click();
+  await searchResponsePromise;
+}
+
+async function readVisibleObjectIDs(cards: Locator): Promise<string[]> {
+  const count = await cards.count();
+  const objectIDs: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    objectIDs.push(await readVisibleObjectId(cards.nth(index)));
+  }
+  return objectIDs;
+}
+
+async function applyLifecycleEdits(page: Page, baselineVisibleOrder: string[]): Promise<MerchLifecycleResult> {
+  const cards = page.getByTestId('merch-card');
+  const pinnedObjectID = baselineVisibleOrder[1];
+  const hiddenObjectID = baselineVisibleOrder[2];
+
+  await getMerchCardByObjectID(cards, pinnedObjectID).getByTitle('Pin to this position').click();
+  await getMerchCardByObjectID(cards, hiddenObjectID).getByTitle('Hide from results').click();
+  await getMerchCardByObjectID(cards, pinnedObjectID).getByTitle('Move down').click();
+
+  const expectedPinnedPosition = 2;
+  const expectedVisibleOrder = baselineVisibleOrder.filter((objectID) => objectID !== hiddenObjectID && objectID !== pinnedObjectID);
+  expectedVisibleOrder.splice(Math.min(expectedPinnedPosition, expectedVisibleOrder.length), 0, pinnedObjectID);
+
+  return {
+    pinnedObjectID,
+    hiddenObjectID,
+    expectedPinnedPosition,
+    expectedVisibleOrder,
+  };
+}
+
+async function findRuleByDescriptionPrefix(
+  request: APIRequestContext,
+  indexName: string,
+  descriptionPrefix: string,
+): Promise<MerchRuleSnapshot | null> {
+  const response = await getRules(request, indexName);
+  if (!response.ok) {
+    return null;
+  }
+
+  for (const candidate of response.items) {
+    const rule = readMerchRuleSnapshot(candidate);
+    if (rule && rule.description.startsWith(descriptionPrefix)) {
+      return rule;
+    }
+  }
+
+  return null;
+}
 
 test.describe('Merchandising Studio', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto(MERCH_URL);
-    await expect(page.getByText('Merchandising Studio').first()).toBeVisible({ timeout: 15_000 });
-  });
+  test('deterministic lifecycle preview supports pin/hide/move and reset restores baseline order', async ({ page, request }) => {
+    const lifecycleFixture = await createIsolatedMerchandisingLifecycleScenario(request, 'preview-lifecycle');
 
-  test('search for "laptop" shows product results', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
+    try {
+      await page.goto(`/index/${lifecycleFixture.indexName}/merchandising`);
+      await expect(page.getByRole('heading', { name: /merchandising studio/i })).toBeVisible({ timeout: 15_000 });
 
-    await expect(page.getByText('MacBook Pro').first()).toBeVisible({ timeout: 10_000 });
+      await waitForMerchSearch(page, lifecycleFixture.indexName, lifecycleFixture.searchQuery);
 
-    const cards = page.getByTestId('merch-card');
-    await expect(cards.first()).toBeVisible();
-    const count = await cards.count();
-    expect(count).toBeGreaterThanOrEqual(1);
+      const cards = page.getByTestId('merch-card');
+      await expect(cards.first()).toBeVisible({ timeout: 10_000 });
 
-    await expect(page.getByText(/results for/i).first()).toBeVisible();
-  });
+      const baselineVisibleOrder = await readVisibleObjectIDs(cards);
+      expect([...baselineVisibleOrder].sort()).toEqual([...lifecycleFixture.expectedObjectIDs].sort());
 
-  test('Pin button is visible on result cards', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
+      const lifecycleResult = await applyLifecycleEdits(page, baselineVisibleOrder);
 
-    const firstCard = page.getByTestId('merch-card').first();
-    await expect(firstCard).toBeVisible({ timeout: 10_000 });
+      await expect.poll(() => readVisibleObjectIDs(cards), { timeout: 10_000 }).toEqual(lifecycleResult.expectedVisibleOrder);
+      await expect(page.getByRole('heading', { name: /hidden results \(1\)/i })).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText(lifecycleResult.hiddenObjectID).first()).toBeVisible({ timeout: 10_000 });
 
-    const pinButton = firstCard.getByRole('button', { name: /pin/i }).or(
-      firstCard.getByRole('button', { name: /Pin/ })
-    );
-    await expect(pinButton.first()).toBeVisible();
-  });
+      await page.getByRole('button', { name: /^reset$/i }).click();
 
-  test('Hide button is visible on result cards', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    const firstCard = page.getByTestId('merch-card').first();
-    await expect(firstCard).toBeVisible({ timeout: 10_000 });
-
-    const hideButton = firstCard.getByRole('button', { name: 'Hide from results' });
-    await expect(hideButton).toBeVisible();
-  });
-
-  test('pinning a result shows pin badge and moves it to position 1', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('headphones');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    const cards = page.getByTestId('merch-card');
-    await expect(cards.first()).toBeVisible({ timeout: 10_000 });
-
-    const cardCount = await cards.count();
-    if (cardCount >= 2) {
-      const secondCard = cards.nth(1);
-
-      const pinBtn = secondCard.getByRole('button', { name: /Pin/ }).or(
-        secondCard.getByRole('button', { name: /pin/i })
-      );
-      await pinBtn.first().click();
-
-      await expect(page.getByText(/Pinned #/i).first()).toBeVisible({ timeout: 5_000 });
-      await expect(page.getByText(/1 pinned/i).first()).toBeVisible();
-
-      await expect(page.getByRole('button', { name: /Save as Rule/i })).toBeVisible();
-      await expect(page.getByRole('button', { name: /Reset/i })).toBeVisible();
-
-      await page.getByRole('button', { name: /Reset/i }).click();
-      await expect(page.getByText(/Pinned #/i)).not.toBeVisible({ timeout: 5_000 });
+      await expect.poll(() => readVisibleObjectIDs(cards), { timeout: 10_000 }).toEqual(baselineVisibleOrder);
+      await expect(page.getByRole('heading', { name: /hidden results/i })).toHaveCount(0);
+      await expect(page.getByText(/results for/i).first()).toBeVisible();
+      await expect(page.getByText(lifecycleFixture.searchQuery).first()).toBeVisible();
+    } finally {
+      await deleteIndex(request, lifecycleFixture.indexName);
     }
   });
 
-  test('hiding a result moves it to hidden section', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
+  test('save as rule persists expected condition/promote/hide payload and the spec cleans it up', async ({ page, request }) => {
+    const lifecycleFixture = await createIsolatedMerchandisingLifecycleScenario(request, 'save-rule-lifecycle');
+    const descriptionPrefix = createUniqueRuleDescriptionPrefix('stage-4-save');
 
-    const cards = page.getByTestId('merch-card');
-    await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+    try {
+      await page.goto(`/index/${lifecycleFixture.indexName}/merchandising`);
+      await expect(page.getByRole('heading', { name: /merchandising studio/i })).toBeVisible({ timeout: 15_000 });
 
-    const firstCard = cards.first();
-    const hideBtn = firstCard.getByRole('button', { name: 'Hide from results' });
-    await hideBtn.click();
+      await waitForMerchSearch(page, lifecycleFixture.indexName, lifecycleFixture.searchQuery);
 
-    await expect(page.getByText(/1 hidden/i).first()).toBeVisible({ timeout: 5_000 });
+      const cards = page.getByTestId('merch-card');
+      await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+      const baselineVisibleOrder = await readVisibleObjectIDs(cards);
+      expect([...baselineVisibleOrder].sort()).toEqual([...lifecycleFixture.expectedObjectIDs].sort());
 
-    await expect(page.getByRole('button', { name: /Save as Rule/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Reset/i })).toBeVisible();
+      const lifecycleResult = await applyLifecycleEdits(page, baselineVisibleOrder);
 
-    await page.getByRole('button', { name: /Reset/i }).click();
-    await expect(page.getByText(/1 hidden/i)).not.toBeVisible({ timeout: 5_000 });
-  });
+      const fullDescription = `${descriptionPrefix} deterministic merchandising rule`;
+      await page.getByPlaceholder(`Merchandising: "${lifecycleFixture.searchQuery}"`).fill(fullDescription);
 
-  // ---------- Pin + Hide Combination ----------
-
-  test('pin and hide multiple results shows combined counts', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    const cards = page.getByTestId('merch-card');
-    await expect(cards.first()).toBeVisible({ timeout: 10_000 });
-
-    const cardCount = await cards.count();
-    if (cardCount >= 2) {
-      // Pin first card
-      const firstCard = cards.first();
-      const pinBtn = firstCard.getByRole('button', { name: /Pin/ }).or(
-        firstCard.getByRole('button', { name: /pin/i })
+      const saveRuleResponse = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' &&
+          response.url().includes(`/indexes/${lifecycleFixture.indexName}/rules/`) &&
+          [200, 202].includes(response.status()),
+        { timeout: 15_000 },
       );
-      await pinBtn.first().click();
-      await expect(page.getByText(/1 pinned/i).first()).toBeVisible({ timeout: 5_000 });
+      await page.getByRole('button', { name: /save as rule/i }).click();
+      await saveRuleResponse;
 
-      // Hide second card
-      const secondCard = cards.nth(1);
-      const hideBtn = secondCard.getByRole('button', { name: 'Hide from results' });
-      await hideBtn.click();
-      await expect(page.getByText(/1 hidden/i).first()).toBeVisible({ timeout: 5_000 });
+      await page.goto(`/index/${lifecycleFixture.indexName}/rules`);
+      await expect(page.getByRole('heading', { name: /^rules$/i })).toBeVisible({ timeout: 15_000 });
 
-      await expect(page.getByText(/1 pinned/i).first()).toBeVisible();
-      await expect(page.getByText(/1 hidden/i).first()).toBeVisible();
+      const savedRuleCard = page.getByTestId('rule-card').filter({ hasText: descriptionPrefix }).first();
+      await expect(savedRuleCard).toBeVisible({ timeout: 10_000 });
+      await expect(savedRuleCard).toContainText(lifecycleFixture.searchQuery);
+      await expect(savedRuleCard).toContainText('1 pinned');
+      await expect(savedRuleCard).toContainText('1 hidden');
 
-      await page.getByRole('button', { name: /Reset/i }).click();
-    }
-  });
+      let persistedRule: MerchRuleSnapshot | null = null;
+      await expect.poll(async () => {
+        persistedRule = await findRuleByDescriptionPrefix(request, lifecycleFixture.indexName, descriptionPrefix);
+        return persistedRule?.objectID ?? '';
+      }, { timeout: 15_000 }).not.toBe('');
 
-  // ---------- Cross-page: Save as Rule → Rules Page ----------
-
-  test('save as rule then verify rule appears on Rules page', async ({ page, request }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('monitor');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    const cards = page.getByTestId('merch-card');
-    await expect(cards.first()).toBeVisible({ timeout: 10_000 });
-
-    // Pin the first result
-    const firstCard = cards.first();
-    const pinBtn = firstCard.getByRole('button', { name: /Pin/ }).or(
-      firstCard.getByRole('button', { name: /pin/i })
-    );
-    await pinBtn.first().click();
-    await expect(page.getByText(/Pinned #/i).first()).toBeVisible({ timeout: 5_000 });
-
-    // Save as Rule
-    const saveBtn = page.getByRole('button', { name: /Save as Rule/i });
-    await expect(saveBtn).toBeVisible();
-
-    const responsePromise = page.waitForResponse(
-      resp => resp.url().includes('/rules'),
-      { timeout: 10_000 }
-    );
-    await saveBtn.click();
-    await responsePromise;
-
-    // Navigate to Rules page and verify
-    await page.goto(`/index/${TEST_INDEX}/rules`);
-    await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(/monitor/).first()).toBeVisible({ timeout: 10_000 });
-
-    // Cleanup — delete merch-created rules
-    const { items } = await getRules(request, TEST_INDEX);
-    for (const rule of items) {
-      if (rule.objectID?.startsWith('merch-')) {
-        await deleteRule(request, TEST_INDEX, rule.objectID);
+      if (!persistedRule) {
+        throw new Error(`Expected a persisted rule with description prefix "${descriptionPrefix}".`);
       }
+
+      expect(persistedRule.description).toContain(descriptionPrefix);
+      expect(persistedRule.conditionPattern).toBe(lifecycleFixture.searchQuery);
+      expect(persistedRule.conditionAnchoring).toBe('is');
+      expect(persistedRule.promoted).toEqual([
+        { objectID: lifecycleResult.pinnedObjectID, position: lifecycleResult.expectedPinnedPosition },
+      ]);
+      expect(persistedRule.hidden).toEqual([lifecycleResult.hiddenObjectID]);
+    } finally {
+      await cleanupRulesByDescriptionPrefix(request, lifecycleFixture.indexName, descriptionPrefix);
+      await deleteIndex(request, lifecycleFixture.indexName);
     }
-  });
-
-  test('searching different queries returns different merchandise results', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-
-    await searchInput.fill('tablet');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-    await expect(page.getByTestId('merch-card').first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/results for/i).first()).toBeVisible();
-
-    await searchInput.fill('monitor');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-    await expect(page.getByTestId('merch-card').first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/results for/i).first()).toBeVisible();
-  });
-
-  test('results summary shows hit count for query', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    await expect(page.getByText(/results for/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText('laptop').first()).toBeVisible();
-  });
-
-  test('merchandising studio shows "how it works" help card', async ({ page }) => {
-    const howItWorks = page.getByText(/how it works/i).or(
-      page.getByText(/enter a search query/i)
-    );
-    await expect(howItWorks.first()).toBeVisible({ timeout: 10_000 });
-  });
-
-  // ---------- Drag-and-Drop ----------
-
-  test('drag handle is visible on all result cards', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    const firstCard = page.getByTestId('merch-card').first();
-    await expect(firstCard).toBeVisible({ timeout: 10_000 });
-
-    // Drag handle should be visible
-    const dragHandle = firstCard.getByTestId('drag-handle');
-    await expect(dragHandle).toBeVisible();
-
-    // Should have grab cursor styling
-    await expect(dragHandle).toHaveCSS('cursor', 'grab');
-  });
-
-  test('result cards are draggable (have draggable attribute)', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    const firstCard = page.getByTestId('merch-card').first();
-    await expect(firstCard).toBeVisible({ timeout: 10_000 });
-
-    // Card should be draggable
-    await expect(firstCard).toHaveAttribute('draggable', 'true');
-  });
-
-  test('drag and drop pins item at target position', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    const cards = page.getByTestId('merch-card');
-    await expect(cards.first()).toBeVisible({ timeout: 10_000 });
-
-    const cardCount = await cards.count();
-    if (cardCount >= 2) {
-      // Drag second card to first position
-      const sourceCard = cards.nth(1);
-      const targetCard = cards.nth(0);
-
-      await sourceCard.dragTo(targetCard);
-
-      // The dragged item should now be pinned
-      await expect(page.getByText(/Pinned #/i).first()).toBeVisible({ timeout: 5_000 });
-      await expect(page.getByText(/1 pinned/i).first()).toBeVisible();
-
-      // Reset
-      await page.getByRole('button', { name: /Reset/i }).click();
-    }
-  });
-
-  test('up/down arrow buttons work for pinned items', async ({ page }) => {
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('laptop');
-    await page.getByRole('button', { name: /^Search$/i }).click();
-
-    const cards = page.getByTestId('merch-card');
-    await expect(cards.first()).toBeVisible({ timeout: 10_000 });
-
-    // Pin the first card
-    const firstCard = cards.first();
-    const pinBtn = firstCard.getByRole('button', { name: /Pin/ }).or(
-      firstCard.getByRole('button', { name: /pin/i })
-    );
-    await pinBtn.first().click();
-    await expect(page.getByText(/Pinned #/i).first()).toBeVisible({ timeout: 5_000 });
-
-    // Move down button should be visible for pinned items
-    const moveDownBtn = page.getByRole('button', { name: 'Move down' }).first();
-    await expect(moveDownBtn).toBeVisible();
-
-    // Move up button should be visible too
-    const moveUpBtn = page.getByRole('button', { name: 'Move up' }).first();
-    await expect(moveUpBtn).toBeVisible();
-
-    // Click move down
-    await moveDownBtn.click();
-
-    // Position should have changed
-    await expect(page.getByText(/Pinned #/i).first()).toBeVisible();
-
-    // Reset
-    await page.getByRole('button', { name: /Reset/i }).click();
   });
 });

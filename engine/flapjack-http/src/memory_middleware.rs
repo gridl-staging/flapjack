@@ -1,3 +1,4 @@
+//! Axum middleware that enforces memory-pressure load shedding by rejecting or limiting requests and adjusting facet cache capacity based on the current pressure level.
 use axum::{
     extract::Request,
     http::StatusCode,
@@ -72,6 +73,15 @@ pub async fn memory_pressure_guard(
     }
 }
 
+/// Build a 503 Service Unavailable response with current memory statistics and a `Retry-After: 5` header.
+///
+/// # Arguments
+///
+/// * `observer` - Memory observer used to retrieve heap allocation and system limit stats.
+///
+/// # Returns
+///
+/// An Axum `Response` with a JSON body containing `error`, `allocated_mb`, `limit_mb`, and `level` fields.
 fn reject_memory_pressure(observer: &flapjack::MemoryObserver) -> Response {
     let stats = observer.stats();
     let allocated_mb = stats.heap_allocated_bytes / (1024 * 1024);

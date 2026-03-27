@@ -1,3 +1,5 @@
+"""
+"""
 from asyncio import TimeoutError
 from json import loads
 from typing import List, Optional
@@ -18,6 +20,7 @@ from flapjacksearch.http.verb import Verb
 
 
 class Transporter(BaseTransporter):
+    """TODO: Document Transporter."""
     def __init__(self, config: BaseConfig) -> None:
         super().__init__(config)
         self._session: Optional[ClientSession] = None
@@ -39,6 +42,7 @@ class Transporter(BaseTransporter):
         request_options: RequestOptions,
         use_read_transporter: bool,
     ) -> ApiResponse:
+        """TODO: Document Transporter.request."""
         if self._session is None:
             self._session = ClientSession(
                 connector=TCPConnector(use_dns_cache=False), trust_env=True
@@ -113,6 +117,7 @@ class Transporter(BaseTransporter):
 
 
 class EchoTransporter(Transporter):
+    """TODO: Document EchoTransporter."""
     def __init__(self, config: BaseConfig) -> None:
         super().__init__(config)
         self._config = config
@@ -125,6 +130,7 @@ class EchoTransporter(Transporter):
         request_options: RequestOptions,
         use_read_transporter: bool,
     ) -> ApiResponse:
+        """TODO: Document EchoTransporter.request."""
         self.prepare(request_options, verb == Verb.GET or use_read_transporter)
 
         return ApiResponse(

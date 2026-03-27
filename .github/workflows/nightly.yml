@@ -1,6 +1,8 @@
 name: Nightly Tests
 
-# Comprehensive test suite that runs every night on the public repo
+# Comprehensive test suite that runs every night on the public repo.
+# Keep the legacy dev repo allowlist during the repo-transition window so the
+# same workflow file can still be exercised before that repo is retired.
 # This runs ALL tests with ALL configurations including:
 # - All Rust tests (not just fast subset)
 # - Dashboard integration tests with Algolia
@@ -17,7 +19,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Check if we're in the public repo - skip all tests if not
+  # Check if we're in an allowed repo. Retain the legacy dev repo name here on
+  # purpose until the repo-transition cleanup is fully complete.
   check-repo:
     runs-on: ubuntu-latest
     outputs:
@@ -25,7 +28,7 @@ jobs:
     steps:
       - id: check
         run: |
-          if [ "${{ github.repository }}" = "gridlhq/flapjack" ] || [ "${{ github.repository }}" = "gridlhq/flapjack_dev" ]; then
+          if [ "${{ github.repository }}" = "gridl-hq/flapjack" ] || [ "${{ github.repository }}" = "gridl-dev/flapjack_dev" ]; then
             echo "is-public-repo=true" >> $GITHUB_OUTPUT
           else
             echo "is-public-repo=false" >> $GITHUB_OUTPUT

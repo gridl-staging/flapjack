@@ -1,3 +1,5 @@
+"""
+"""
 from os import environ
 from typing import Optional
 
@@ -8,6 +10,7 @@ from flapjacksearch.http.user_agent import UserAgent
 
 
 class QuerySuggestionsConfig(BaseConfig):
+    """TODO: Document QuerySuggestionsConfig."""
     def __init__(
         self, app_id: Optional[str], api_key: Optional[str], region: str = ""
     ) -> None:
@@ -47,6 +50,7 @@ class QuerySuggestionsConfig(BaseConfig):
         self.region = region
 
     def set_default_hosts(self):
+        """TODO: Document QuerySuggestionsConfig.set_default_hosts."""
         if self.hosts is not None:
             return
 

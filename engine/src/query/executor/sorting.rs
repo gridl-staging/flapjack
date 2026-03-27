@@ -1,3 +1,4 @@
+//! Query result sorting using tantivy fast columnar fields with JSON extraction fallback and cross-type value ordering (Integer < Float < Text).
 use super::QueryExecutor;
 use crate::error::Result;
 use crate::types::{ScoredDocument, SearchResult, Sort, SortOrder};
@@ -5,7 +6,16 @@ use tantivy::collector::{Count, TopDocs};
 use tantivy::query::Query as TantivyQuery;
 use tantivy::Searcher;
 
+/// Groups field-sort and pagination parameters for `execute_pure_sort_internal`.
+pub(crate) struct SortExecutionParams<'a> {
+    pub field: &'a str,
+    pub order: &'a SortOrder,
+    pub limit: usize,
+    pub offset: usize,
+}
+
 impl QueryExecutor {
+    /// Route a filtered search query to the appropriate sorting strategy: relevance-only (no Sort or ByRelevance), hybrid field-and-relevance sorting (ByField with text query), or pure field sorting (ByField without text query).
     pub fn execute_with_sort(
         &self,
         searcher: &Searcher,
@@ -40,6 +50,7 @@ impl QueryExecutor {
         Ok(self.build_result(documents, total))
     }
 
+    /// Hybrid sort that fetches a large preliminary set (100× limit+offset, minimum 1000), sorts by field values, and returns the offset-limited slice. Used when both text query and field sorting are specified.
     pub(crate) fn execute_relevance_first_sort(
         &self,
         searcher: &Searcher,
@@ -58,6 +69,7 @@ impl QueryExecutor {
         Ok((documents, total))
     }
 
+    /// Sort a filtered query using tantivy's fast columnar fields for efficiency. Treat objectID specially via the _id FAST field; other fields use _json_filter. Fall back to in-memory sorting if the fast column does not exist.
     pub(crate) fn execute_pure_sort_fast(
         &self,
         searcher: &Searcher,
@@ -163,6 +175,7 @@ impl QueryExecutor {
         Ok((documents, total))
     }
 
+    /// Sort documents when fast fields are unavailable by fetching surplus results (3× the limit), extracting sort values from stored JSON, sorting in memory, and returning the offset-limited slice.
     pub(crate) fn execute_pure_sort_fallback(
         &self,
         searcher: &Searcher,
@@ -193,16 +206,18 @@ impl QueryExecutor {
         self.execute_pure_sort_fast(searcher, query, field, order, limit, offset)
     }
 
+    /// Sort a filtered query by a single field without text relevance, optionally collecting facets. Attempt tantivy fast-field sorting; fall back to in-memory JSON extraction if the fast column is unavailable. Return documents, total count, and facet results.
     pub(crate) fn execute_pure_sort_internal(
         &self,
         searcher: &Searcher,
         query: Box<dyn TantivyQuery>,
-        field: &str,
-        order: &SortOrder,
-        limit: usize,
-        offset: usize,
+        sort_params: &SortExecutionParams<'_>,
         facet_collector: Option<tantivy::collector::FacetCollector>,
     ) -> Result<(Vec<ScoredDocument>, usize, tantivy::collector::FacetCounts)> {
+        let field = sort_params.field;
+        let order = sort_params.order;
+        let limit = sort_params.limit;
+        let offset = sort_params.offset;
         if field == "objectID" {
             let is_ascending = matches!(order, SortOrder::Asc);
 
@@ -320,6 +335,7 @@ impl QueryExecutor {
         Ok((documents, total, facets))
     }
 
+    /// Extract sort values from stored JSON documents, apply field and order sorting, and return the offset-limited slice. Delegate cross-type comparison to SortValue::cmp.
     pub(crate) fn sort_docs_by_json_field(
         &self,
         searcher: &Searcher,
@@ -378,6 +394,7 @@ impl QueryExecutor {
         self.extract_nested_value(json, &parts, force_string)
     }
 
+    /// Recursively traverse a dot-separated field path through nested JSON objects, returning the final value converted to SortValue. If force_string is true, convert numeric values to text strings.
     fn extract_nested_value(
         &self,
         value: &tantivy::schema::OwnedValue,
@@ -448,6 +465,7 @@ impl PartialOrd for SortValue {
 }
 
 impl Ord for SortValue {
+    /// Compare two SortValues using total ordering: Missing sorts before all other variants, then Integer < Float < Text. Within the same variant, use natural numeric or lexicographic ordering.
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match (self, other) {
             (SortValue::Missing, SortValue::Missing) => std::cmp::Ordering::Equal,
@@ -510,6 +528,7 @@ mod tests {
         );
     }
 
+    /// Verify that integer SortValues compare using standard numeric ordering.
     #[test]
     fn integer_ordering() {
         assert_eq!(
@@ -562,6 +581,7 @@ mod tests {
         );
     }
 
+    /// Verify that SortValues enforce consistent cross-type ordering (Integer < Float < Text) regardless of numeric magnitude.
     #[test]
     fn cross_type_ordering_integer_lt_float_lt_text() {
         // Integer < Float < Text (from the match arms)
@@ -600,6 +620,7 @@ mod tests {
         assert_eq!(SortValue::Missing, SortValue::Missing);
     }
 
+    /// Verify that Vec::sort respects the Ord implementation, placing Missing first, then Integer, Float, and Text in ascending order within a mixed vector.
     #[test]
     fn vec_sort_uses_ord() {
         let mut v = vec![

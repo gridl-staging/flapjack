@@ -44,6 +44,7 @@
  *   - Switching tabs updates content
  */
 import { test, expect } from '../../fixtures/auth.fixture';
+import { EXPECTED_COUNTS } from '../../fixtures/test-data';
 import { TEST_INDEX } from '../helpers';
 
 test.describe('System Page', () => {
@@ -60,6 +61,11 @@ test.describe('System Page', () => {
     const statusCard = page.getByTestId('health-status');
     await expect(statusCard).toBeVisible({ timeout: 15_000 });
     await expect(statusCard.getByText('ok')).toBeVisible();
+
+    // Seeded index should be visible in the default Health summary.
+    const indexDot = page.getByTestId(`index-dot-${TEST_INDEX}`);
+    await expect(indexDot).toBeVisible({ timeout: 15_000 });
+    await expect(indexDot.getByText(TEST_INDEX)).toBeVisible();
   });
 
   test('Health tab shows active writers count', async ({ page }) => {
@@ -78,7 +84,7 @@ test.describe('System Page', () => {
     await expect(facetCacheCard.getByText(/\d+\s*\/\s*\d+/)).toBeVisible();
   });
 
-  test('Health tab shows index health summary with green dots', async ({ page }) => {
+  test('Health tab shows index health summary with explicit healthy and processing guidance', async ({ page }) => {
     const healthSummary = page.getByTestId('index-health-summary');
     await expect(healthSummary).toBeVisible({ timeout: 15_000 });
     await expect(healthSummary.getByText('Index Health')).toBeVisible();
@@ -90,6 +96,10 @@ test.describe('System Page', () => {
 
     // Summary text: "N of M indexes healthy"
     await expect(healthSummary.getByText(/\d+ of \d+ indexes healthy/)).toBeVisible();
+    await expect(healthSummary.getByText('Healthy indexes have no pending tasks.', { exact: true })).toBeVisible();
+    await expect(
+      healthSummary.getByText('Processing indexes still have pending tasks in progress.', { exact: true }),
+    ).toBeVisible();
   });
 
   test('Health tab shows auto-refresh notice', async ({ page }) => {
@@ -138,8 +148,7 @@ test.describe('System Page', () => {
     const pressure = page.getByTestId('health-pressure');
     await expect(pressure).toBeVisible({ timeout: 15_000 });
     const text = await pressure.textContent();
-    // Pressure level should be one of: Normal, Elevated, Critical
-    expect(['Normal', 'Elevated', 'Critical']).toContain(text?.trim());
+    expect(text?.trim()).toMatch(/^(Normal|Elevated|Critical)$/);
   });
 
   // =========================================================================
@@ -149,14 +158,14 @@ test.describe('System Page', () => {
   test('Indexes tab shows e2e-products index with document count', async ({ page }) => {
     await page.getByRole('tab', { name: /indexes/i }).click();
 
-    const indexLink = page.getByTestId('index-link-e2e-products');
+    const indexLink = page.getByTestId(`index-link-${TEST_INDEX}`);
     await expect(indexLink).toBeVisible({ timeout: 15_000 });
 
-    // Doc count cell should show 12 (seeded products)
-    const docCountCell = page.getByTestId('index-doc-count-e2e-products');
+    // Doc count cell should show seeded product count
+    const docCountCell = page.getByTestId(`index-doc-count-${TEST_INDEX}`);
     await expect(docCountCell).toBeVisible();
     const docCountText = await docCountCell.textContent();
-    expect(Number(docCountText?.replace(/,/g, ''))).toBeGreaterThanOrEqual(12);
+    expect(Number(docCountText?.replace(/,/g, ''))).toBeGreaterThanOrEqual(EXPECTED_COUNTS.documents);
   });
 
   test('Indexes tab shows total indexes, documents, and storage cards', async ({ page }) => {
@@ -174,14 +183,14 @@ test.describe('System Page', () => {
     await expect(totalDocsCard).toBeVisible();
     await expect(totalDocsCard.getByText('Total Documents')).toBeVisible();
     const docCountText = await totalDocsCard.getByTestId('stat-value').textContent();
-    expect(Number(docCountText?.replace(/,/g, ''))).toBeGreaterThanOrEqual(12);
+    expect(Number(docCountText?.replace(/,/g, ''))).toBeGreaterThanOrEqual(EXPECTED_COUNTS.documents);
 
     // Total Storage card
     const totalStorageCard = page.getByTestId('indexes-total-storage');
     await expect(totalStorageCard).toBeVisible();
     await expect(totalStorageCard.getByText('Total Storage')).toBeVisible();
     const storageText = await totalStorageCard.getByTestId('stat-value').textContent();
-    expect(storageText).toBeTruthy();
+    expect(storageText?.trim()).toMatch(/^\d+(\.\d+)?\s*(B|KB|MB|GB)$/i);
     expect(storageText).not.toBe('0 Bytes');
   });
 
@@ -191,16 +200,16 @@ test.describe('System Page', () => {
     const indexStatus = page.getByTestId(`index-status-${TEST_INDEX}`);
     await expect(indexStatus).toBeVisible({ timeout: 15_000 });
     // e2e-products should be healthy (no pending tasks after seeding)
-    await expect(indexStatus.getByText('Healthy')).toBeVisible();
+    await expect(indexStatus.getByText('Healthy (no pending tasks)', { exact: true })).toBeVisible();
   });
 
   test('clicking index link in Indexes tab navigates to search page', async ({ page }) => {
     await page.getByRole('tab', { name: /indexes/i }).click();
-    const indexLink = page.getByTestId('index-link-e2e-products');
+    const indexLink = page.getByTestId(`index-link-${TEST_INDEX}`);
     await expect(indexLink).toBeVisible({ timeout: 15_000 });
 
     await indexLink.click();
-    await expect(page).toHaveURL(new RegExp('/index/e2e-products'));
+    await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}`));
   });
 
   // =========================================================================
@@ -218,7 +227,8 @@ test.describe('System Page', () => {
     const nodeIdValue = page.getByTestId('node-id-value');
     await expect(nodeIdValue).toBeVisible();
     const nodeIdText = await nodeIdValue.textContent();
-    expect(nodeIdText).toBeTruthy();
+    expect(nodeIdText?.trim()).toMatch(/\S+/);
+    expect(nodeIdText?.trim()).not.toBe('N/A');
   });
 
   test('Replication tab shows replication enabled/disabled status', async ({ page }) => {
@@ -228,8 +238,7 @@ test.describe('System Page', () => {
     const replicationStatus = page.getByTestId('replication-status');
     await expect(replicationStatus).toBeVisible({ timeout: 15_000 });
     const statusText = await replicationStatus.textContent();
-    // Status must be one of the valid values — not empty or unknown
-    expect(['Enabled', 'Disabled']).toContain(statusText?.trim());
+    expect(statusText?.trim()).toMatch(/^(Enabled|Disabled)$/);
   });
 
   test('Replication tab shows auto-refresh notice', async ({ page }) => {

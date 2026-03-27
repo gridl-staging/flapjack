@@ -1,3 +1,5 @@
+/**
+ */
 import type { Headers, Host, QueryParameters, Request, RequestOptions, Response, StackFrame } from '../types';
 import { ApiError, DeserializationError, DetailedApiError } from './errors';
 
@@ -53,6 +55,9 @@ export function serializeData(request: Request, requestOptions: RequestOptions):
   return JSON.stringify(data);
 }
 
+/**
+ * TODO: Document serializeHeaders.
+ */
 export function serializeHeaders(
   baseHeaders: Headers,
   requestHeaders: Headers,

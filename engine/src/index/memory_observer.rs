@@ -1,8 +1,3 @@
-//! System memory awareness: heap stats, memory limits, and pressure levels.
-//!
-//! Requires the `memory-stats` feature flag. Without it, all methods return
-//! safe defaults (zero bytes allocated, unlimited memory, Normal pressure).
-
 use std::env;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
@@ -151,6 +146,16 @@ impl MemoryObserver {
         self.pressure_override.store(val, Ordering::Relaxed);
     }
 
+    /// Current override value used for testing, if one is set.
+    pub fn pressure_override(&self) -> Option<PressureLevel> {
+        match self.pressure_override.load(Ordering::Relaxed) {
+            1 => Some(PressureLevel::Normal),
+            2 => Some(PressureLevel::Elevated),
+            3 => Some(PressureLevel::Critical),
+            _ => None,
+        }
+    }
+
     /// All memory metrics in one struct (for health endpoint).
     pub fn stats(&self) -> MemoryStats {
         let (limit, source) = self.effective_limit();
@@ -179,6 +184,7 @@ impl MemoryObserver {
 
     // -- private helpers --
 
+    /// TODO: Document MemoryObserver.read_heap_allocated.
     fn read_heap_allocated() -> usize {
         #[cfg(all(feature = "memory-stats", not(target_env = "msvc")))]
         {
@@ -215,6 +221,7 @@ impl MemoryObserver {
         }
     }
 
+    /// TODO: Document MemoryObserver.detect_memory_limit.
     fn detect_memory_limit() -> (usize, String) {
         // Priority 1: explicit env var
         if let Ok(mb) = env::var("FLAPJACK_MEMORY_LIMIT_MB") {

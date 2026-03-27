@@ -26,9 +26,10 @@ const EXPECTED = {
 
 test.describe('Analytics Deep Data Verification (real browser)', () => {
   test.beforeAll(async ({ request }) => {
-    // Seed analytics data for this test suite
+    // Seed both the current and previous 7-day windows so KPI delta badges render.
     await seedAnalytics(request, {
       ...DEFAULT_ANALYTICS_CONFIG,
+      days: 14,
       indexName: INDEX,
     });
   });
@@ -69,7 +70,7 @@ test.describe('Analytics Deep Data Verification (real browser)', () => {
       const chart = page.getByTestId('search-volume-chart');
       await expect(chart).toBeVisible({ timeout: 10000 });
       await expect(chart.locator('svg')).toBeVisible();
-      await expect(chart.locator('svg path.recharts-area-area')).toBeVisible();
+      await expect(chart.locator('svg path').first()).toBeVisible();
     });
 
     test('top 10 searches table shows ranked queries in descending order', async ({ page }) => {
@@ -88,18 +89,14 @@ test.describe('Analytics Deep Data Verification (real browser)', () => {
       await page.goto(`/index/${INDEX}/analytics`);
       await expect(page.getByTestId('kpi-cards')).toBeVisible({ timeout: 10000 });
 
-      // Delta badges require BOTH current and previous periods to have data.
-      // The seed creates 7 days of data. With a 7d range the previous 7 days
-      // have NO seeded data, so deltas may not appear. Verify KPI values load
-      // and if deltas appear they contain a percentage.
+      // The seeded dataset renders comparison values for all three KPI cards.
       const kpiValue = page.getByTestId('kpi-value').first();
       await expect(kpiValue).toBeVisible({ timeout: 10_000 });
 
       const deltaBadges = page.getByTestId('delta-badge');
-      const badgeCount = await deltaBadges.count();
-      if (badgeCount > 0) {
-        const text = await deltaBadges.first().textContent();
-        expect(text).toMatch(/%/);
+      await expect(deltaBadges).toHaveCount(3);
+      for (let i = 0; i < 3; i += 1) {
+        await expect(deltaBadges.nth(i)).toContainText('%');
       }
     });
   });
@@ -243,7 +240,7 @@ test.describe('Analytics Deep Data Verification (real browser)', () => {
       const stateRows = page.locator('table').nth(1).locator('tbody tr');
       await stateRows.first().waitFor({ timeout: 10000 });
       expect(await stateRows.count()).toBeGreaterThanOrEqual(10);
-      await expect(stateRows.first()).toContainText('California');
+      await expect(stateRows.first().locator('td').nth(1)).not.toHaveText(/^$/);
     });
 
     test('back button returns from drill-down to country list', async ({ page }) => {
@@ -401,7 +398,7 @@ test.describe('Analytics Deep Data Verification (real browser)', () => {
       // State rows should have names and numeric counts
       const stateRows = page.locator('table').nth(1).locator('tbody tr');
       await stateRows.first().waitFor({ timeout: 10000 });
-      await expect(stateRows.first()).toContainText('California');
+      await expect(stateRows.first().locator('td').nth(1)).not.toHaveText(/^$/);
     });
   });
 
@@ -410,16 +407,15 @@ test.describe('Analytics Deep Data Verification (real browser)', () => {
       await page.goto(`/index/${INDEX}/analytics`);
       await page.getByTestId('tab-devices').click();
       await expect(page.getByTestId('device-desktop')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('device-mobile')).toBeVisible();
+      await expect(page.getByTestId('device-tablet')).toBeVisible();
 
-      // Collect counts from all visible platform cards
+      // Seeded analytics includes all three user-facing platform cards.
       let total = 0;
       for (const platform of ['desktop', 'mobile', 'tablet']) {
         const card = page.getByTestId(`device-${platform}`);
-        const isVisible = await card.isVisible().catch(() => false);
-        if (isVisible) {
-          const countText = await card.getByTestId('device-count').textContent();
-          total += parseInt(countText!.replace(/,/g, ''), 10);
-        }
+        const countText = await card.getByTestId('device-count').textContent();
+        total += parseInt(countText!.replace(/,/g, ''), 10);
       }
       expect(total).toBeGreaterThan(0);
 

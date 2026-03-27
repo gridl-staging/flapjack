@@ -1,8 +1,16 @@
+/**
+ */
 import type { EndRequest, Requester, Response } from '@flapjack-search/client-common';
 
 type Timeout = ReturnType<typeof setTimeout>;
 
+/**
+ * TODO: Document createXhrRequester.
+ */
 export function createXhrRequester(): Requester {
+  /**
+   * TODO: Document send.
+   */
   function send(request: EndRequest): Promise<Response> {
     return new Promise((resolve) => {
       const baseRequester = new XMLHttpRequest();

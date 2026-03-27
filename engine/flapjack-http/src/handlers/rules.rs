@@ -7,8 +7,20 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::AppState;
+use super::{safe_nb_pages, AppState};
+use crate::extractors::{validate_index_http, ValidatedIndexName};
 use flapjack::index::rules::{Rule, RuleStore};
+
+/// Convert an internal storage error into a sanitized 500 response.
+/// Logs the real error server-side but returns a generic message to avoid
+/// leaking filesystem paths or other internals to clients.
+fn internal_error(e: impl std::fmt::Display) -> (StatusCode, String) {
+    tracing::error!("rules storage error: {e}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+    )
+}
 
 /// Get a rule by ID
 #[utoipa::path(
@@ -31,6 +43,7 @@ pub async fn get_rule(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
 ) -> Result<Json<Rule>, (StatusCode, String)> {
+    validate_index_http(&index_name)?;
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     if !rules_path.exists() {
@@ -40,8 +53,7 @@ pub async fn get_rule(
         ));
     }
 
-    let store = RuleStore::load(&rules_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let store = RuleStore::load(&rules_path).map_err(internal_error)?;
 
     store
         .get(&object_id)
@@ -77,25 +89,23 @@ pub async fn save_rule(
     Path((index_name, _object_id)): Path<(String, String)>,
     Json(rule): Json<Rule>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    validate_index_http(&index_name)?;
     state
         .manager
         .create_tenant(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
 
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     let mut store = if rules_path.exists() {
-        RuleStore::load(&rules_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        RuleStore::load(&rules_path).map_err(internal_error)?
     } else {
         RuleStore::new()
     };
 
     store.insert(rule.clone());
 
-    store
-        .save(&rules_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    store.save(&rules_path).map_err(internal_error)?;
 
     state.manager.invalidate_rules_cache(&index_name);
 
@@ -108,7 +118,7 @@ pub async fn save_rule(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339(),
@@ -137,6 +147,7 @@ pub async fn delete_rule(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    validate_index_http(&index_name)?;
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     if !rules_path.exists() {
@@ -146,8 +157,7 @@ pub async fn delete_rule(
         ));
     }
 
-    let mut store = RuleStore::load(&rules_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut store = RuleStore::load(&rules_path).map_err(internal_error)?;
 
     store.remove(&object_id).ok_or_else(|| {
         (
@@ -156,9 +166,7 @@ pub async fn delete_rule(
         )
     })?;
 
-    store
-        .save(&rules_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    store.save(&rules_path).map_err(internal_error)?;
 
     state.manager.invalidate_rules_cache(&index_name);
 
@@ -171,7 +179,7 @@ pub async fn delete_rule(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "deletedAt": chrono::Utc::now().to_rfc3339()
@@ -196,14 +204,14 @@ pub async fn delete_rule(
 )]
 pub async fn save_rules(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
     Query(params): Query<HashMap<String, String>>,
     Json(rules): Json<Vec<Rule>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     state
         .manager
         .create_tenant(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
 
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
@@ -215,8 +223,7 @@ pub async fn save_rules(
     let mut store = if clear_existing || !rules_path.exists() {
         RuleStore::new()
     } else {
-        RuleStore::load(&rules_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        RuleStore::load(&rules_path).map_err(internal_error)?
     };
 
     let rules_json: Vec<serde_json::Value> = rules
@@ -228,11 +235,18 @@ pub async fn save_rules(
         store.insert(rule);
     }
 
-    store
-        .save(&rules_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    store.save(&rules_path).map_err(internal_error)?;
 
     state.manager.invalidate_rules_cache(&index_name);
+
+    // Forward rules to replicas if requested
+    let forward_to_replicas = params
+        .get("forwardToReplicas")
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(false);
+    if forward_to_replicas {
+        forward_rules_to_replicas(&state, &index_name, &store).map_err(internal_error)?;
+    }
 
     state.manager.append_oplog(
         &index_name,
@@ -243,11 +257,48 @@ pub async fn save_rules(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339()
     })))
+}
+
+/// Forward the current rule store from a primary index to all its configured replicas.
+fn forward_rules_to_replicas(
+    state: &Arc<AppState>,
+    primary_index_name: &str,
+    store: &RuleStore,
+) -> Result<(), flapjack::error::FlapjackError> {
+    use flapjack::index::replica::parse_replica_entry;
+    use flapjack::index::settings::IndexSettings;
+
+    let settings_path = state
+        .manager
+        .base_path
+        .join(primary_index_name)
+        .join("settings.json");
+    if !settings_path.exists() {
+        return Ok(());
+    }
+    let primary_settings = IndexSettings::load(&settings_path)?;
+    let replicas = match &primary_settings.replicas {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    for replica_str in replicas {
+        let parsed = parse_replica_entry(replica_str)?;
+        let replica_name = parsed.name();
+        let replica_dir = state.manager.base_path.join(replica_name);
+        if !replica_dir.exists() {
+            continue;
+        }
+        let replica_rules_path = replica_dir.join("rules.json");
+        store.save(&replica_rules_path)?;
+        state.manager.invalidate_rules_cache(replica_name);
+    }
+    Ok(())
 }
 
 /// Clear all rules for an index
@@ -267,13 +318,12 @@ pub async fn save_rules(
 )]
 pub async fn clear_rules(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     if rules_path.exists() {
-        std::fs::remove_file(&rules_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        std::fs::remove_file(&rules_path).map_err(internal_error)?;
     }
 
     state.manager.invalidate_rules_cache(&index_name);
@@ -284,7 +334,7 @@ pub async fn clear_rules(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339()
@@ -325,20 +375,19 @@ fn default_hits_per_page() -> usize {
 )]
 pub async fn search_rules(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
     Json(req): Json<SearchRulesRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     let store = if rules_path.exists() {
-        RuleStore::load(&rules_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        RuleStore::load(&rules_path).map_err(internal_error)?
     } else {
         RuleStore::new()
     };
 
     let (hits, total) = store.search(&req.query, req.page, req.hits_per_page);
-    let nb_pages = total.div_ceil(req.hits_per_page);
+    let nb_pages = safe_nb_pages(total, req.hits_per_page);
 
     Ok(Json(serde_json::json!({
         "hits": hits,

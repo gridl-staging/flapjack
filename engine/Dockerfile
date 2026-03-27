@@ -31,15 +31,19 @@ COPY engine/package ./package
 # Copy built dashboard (required by RustEmbed)
 COPY --from=dashboard-builder /app/dist ./dashboard/dist
 
-# Build release binary (glibc — vector-search compatible, unlike musl targets)
-RUN cargo build --release -p flapjack-server --features vector-search
+# rust:1 is based on Debian trixie (GLIBC 2.41, GCC 14). usearch/simsimd requires
+# GLIBC_2.39+ and CXXABI_1.3.15 (GCC 14) at runtime, so the runtime image must
+# match trixie. vector-search is enabled here (unlike the musl release builds).
+RUN cargo build --release --features vector-search -p flapjack-server
 
 # ── Stage 3: Runtime ─────────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+# Must match the builder (rust:1 = trixie) to satisfy GLIBC_2.39 and CXXABI_1.3.15.
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
+    libssl3t64 \
+    libstdc++6 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -54,4 +58,9 @@ EXPOSE 7700
 WORKDIR /data
 
 ENTRYPOINT ["entrypoint.sh"]
+# Container-only default: bind to all interfaces so bare `docker run -p 7700:7700`
+# is reachable from the host. Native builds keep the loopback-only default in
+# resolve_bind_addr (engine/flapjack-server/src/main.rs). Compose files may
+# override this via their own FLAPJACK_BIND_ADDR environment setting.
+ENV FLAPJACK_BIND_ADDR=0.0.0.0:7700
 CMD ["flapjack", "--data-dir", "/data"]

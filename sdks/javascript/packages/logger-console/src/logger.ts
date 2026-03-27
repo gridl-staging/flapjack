@@ -1,6 +1,11 @@
+/**
+ */
 import type { LogLevelType, Logger } from '@flapjack-search/client-common';
 import { LogLevelEnum } from '@flapjack-search/client-common';
 
+/**
+ * TODO: Document createConsoleLogger.
+ */
 export function createConsoleLogger(logLevel: LogLevelType): Logger {
   return {
     debug(message: string, args?: any | undefined): Readonly<Promise<void>> {

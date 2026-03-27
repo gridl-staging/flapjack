@@ -8,7 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# Keep build artifacts ignored, but track RustEmbed placeholder.
+dist/*
+!dist/index.html
 dist-ssr
 *.local
 
@@ -25,6 +27,10 @@ bin/
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright
+playwright-report/
+test-results/
 
 # Node
 node_modules/

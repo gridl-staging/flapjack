@@ -12,7 +12,8 @@ import { Label } from '@/components/ui/label';
 import { useSearch } from '@/hooks/useSearch';
 import { useSaveRule, useRules } from '@/hooks/useRules';
 import { useToast } from '@/hooks/use-toast';
-import type { Rule, RulePromote, RuleHide } from '@/lib/types';
+import type { RulePromote, RuleHide } from '@/lib/types';
+import { createMerchandisingRule } from '@/lib/ruleHelpers';
 
 interface PinAction {
   objectID: string;
@@ -204,19 +205,12 @@ export function MerchandisingStudio() {
       objectID: h.objectID,
     }));
 
-    const rule: Rule = {
-      objectID: `merch-${submittedQuery.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}`,
-      conditions: [{
-        pattern: submittedQuery,
-        anchoring: 'is',
-      }],
-      consequence: {
-        ...(promote.length > 0 ? { promote } : {}),
-        ...(hide.length > 0 ? { hide } : {}),
-      },
-      description: ruleDescription || `Merchandising: "${submittedQuery}"`,
-      enabled: true,
-    };
+    const rule = createMerchandisingRule({
+      query: submittedQuery,
+      description: ruleDescription,
+      pins: promote,
+      hides: hide,
+    });
 
     try {
       await saveRule.mutateAsync(rule);

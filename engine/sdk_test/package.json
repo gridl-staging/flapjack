@@ -5,7 +5,12 @@
   "scripts": {
     "test": "node test.js",
     "test:contract": "node contract_tests.js",
-    "test:all": "node test.js && node contract_tests.js",
+    "test:compat": "node full_compat_tests.js",
+    "test:instantsearch": "node instantsearch_contract_tests.js",
+    "test:widgets": "node instantsearch_contract_tests.js",
+    "test:runner-shell": "bash tests/dashboard_runner_bootstrap_node_modules_test.sh && bash tests/dashboard_runner_lockfile_change_reinstalls_node_modules_test.sh && bash tests/dashboard_runner_reuse_node_modules_validation_test.sh && bash tests/sdk_runner_bootstrap_node_modules_test.sh && bash tests/sdk_runner_cache_hit_reuses_node_modules_test.sh && bash tests/sdk_runner_reuse_guard_test.sh && bash tests/sdk_runner_reuse_node_modules_validation_test.sh && bash tests/sdk_runner_deduplicates_core_js_when_e2e_enabled_test.sh",
+    "test:all": "node test.js && node contract_tests.js && node full_compat_tests.js && node instantsearch_contract_tests.js",
+    "test:full": "npm run test:all",
     "test:migration": "node test_algolia_migration.js",
     "test:migration:verbose": "node test_algolia_migration.js --verbose",
     "test:validation": "node algolia_validation.js"

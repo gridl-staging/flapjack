@@ -28,6 +28,14 @@ pub struct GetOpsResponse {
     pub tenant_id: String,
     pub ops: Vec<OpLogEntry>,
     pub current_seq: u64, // Latest sequence number on this node
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_retained_seq: Option<u64>,
+}
+
+/// Response containing tenant IDs available on a peer node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListTenantsResponse {
+    pub tenants: Vec<String>,
 }
 
 /// Basic replication status for monitoring

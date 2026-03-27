@@ -1,3 +1,6 @@
+/**
+ * @module Parses Prometheus text exposition format into an array of typed metric objects, handling labels, comments, and malformed lines.
+ */
 export interface PrometheusMetric {
   name: string;
   labels: Record<string, string>;
@@ -23,6 +26,13 @@ export function parsePrometheusText(text: string): PrometheusMetric[] {
   return metrics;
 }
 
+/**
+ * Parse a single Prometheus exposition line into a structured metric.
+ * Handles both labeled (`metric{k="v"} 1.0`) and unlabeled (`metric 1.0`) formats.
+ * 
+ * @param line - A trimmed, non-empty, non-comment line from Prometheus text output.
+ * @returns The parsed metric, or `null` if the line is malformed.
+ */
 function parseLine(line: string): PrometheusMetric | null {
   // Format: metric_name{label="val",label2="val2"} value
   // or:     metric_name value

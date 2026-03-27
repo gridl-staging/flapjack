@@ -536,6 +536,211 @@ func TestSaveAndSearchRules(t *testing.T) {
 // User Agent Tests
 // =========================================================================
 
+// =========================================================================
+// Browse Cursor Pagination
+// =========================================================================
+
+func TestBrowseCursorPagination(t *testing.T) {
+	client := setupSuite(t)
+	defer cleanupSuite(t, client)
+
+	browseReq := client.NewApiBrowseRequest(testIndex).WithBrowseParams(
+		search.BrowseParamsObjectAsBrowseParams(search.NewBrowseParamsObject(
+			search.WithBrowseParamsObjectHitsPerPage(2),
+		)),
+	)
+
+	resp, err := client.Browse(browseReq)
+	if err != nil {
+		t.Fatalf("Browse failed: %v", err)
+	}
+
+	if resp.Cursor == nil || *resp.Cursor == "" {
+		t.Fatal("expected cursor in browse response for first page")
+	}
+
+	if len(resp.Hits) != 2 {
+		t.Errorf("expected 2 hits on first page, got %d", len(resp.Hits))
+	}
+
+	// Follow cursor to next page
+	browseReq2 := client.NewApiBrowseRequest(testIndex).WithBrowseParams(
+		search.BrowseParamsObjectAsBrowseParams(search.NewBrowseParamsObject(
+			search.WithBrowseParamsObjectCursor(*resp.Cursor),
+			search.WithBrowseParamsObjectHitsPerPage(2),
+		)),
+	)
+
+	resp2, err := client.Browse(browseReq2)
+	if err != nil {
+		t.Fatalf("Browse page 2 failed: %v", err)
+	}
+
+	if len(resp2.Hits) < 1 {
+		t.Error("expected at least 1 hit on second page")
+	}
+}
+
+// =========================================================================
+// Stage 1 Settings Round-Trip
+// =========================================================================
+
+func TestSettingsStage1NumericAttributesForFiltering(t *testing.T) {
+	client := setupSuite(t)
+	defer cleanupSuite(t, client)
+
+	newSettings := search.NewIndexSettings(
+		search.WithIndexSettingsNumericAttributesForFiltering([]string{"price", "rating"}),
+	)
+	setReq := client.NewApiSetSettingsRequest(testIndex, newSettings)
+	_, err := client.SetSettings(setReq)
+	if err != nil {
+		t.Fatalf("SetSettings failed: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	getReq := client.NewApiGetSettingsRequest(testIndex)
+	resp, err := client.GetSettings(getReq)
+	if err != nil {
+		t.Fatalf("GetSettings failed: %v", err)
+	}
+
+	found := false
+	for _, attr := range resp.NumericAttributesForFiltering {
+		if attr == "price" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'price' in numericAttributesForFiltering after set")
+	}
+}
+
+func TestSettingsStage1UnorderedSearchableAttributes(t *testing.T) {
+	client := setupSuite(t)
+	defer cleanupSuite(t, client)
+
+	newSettings := search.NewIndexSettings(
+		search.WithIndexSettingsSearchableAttributes([]string{"unordered(name)", "brand", "unordered(description)"}),
+	)
+	setReq := client.NewApiSetSettingsRequest(testIndex, newSettings)
+	_, err := client.SetSettings(setReq)
+	if err != nil {
+		t.Fatalf("SetSettings failed: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	getReq := client.NewApiGetSettingsRequest(testIndex)
+	resp, err := client.GetSettings(getReq)
+	if err != nil {
+		t.Fatalf("GetSettings failed: %v", err)
+	}
+
+	foundUnordered := false
+	for _, attr := range resp.SearchableAttributes {
+		if attr == "unordered(name)" {
+			foundUnordered = true
+			break
+		}
+	}
+	if !foundUnordered {
+		t.Errorf("expected 'unordered(name)' in searchableAttributes, got %v", resp.SearchableAttributes)
+	}
+
+	// Restore
+	restoreSettings := search.NewIndexSettings(
+		search.WithIndexSettingsSearchableAttributes([]string{"name", "brand", "category"}),
+	)
+	restoreReq := client.NewApiSetSettingsRequest(testIndex, restoreSettings)
+	_, _ = client.SetSettings(restoreReq)
+	time.Sleep(300 * time.Millisecond)
+}
+
+func TestSettingsStage1AllowCompressionOfIntegerArray(t *testing.T) {
+	client := setupSuite(t)
+	defer cleanupSuite(t, client)
+
+	trueVal := true
+	newSettings := search.NewIndexSettings(
+		search.WithIndexSettingsAllowCompressionOfIntegerArray(trueVal),
+	)
+	setReq := client.NewApiSetSettingsRequest(testIndex, newSettings)
+	_, err := client.SetSettings(setReq)
+	if err != nil {
+		t.Fatalf("SetSettings failed: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	getReq := client.NewApiGetSettingsRequest(testIndex)
+	resp, err := client.GetSettings(getReq)
+	if err != nil {
+		t.Fatalf("GetSettings failed: %v", err)
+	}
+
+	if resp.AllowCompressionOfIntegerArray == nil || !*resp.AllowCompressionOfIntegerArray {
+		t.Error("expected allowCompressionOfIntegerArray=true after set")
+	}
+}
+
+// =========================================================================
+// API Key CRUD
+// =========================================================================
+
+func TestApiKeyCRUD(t *testing.T) {
+	client := getClient(t)
+
+	// Create
+	key := search.NewApiKey([]search.Acl{search.ACL_SEARCH, search.ACL_BROWSE})
+	key.Description = strPtr("Go SDK matrix test key")
+	key.Indexes = []string{testIndex}
+
+	addReq := client.NewApiAddApiKeyRequest(key)
+	addResp, err := client.AddApiKey(addReq)
+	if err != nil {
+		t.Fatalf("AddApiKey failed: %v", err)
+	}
+
+	if addResp.Key == "" {
+		t.Fatal("expected non-empty key in AddApiKey response")
+	}
+
+	// List
+	listResp, err := client.ListApiKeys()
+	if err != nil {
+		t.Fatalf("ListApiKeys failed: %v", err)
+	}
+
+	if len(listResp.Keys) == 0 {
+		t.Error("expected at least 1 key in ListApiKeys response")
+	}
+
+	// Get
+	getReq := client.NewApiGetApiKeyRequest(addResp.Key)
+	getResp, err := client.GetApiKey(getReq)
+	if err != nil {
+		t.Fatalf("GetApiKey failed: %v", err)
+	}
+
+	if getResp.Value != addResp.Key {
+		t.Errorf("expected key value %q, got %q", addResp.Key, getResp.Value)
+	}
+
+	// Delete
+	delReq := client.NewApiDeleteApiKeyRequest(addResp.Key)
+	_, err = client.DeleteApiKey(delReq)
+	if err != nil {
+		t.Fatalf("DeleteApiKey failed: %v", err)
+	}
+}
+
+// =========================================================================
+// User Agent Tests
+// =========================================================================
+
 func TestUserAgentContainsFlapjack(t *testing.T) {
 	client := getClient(t)
 	cfg := client.GetConfiguration()

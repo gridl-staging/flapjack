@@ -1,3 +1,5 @@
+/**
+ */
 import type {
   EndRequest,
   Host,
@@ -20,6 +22,9 @@ type RetryableOptions = {
   getTimeout: (retryCount: number, timeout: number) => number;
 };
 
+/**
+ * TODO: Document createTransporter.
+ */
 export function createTransporter({
   hosts,
   hostsCache,
@@ -32,6 +37,9 @@ export function createTransporter({
   requestsCache,
   responsesCache,
 }: TransporterOptions): Transporter {
+  /**
+   * TODO: Document createRetryableOptions.
+   */
   async function createRetryableOptions(compatibleHosts: Host[]): Promise<RetryableOptions> {
     const statefulHosts = await Promise.all(
       compatibleHosts.map((compatibleHost) => {
@@ -49,6 +57,9 @@ export function createTransporter({
 
     return {
       hosts: compatibleHostsAvailable,
+      /**
+       * TODO: Document getTimeout.
+       */
       getTimeout(timeoutsCount: number, baseTimeout: number): number {
         /**
          * Imagine that you have 4 hosts, if timeouts will increase
@@ -69,6 +80,9 @@ export function createTransporter({
     };
   }
 
+  /**
+   * TODO: Document retryableRequest.
+   */
   async function retryableRequest<TResponse>(
     request: Request,
     requestOptions: RequestOptions,
@@ -210,6 +224,9 @@ export function createTransporter({
     return retry([...options.hosts].reverse(), options.getTimeout);
   }
 
+  /**
+   * TODO: Document createRequest.
+   */
   function createRequest<TResponse>(request: Request, requestOptions: RequestOptions = {}): Promise<TResponse> {
     const createRetryableRequest = (): Promise<TResponse> => {
       /**

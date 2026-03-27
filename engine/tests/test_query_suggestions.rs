@@ -3,14 +3,21 @@
 /// TDD: these tests define the expected API behaviour.
 /// Run `cargo test --test test_query_suggestions` to execute.
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
 mod common;
-use common::{spawn_server, spawn_server_with_qs_analytics};
+use common::{spawn_server, spawn_server_with_qs_analytics, spawn_server_without_analytics};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn client() -> reqwest::Client {
-    reqwest::Client::new()
+fn client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(64)
+            .build()
+            .expect("query suggestions test client must build")
+    })
 }
 
 fn auth(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -64,6 +71,17 @@ fn basic_config(suggestions_index: &str, source_index: &str) -> Value {
             "minLetters": 4
         }]
     })
+}
+
+#[test]
+fn client_helper_reuses_singleton_client() {
+    let first_ptr = client() as *const reqwest::Client;
+    let second_ptr = client() as *const reqwest::Client;
+
+    assert_eq!(
+        first_ptr, second_ptr,
+        "query suggestions tests should reuse one client instance to avoid socket churn"
+    );
 }
 
 // ── config CRUD ───────────────────────────────────────────────────────────────
@@ -138,6 +156,32 @@ async fn create_duplicate_config_returns_409() {
     post_config(&base, basic_config("dupe_test", "products")).await;
     let resp = post_config(&base, basic_config("dupe_test", "products")).await;
     assert_eq!(resp.status(), 409, "duplicate create should return 409");
+}
+
+#[tokio::test]
+async fn create_config_rejects_path_traversal_index_name() {
+    let (addr, _tmp) = spawn_server().await;
+    let base = format!("http://{}", addr);
+
+    let resp = post_config(&base, basic_config("../keys", "products")).await;
+    assert_eq!(resp.status(), 400, "invalid indexName should return 400");
+}
+
+#[tokio::test]
+async fn get_config_rejects_path_traversal_index_name() {
+    let (addr, _tmp) = spawn_server().await;
+    let base = format!("http://{}", addr);
+
+    // Use encoded backslash so the request path is not normalized away by the client.
+    let resp = auth(client().get(format!("{}/1/configs/bad%5Cname", base)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        400,
+        "invalid path indexName should return 400"
+    );
 }
 
 #[tokio::test]
@@ -742,7 +786,7 @@ async fn update_config_while_building_returns_409() {
 /// lastBuiltAt stays null — a skipped build is NOT a successful build.
 #[tokio::test]
 async fn no_analytics_engine_build_gracefully_skips() {
-    let (addr, _tmp) = spawn_server().await; // analytics_engine = None
+    let (addr, _tmp) = spawn_server_without_analytics().await;
     let base = format!("http://{}", addr);
 
     // Create triggers an async build; spawn_build detects None engine and returns early

@@ -1,3 +1,4 @@
+//! Deterministic A/B experiment assignment using MurmurHash3_x64_128 bucketing, with a priority cascade from user token to session ID to query ID for stable variant allocation.
 use super::config::Experiment;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,6 +14,20 @@ pub struct Assignment {
     pub method: AssignmentMethod,
 }
 
+/// Assign a user to the control or variant arm of an experiment.
+///
+/// Select the most stable identifier available (user token > session ID > query ID) and hash it together with the experiment ID using MurmurHash3 to deterministically bucket the request. The bucket is compared against `experiment.traffic_split` to choose the arm.
+///
+/// # Arguments
+///
+/// * `experiment` - The experiment configuration, including its ID and traffic split.
+/// * `user_token` - Persistent user identifier, preferred for stable assignment across sessions.
+/// * `session_id` - Session-scoped identifier, used when no user token is available.
+/// * `query_id` - Per-query identifier, used as a last-resort fallback.
+///
+/// # Returns
+///
+/// An `Assignment` containing the chosen arm (`"variant"` or `"control"`) and which identifier method was used for bucketing.
 pub fn assign_variant(
     experiment: &Experiment,
     user_token: Option<&str>,
@@ -347,6 +362,13 @@ mod tests {
     use super::*;
     use crate::experiments::config::*;
 
+    /// Create a test experiment with the given traffic split fraction.
+    ///
+    /// Build a minimal `Experiment` with fixed IDs and default arms, useful for unit testing assignment logic without constructing full experiment configs.
+    ///
+    /// # Arguments
+    ///
+    /// * `split` - Traffic fraction in [0.0, 1.0] routed to the variant arm.
     fn exp_with_split(split: f64) -> Experiment {
         Experiment {
             id: "test-experiment-id".to_string(),
@@ -368,6 +390,7 @@ mod tests {
             created_at: 0,
             started_at: None,
             ended_at: None,
+            stopped_at: None,
             minimum_days: 14,
             winsorization_cap: None,
             conclusion: None,

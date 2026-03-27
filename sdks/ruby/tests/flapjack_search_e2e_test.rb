@@ -358,6 +358,112 @@ class FlapjackSearchE2eTest < Minitest::Test
   end
 
   # =========================================================================
+  # Stage 1 Settings Round-Trip
+  # =========================================================================
+
+  def test_21_settings_numeric_attributes_for_filtering_roundtrip
+    resp = client.set_settings(INDEX_NAME,
+      Flapjack::Search::IndexSettings.new(
+        numeric_attributes_for_filtering: ["price", "rating"]
+      )
+    )
+    wait_for_task(INDEX_NAME, resp.respond_to?(:task_id) ? resp.task_id : nil)
+
+    settings = client.get_settings(INDEX_NAME)
+    attrs = if settings.respond_to?(:numeric_attributes_for_filtering)
+              settings.numeric_attributes_for_filtering
+            else
+              settings["numericAttributesForFiltering"] || settings[:numericAttributesForFiltering]
+            end
+    refute_nil attrs, "Expected numericAttributesForFiltering in settings"
+    assert_includes attrs, "price"
+    assert_includes attrs, "rating"
+  end
+
+  def test_22_settings_unordered_searchable_attributes_roundtrip
+    resp = client.set_settings(INDEX_NAME,
+      Flapjack::Search::IndexSettings.new(
+        searchable_attributes: ["unordered(name)", "brand", "unordered(description)"]
+      )
+    )
+    wait_for_task(INDEX_NAME, resp.respond_to?(:task_id) ? resp.task_id : nil)
+
+    settings = client.get_settings(INDEX_NAME)
+    attrs = settings.respond_to?(:searchable_attributes) ? settings.searchable_attributes : (settings["searchableAttributes"] || settings[:searchableAttributes])
+    assert_includes attrs, "unordered(name)"
+    assert_includes attrs, "unordered(description)"
+
+    # Restore
+    restore_resp = client.set_settings(INDEX_NAME,
+      Flapjack::Search::IndexSettings.new(
+        searchable_attributes: ["name", "brand", "category"],
+        attributes_for_faceting: ["searchable(brand)", "category", "price"]
+      )
+    )
+    wait_for_task(INDEX_NAME, restore_resp.respond_to?(:task_id) ? restore_resp.task_id : nil)
+  end
+
+  def test_23_settings_allow_compression_of_integer_array_roundtrip
+    resp = client.set_settings(INDEX_NAME,
+      Flapjack::Search::IndexSettings.new(
+        allow_compression_of_integer_array: true
+      )
+    )
+    wait_for_task(INDEX_NAME, resp.respond_to?(:task_id) ? resp.task_id : nil)
+
+    settings = client.get_settings(INDEX_NAME)
+    val = if settings.respond_to?(:allow_compression_of_integer_array)
+            settings.allow_compression_of_integer_array
+          else
+            settings["allowCompressionOfIntegerArray"] || settings[:allowCompressionOfIntegerArray]
+          end
+    assert_equal true, val, "Expected allowCompressionOfIntegerArray=true"
+  end
+
+  # =========================================================================
+  # API Key CRUD
+  # =========================================================================
+
+  def test_24_api_key_crud
+    uri_base = "http://#{SERVER_HOST}:#{SERVER_PORT}"
+    headers = {
+      "Content-Type" => "application/json",
+      "x-algolia-api-key" => API_KEY,
+      "x-algolia-application-id" => APP_ID
+    }
+
+    # Create
+    uri = URI("#{uri_base}/1/keys")
+    http = Net::HTTP.new(uri.host, uri.port)
+    req = Net::HTTP::Post.new(uri.path, headers)
+    req.body = JSON.generate({ acl: ["search", "browse"], description: "Ruby SDK matrix test key", indexes: [INDEX_NAME] })
+    resp = http.request(req)
+    assert_equal "200", resp.code, "Create key should return 200"
+    result = JSON.parse(resp.body)
+    key = result["key"]
+    refute_nil key, "Expected key in create response"
+
+    # List
+    req = Net::HTTP::Get.new("/1/keys", headers)
+    resp = http.request(req)
+    assert_equal "200", resp.code
+    result = JSON.parse(resp.body)
+    assert result["keys"].is_a?(Array), "Expected keys array"
+
+    # Get
+    req = Net::HTTP::Get.new("/1/keys/#{key}", headers)
+    resp = http.request(req)
+    assert_equal "200", resp.code
+    result = JSON.parse(resp.body)
+    assert_equal key, result["value"]
+
+    # Delete
+    req = Net::HTTP::Delete.new("/1/keys/#{key}", headers)
+    resp = http.request(req)
+    assert_equal "200", resp.code
+  end
+
+  # =========================================================================
   # Search for Facet Values
   # =========================================================================
 

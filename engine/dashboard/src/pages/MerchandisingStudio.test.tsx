@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { TEST_ROUTER_FUTURE } from '@/test/routerFuture'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { IndexLayout } from '@/components/layout/IndexLayout'
 import { MerchandisingStudio } from './MerchandisingStudio'
 
 vi.mock('@/hooks/useSearch', () => ({
@@ -18,8 +20,13 @@ vi.mock('@/hooks/use-toast', () => ({
   useToast: () => ({ toast: vi.fn() }),
 }))
 
+vi.mock('@/hooks/useSettings', () => ({
+  useSettings: vi.fn(),
+}))
+
 import { useSearch } from '@/hooks/useSearch'
 import { useRules } from '@/hooks/useRules'
+import { useSettings } from '@/hooks/useSettings'
 
 const HITS = [
   { objectID: 'prod-1', name: 'Apple iPhone 15', brand: 'Apple' },
@@ -32,9 +39,11 @@ function makeWrapper(path: string) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     return (
       <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={[path]}>
+        <MemoryRouter future={TEST_ROUTER_FUTURE} initialEntries={[path]}>
           <Routes>
-            <Route path="/index/:indexName/merchandising" element={children} />
+            <Route path="/index/:indexName" element={<IndexLayout />}>
+              <Route path="merchandising" element={children} />
+            </Route>
             <Route path="/no-index" element={children} />
           </Routes>
         </MemoryRouter>
@@ -49,6 +58,7 @@ const withoutIndex = makeWrapper('/no-index')
 describe('MerchandisingStudio', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(useSettings).mockReturnValue({ data: { mode: 'keywordSearch' }, isLoading: false } as any)
     vi.mocked(useRules).mockReturnValue({ data: { hits: [], nbHits: 0 }, isLoading: false } as any)
     vi.mocked(useSearch).mockReturnValue({ data: undefined, isLoading: false } as any)
   })

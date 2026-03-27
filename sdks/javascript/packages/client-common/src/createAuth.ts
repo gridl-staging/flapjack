@@ -1,5 +1,10 @@
+/**
+ */
 import type { AuthMode, Headers, QueryParameters } from './types';
 
+/**
+ * TODO: Document createAuth.
+ */
 export function createAuth(
   appId: string,
   apiKey: string,

@@ -64,6 +64,7 @@ pub struct RestEmbedder {
 
 // Stub — implementation follows in later items
 impl RestEmbedder {
+    /// TODO: Document RestEmbedder.new.
     pub fn new(config: &EmbedderConfig) -> Result<Self, VectorError> {
         config.validate()?;
         let mut client_builder = reqwest::Client::builder();
@@ -93,6 +94,7 @@ impl RestEmbedder {
         })
     }
 
+    /// TODO: Document RestEmbedder.embed_documents.
     pub async fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
         if texts.is_empty() {
             return Ok(Vec::new());
@@ -205,6 +207,7 @@ impl RestEmbedder {
         }
     }
 
+    /// TODO: Document RestEmbedder.send_request.
     async fn send_request(
         &self,
         body: &serde_json::Value,
@@ -288,6 +291,7 @@ impl RestEmbedder {
         path
     }
 
+    /// TODO: Document RestEmbedder.find_embedding_recursive.
     fn find_embedding_recursive(value: &serde_json::Value, path: &mut Vec<String>) -> bool {
         match value {
             serde_json::Value::String(s) if s == "{{embedding}}" => true,
@@ -351,6 +355,7 @@ impl RestEmbedder {
         current
     }
 
+    /// TODO: Document RestEmbedder.value_to_f32_vec.
     fn value_to_f32_vec(value: &serde_json::Value) -> Result<Vec<f32>, VectorError> {
         match value {
             serde_json::Value::Array(arr) => arr
@@ -384,6 +389,7 @@ pub struct OpenAiEmbedder {
 }
 
 impl OpenAiEmbedder {
+    /// TODO: Document OpenAiEmbedder.new.
     pub fn new(config: &EmbedderConfig) -> Result<Self, VectorError> {
         config.validate()?;
         let api_key = config
@@ -415,6 +421,7 @@ impl OpenAiEmbedder {
         })
     }
 
+    /// TODO: Document OpenAiEmbedder.embed_documents.
     pub async fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
         if texts.is_empty() {
             return Ok(Vec::new());
@@ -526,6 +533,19 @@ impl OpenAiEmbedder {
 
 // ── FastEmbedEmbedder ──
 
+/// Convert a model name string to a fastembed EmbeddingModel enum variant.
+///
+/// # Arguments
+///
+/// - `model`: Optional model name (case-insensitive). Defaults to "bge-small-en-v1.5" if None.
+///
+/// # Returns
+///
+/// The corresponding `fastembed::EmbeddingModel` enum variant.
+///
+/// # Errors
+///
+/// Returns `VectorError::EmbeddingError` if the model name is not recognized, including a list of supported models.
 #[cfg(feature = "vector-search-local")]
 fn parse_embedding_model(model: Option<&str>) -> Result<fastembed::EmbeddingModel, VectorError> {
     match model.map(|s| s.to_lowercase()).as_deref() {
@@ -565,6 +585,7 @@ impl std::fmt::Debug for FastEmbedEmbedder {
 
 #[cfg(feature = "vector-search-local")]
 impl FastEmbedEmbedder {
+    /// TODO: Document FastEmbedEmbedder.new.
     pub fn new(config: &EmbedderConfig) -> Result<Self, VectorError> {
         let model_enum = parse_embedding_model(config.model.as_deref())?;
 
@@ -597,6 +618,7 @@ impl FastEmbedEmbedder {
         })
     }
 
+    /// TODO: Document FastEmbedEmbedder.embed_documents.
     pub async fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
         if texts.is_empty() {
             return Ok(vec![]);
@@ -832,6 +854,7 @@ mod tests {
         use wiremock::matchers::{body_json, header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        /// Verify that RestEmbedder renders request templates by replacing `{{text}}` placeholder with input text.
         #[tokio::test]
         async fn test_rest_embedder_request_format() {
             let server = MockServer::start().await;
@@ -858,6 +881,7 @@ mod tests {
             assert!((result[0] - 0.1).abs() < 0.001);
         }
 
+        /// Verify that RestEmbedder navigates nested JSON response templates to extract embedding vectors.
         #[tokio::test]
         async fn test_rest_embedder_response_parsing() {
             let server = MockServer::start().await;
@@ -881,6 +905,7 @@ mod tests {
             assert_eq!(result, vec![1.0, 2.0, 3.0, 4.0]);
         }
 
+        /// Verify that RestEmbedder detects batch templates containing `{{..}}` and expands them with all texts.
         #[tokio::test]
         async fn test_rest_embedder_batch_request() {
             let server = MockServer::start().await;
@@ -909,6 +934,7 @@ mod tests {
             assert_eq!(results[1], vec![0.3, 0.4]);
         }
 
+        /// Verify that RestEmbedder returns error for connection failures to unreachable endpoints.
         #[tokio::test]
         async fn test_rest_embedder_network_error() {
             let config = EmbedderConfig {
@@ -928,6 +954,7 @@ mod tests {
             ));
         }
 
+        /// Verify that RestEmbedder returns error when the server responds with non-success HTTP status.
         #[tokio::test]
         async fn test_rest_embedder_bad_response() {
             let server = MockServer::start().await;
@@ -949,6 +976,7 @@ mod tests {
             assert!(result.is_err());
         }
 
+        /// Verify that RestEmbedder includes custom headers from configuration in HTTP requests.
         #[tokio::test]
         async fn test_rest_embedder_custom_headers() {
             let server = MockServer::start().await;
@@ -985,6 +1013,17 @@ mod tests {
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        /// Build a mock OpenAI embeddings API response with the given embedding vectors.
+        ///
+        /// Constructs the standard OpenAI response format with `data` array containing indexed embedding objects.
+        ///
+        /// # Arguments
+        ///
+        /// - `embeddings`: Vec of embedding vectors (as f64).
+        ///
+        /// # Returns
+        ///
+        /// `serde_json::Value` in OpenAI response format with object/data/model/usage fields.
         fn openai_response(embeddings: Vec<Vec<f64>>) -> serde_json::Value {
             let data: Vec<serde_json::Value> = embeddings
                 .into_iter()
@@ -1005,6 +1044,7 @@ mod tests {
             })
         }
 
+        /// Verify that OpenAiEmbedder constructs correct HTTP request with Bearer token and embedding dimensions.
         #[tokio::test]
         async fn test_openai_sends_correct_request() {
             let server = MockServer::start().await;
@@ -1029,6 +1069,7 @@ mod tests {
             assert_eq!(result.len(), 3);
         }
 
+        /// Verify that OpenAiEmbedder correctly extracts embedding vectors from OpenAI API response format.
         #[tokio::test]
         async fn test_openai_parses_response() {
             let server = MockServer::start().await;
@@ -1051,6 +1092,7 @@ mod tests {
             assert_eq!(result, vec![1.0, 2.0, 3.0]);
         }
 
+        /// Verify that OpenAiEmbedder batches multiple texts in a single request and returns embeddings in order.
         #[tokio::test]
         async fn test_openai_batch_multiple_texts() {
             let server = MockServer::start().await;
@@ -1075,6 +1117,7 @@ mod tests {
             assert_eq!(results[1], vec![0.3, 0.4]);
         }
 
+        /// Verify that OpenAiEmbedder respects custom model name in configuration.
         #[tokio::test]
         async fn test_openai_custom_model() {
             let server = MockServer::start().await;
@@ -1098,6 +1141,7 @@ mod tests {
             assert_eq!(result.len(), 2);
         }
 
+        /// Verify that OpenAiEmbedder accepts custom base URL and strips trailing slashes.
         #[tokio::test]
         async fn test_openai_custom_url() {
             let server = MockServer::start().await;
@@ -1121,6 +1165,7 @@ mod tests {
             assert_eq!(result.len(), 1);
         }
 
+        /// Verify that OpenAiEmbedder extracts and surfaces error messages from API error responses.
         #[tokio::test]
         async fn test_openai_error_response() {
             let server = MockServer::start().await;
@@ -1148,6 +1193,7 @@ mod tests {
             assert!(err_msg.contains("Invalid API key"));
         }
 
+        /// Verify that configured dimensions are included in the OpenAI embeddings request when set.
         #[tokio::test]
         async fn test_openai_dimensions_in_request() {
             let server = MockServer::start().await;
@@ -1171,6 +1217,7 @@ mod tests {
             let _ = e.embed_query("test").await.unwrap();
         }
 
+        /// Verify that OpenAiEmbedder auto-detects and caches embedding dimensions from the first response.
         #[tokio::test]
         async fn test_openai_dimensions_auto_detection() {
             let server = MockServer::start().await;
@@ -1222,6 +1269,7 @@ mod tests {
             assert!(matches!(model, fastembed::EmbeddingModel::BGESmallENV15));
         }
 
+        /// Verify that all supported fastembed models parse correctly and match expected enum variants.
         #[test]
         fn test_parse_embedding_model_all_supported() {
             let cases = vec![
@@ -1258,6 +1306,7 @@ mod tests {
             }
         }
 
+        /// Verify that unknown model names produce an error mentioning the invalid model and listing valid options.
         #[test]
         fn test_parse_embedding_model_unknown() {
             let result = parse_embedding_model(Some("nonexistent-model"));
@@ -1333,6 +1382,7 @@ mod tests {
             assert!(results.is_empty());
         }
 
+        /// Verify that FastEmbedEmbedder rejects configuration when dimensions don't match the model's actual dimensions.
         #[test]
         fn test_fastembed_dimension_mismatch_in_new() {
             let config = EmbedderConfig {
@@ -1371,6 +1421,7 @@ mod tests {
     }
 
     // Test the error path when vector-search-local is NOT enabled
+    /// Verify that the factory function rejects FastEmbed source when compiled without the `vector-search-local` feature.
     #[cfg(not(feature = "vector-search-local"))]
     #[test]
     fn test_factory_fastembed_rejected_without_feature() {

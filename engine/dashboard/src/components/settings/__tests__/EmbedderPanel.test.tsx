@@ -7,12 +7,30 @@ import type { EmbedderConfig } from '@/lib/types';
 describe('EmbedderPanel', () => {
   const defaultProps = {
     embedders: undefined as Record<string, EmbedderConfig> | undefined,
+    vectorSearchEnabled: true,
     onChange: vi.fn(),
   };
 
   it('renders "No embedders configured" when embedders is undefined', () => {
     render(<EmbedderPanel {...defaultProps} />);
     expect(screen.getByText(/no embedders configured/i)).toBeInTheDocument();
+  });
+
+  it('shows compiled-out message when vector search is disabled', () => {
+    render(<EmbedderPanel {...defaultProps} vectorSearchEnabled={false} />);
+
+    expect(screen.getByTestId('embedder-panel-compiled-out')).toBeInTheDocument();
+    expect(screen.getByTestId('embedder-panel-compiled-out')).toHaveTextContent(/not compiled in/i);
+    expect(screen.queryByText(/no embedders configured/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('add-embedder-btn')).not.toBeInTheDocument();
+  });
+
+  it('waits for capability data before showing embedder controls', () => {
+    render(<EmbedderPanel {...defaultProps} vectorSearchEnabled={undefined} />);
+
+    expect(screen.getByTestId('embedder-panel-capability-pending')).toBeInTheDocument();
+    expect(screen.queryByText(/no embedders configured/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('add-embedder-btn')).not.toBeInTheDocument();
   });
 
   it('renders existing embedder cards with name, source, and dimensions', () => {

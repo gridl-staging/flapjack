@@ -17,7 +17,8 @@ impl SslConfig {
     /// Always enabled (opinionated approach).
     ///
     /// Required: FLAPJACK_SSL_EMAIL
-    /// Optional: FLAPJACK_PUBLIC_IP (auto-detects if not set)
+    /// Required in current implementation: FLAPJACK_PUBLIC_IP
+    ///   (auto-detection path currently returns an error)
     /// Optional: FLAPJACK_ACME_DIRECTORY (defaults to Let's Encrypt production)
     pub fn from_env() -> Result<Self> {
         let email = env::var("FLAPJACK_SSL_EMAIL").map_err(|_| {
@@ -51,9 +52,8 @@ impl SslConfig {
         })
     }
 
-    /// Auto-detect public IP address
-    /// Try EC2 metadata first, then fallback to external service
-    /// Note: This is a simple fallback - if detection fails, user must set FLAPJACK_PUBLIC_IP
+    /// Auto-detect public IP address.
+    /// Currently unimplemented; callers must set FLAPJACK_PUBLIC_IP.
     fn detect_public_ip() -> Result<IpAddr> {
         // For now, require explicit IP configuration
         // TODO: Use async IP detection during server startup instead
@@ -93,7 +93,40 @@ mod tests {
 
         let result = SslConfig::from_env();
         assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("FLAPJACK_SSL_EMAIL"));
 
         env::remove_var("FLAPJACK_PUBLIC_IP");
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_requires_public_ip_when_unset() {
+        env::set_var("FLAPJACK_SSL_EMAIL", "test@example.com");
+        env::remove_var("FLAPJACK_PUBLIC_IP");
+
+        let result = SslConfig::from_env();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("FLAPJACK_PUBLIC_IP"));
+
+        env::remove_var("FLAPJACK_SSL_EMAIL");
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_rejects_non_https_acme_directory() {
+        env::set_var("FLAPJACK_SSL_EMAIL", "test@example.com");
+        env::set_var("FLAPJACK_PUBLIC_IP", "127.0.0.1");
+        env::set_var("FLAPJACK_ACME_DIRECTORY", "http://example.invalid/acme");
+
+        let result = SslConfig::from_env();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("ACME directory must use HTTPS"));
+
+        env::remove_var("FLAPJACK_SSL_EMAIL");
+        env::remove_var("FLAPJACK_PUBLIC_IP");
+        env::remove_var("FLAPJACK_ACME_DIRECTORY");
     }
 }

@@ -334,3 +334,63 @@ export function useAnalyticsStatus(index: string) {
     retry: 1,
   });
 }
+
+export function useAddToCartRate(index: string, range: DateRange, country?: string) {
+  return useQuery({
+    queryKey: ['analytics', 'addToCartRate', index, range, country],
+    queryFn: async () => {
+      let url = `/2/conversions/addToCartRate?index=${encodeURIComponent(index)}&${dateParams(range)}`;
+      if (country) url += `&country=${encodeURIComponent(country)}`;
+      const { data } = await api.get(url);
+      return data;
+    },
+    enabled: !!index,
+    staleTime: 60000,
+    retry: 1,
+  });
+}
+
+export function usePurchaseRate(index: string, range: DateRange, country?: string) {
+  return useQuery({
+    queryKey: ['analytics', 'purchaseRate', index, range, country],
+    queryFn: async () => {
+      let url = `/2/conversions/purchaseRate?index=${encodeURIComponent(index)}&${dateParams(range)}`;
+      if (country) url += `&country=${encodeURIComponent(country)}`;
+      const { data } = await api.get(url);
+      return data;
+    },
+    enabled: !!index,
+    staleTime: 60000,
+    retry: 1,
+  });
+}
+
+export function useRevenue(index: string, range: DateRange, country?: string) {
+  return useQuery({
+    queryKey: ['analytics', 'revenue', index, range, country],
+    queryFn: async () => {
+      let url = `/2/conversions/revenue?index=${encodeURIComponent(index)}&${dateParams(range)}`;
+      if (country) url += `&country=${encodeURIComponent(country)}`;
+      const { data } = await api.get(url);
+      return data;
+    },
+    enabled: !!index,
+    staleTime: 60000,
+    retry: 1,
+  });
+}
+
+export function useCountries(index: string, range: DateRange) {
+  return useQuery({
+    queryKey: ['analytics', 'countries', index, range],
+    queryFn: async () => {
+      const { data } = await api.get(
+        `/2/countries?index=${encodeURIComponent(index)}&${dateParams(range)}`
+      );
+      return data;
+    },
+    enabled: !!index,
+    staleTime: 60000,
+    retry: 1,
+  });
+}

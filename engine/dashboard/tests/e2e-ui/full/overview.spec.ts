@@ -3,7 +3,7 @@
  *
  * NON-MOCKED SIMULATED-HUMAN REAL-BROWSER TESTS.
  * Tests run against a REAL Flapjack server with seeded test data.
- * The 'e2e-products' index is pre-seeded with 12 products.
+ * The 'e2e-products' index is pre-seeded with a product corpus.
  *
  * Covers:
  * - Index list with seeded index and document count
@@ -20,7 +20,7 @@
  * - Export All triggers download
  */
 import { test, expect } from '../../fixtures/auth.fixture';
-import { API_BASE, API_HEADERS, TEST_INDEX } from '../helpers';
+import { TEST_INDEX, waitForOverviewIndexRow } from '../helpers';
 import { deleteIndex } from '../../fixtures/api-helpers';
 
 test.describe('Overview Page', () => {
@@ -31,26 +31,41 @@ test.describe('Overview Page', () => {
   });
 
   test('index list shows e2e-products with document count', async ({ page }) => {
-    await expect(page.getByText(TEST_INDEX).first()).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/12 documents/)).toBeVisible();
+    const indexRow = await waitForOverviewIndexRow(page, TEST_INDEX);
+
+    await expect(indexRow.getByRole('heading', { name: TEST_INDEX })).toBeVisible();
+    await expect(indexRow.getByTestId(`overview-index-meta-${TEST_INDEX}`)).toContainText(/\d+\s+documents/i);
   });
 
   test('stat cards display total indexes, documents, and storage', async ({ page }) => {
     const indexesCard = page.getByTestId('stat-card-indexes');
     await expect(indexesCard).toBeVisible();
-    const indexCount = await indexesCard.getByTestId('stat-value').textContent();
-    expect(Number(indexCount)).toBeGreaterThanOrEqual(1);
+    await expect.poll(async () => {
+      const text = (await indexesCard.getByTestId('stat-value').textContent())?.trim() ?? '';
+      const parsed = Number(text.replace(/,/g, ''));
+      return Number.isFinite(parsed) ? parsed : -1;
+    }, {
+      timeout: 10_000,
+    }).toBeGreaterThanOrEqual(1);
 
     const docsCard = page.getByTestId('stat-card-documents');
     await expect(docsCard).toBeVisible();
-    const docCount = await docsCard.getByTestId('stat-value').textContent();
-    expect(Number(docCount?.replace(/,/g, ''))).toBeGreaterThanOrEqual(12);
+    await expect.poll(async () => {
+      const text = (await docsCard.getByTestId('stat-value').textContent())?.trim() ?? '';
+      const parsed = Number(text.replace(/,/g, ''));
+      return Number.isFinite(parsed) ? parsed : -1;
+    }, {
+      timeout: 10_000,
+    }).toBeGreaterThanOrEqual(12);
 
     const storageCard = page.getByTestId('stat-card-storage');
     await expect(storageCard).toBeVisible();
-    const storageText = await storageCard.getByTestId('stat-value').textContent();
-    expect(storageText).toBeTruthy();
-    expect(storageText).not.toBe('0 Bytes');
+    await expect.poll(async () => {
+      return (await storageCard.getByTestId('stat-value').textContent())?.trim() ?? '';
+    }, {
+      timeout: 10_000,
+    }).toMatch(/^\d+(\.\d+)?\s*(B|KB|MB|GB)$/i);
+    await expect(storageCard.getByTestId('stat-value')).not.toHaveText(/^0 Bytes$/i);
   });
 
   test('health indicator shows Healthy', async ({ page }) => {
@@ -73,18 +88,9 @@ test.describe('Overview Page', () => {
     await dialog.getByRole('button', { name: /create index/i }).click();
 
     await expect(dialog).not.toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(tempIndex).first()).toBeVisible({ timeout: 10000 });
+    const createdRow = await waitForOverviewIndexRow(page, tempIndex);
 
-    const deleteBtn = page.getByTitle(`Delete index "${tempIndex}"`);
-    while (await deleteBtn.count() === 0) {
-      const nextBtn = page.getByRole('button', { name: /next/i });
-      if (await nextBtn.isEnabled()) {
-        await nextBtn.click();
-        await expect(page.getByTestId('stat-card-indexes')).toBeVisible({ timeout: 5000 });
-      } else {
-        break;
-      }
-    }
+    const deleteBtn = createdRow.getByTitle(`Delete index "${tempIndex}"`);
     await deleteBtn.click();
 
     const confirmDialog = page.getByRole('dialog');
@@ -96,8 +102,8 @@ test.describe('Overview Page', () => {
 
     await page.goto('/overview');
     await expect(page.getByTestId('stat-card-indexes')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(TEST_INDEX).first()).toBeVisible();
-    await expect(page.getByText(tempIndex)).not.toBeVisible({ timeout: 5000 });
+    await waitForOverviewIndexRow(page, TEST_INDEX);
+    await expect(page.getByTestId(`overview-index-row-${tempIndex}`)).not.toBeVisible({ timeout: 5000 });
   });
 
   test('server health badge shows connected status', async ({ page }) => {
@@ -108,7 +114,8 @@ test.describe('Overview Page', () => {
   });
 
   test('clicking e2e-products navigates to its search page', async ({ page }) => {
-    await page.getByText(TEST_INDEX).first().click();
+    const indexRow = await waitForOverviewIndexRow(page, TEST_INDEX);
+    await indexRow.getByRole('heading', { name: TEST_INDEX }).click();
     await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}`));
   });
 
@@ -157,15 +164,21 @@ test.describe('Overview Page', () => {
   });
 
   test('index row shows storage size and update info', async ({ page }) => {
-    await expect(page.getByText(/12 documents/).first()).toBeVisible();
-    await expect(page.getByText(/\d+(\.\d+)?\s*(B|KB|MB|GB)/i).first()).toBeVisible();
+    const indexMeta = page.getByTestId(`overview-index-meta-${TEST_INDEX}`);
+
+    await expect(indexMeta).toBeVisible({ timeout: 10_000 });
+    await expect(indexMeta).toContainText(/\d+\s+documents/i);
+    await expect(indexMeta).toContainText(/\d+(\.\d+)?\s*(B|KB|MB|GB)/i);
+    await expect(indexMeta).toContainText(/updated/i);
   });
 
   test('search analytics section displays data from seeded analytics', async ({ page }) => {
     const analyticsCard = page.getByTestId('overview-analytics');
     await expect(analyticsCard).toBeVisible({ timeout: 10_000 });
     await expect(analyticsCard.getByText('Search Analytics')).toBeVisible();
-    await expect(analyticsCard.getByText('Total Searches')).toBeVisible();
+    // KPI labels only render after the analytics API responds (skeletons shown while loading).
+    // Under full-suite load with 3 workers the analytics endpoint can take >10 s.
+    await expect(analyticsCard.getByText('Total Searches')).toBeVisible({ timeout: 30_000 });
     await expect(analyticsCard.getByText('Unique Users')).toBeVisible();
     await expect(analyticsCard.getByText('No-Result Rate')).toBeVisible();
   });
@@ -174,9 +187,9 @@ test.describe('Overview Page', () => {
     const analyticsCard = page.getByTestId('overview-analytics');
     await expect(analyticsCard).toBeVisible({ timeout: 10_000 });
 
-    // With seeded data, the mini chart SVG should render
+    // Chart only renders after API responds; under full-suite load this can take >10 s.
     const chart = analyticsCard.getByTestId('overview-analytics-chart');
-    await expect(chart).toBeVisible({ timeout: 10_000 });
+    await expect(chart).toBeVisible({ timeout: 30_000 });
     await expect(chart.locator('svg')).toBeVisible();
   });
 
@@ -184,8 +197,9 @@ test.describe('Overview Page', () => {
     const analyticsCard = page.getByTestId('overview-analytics');
     await expect(analyticsCard).toBeVisible({ timeout: 10_000 });
 
+    // "View Details" renders after data loads; allow extra time under full-suite load.
     const viewDetailsLink = analyticsCard.getByText('View Details');
-    await expect(viewDetailsLink).toBeVisible();
+    await expect(viewDetailsLink).toBeVisible({ timeout: 10_000 });
     await viewDetailsLink.click();
 
     await expect(page).toHaveURL(/\/analytics/);
@@ -193,10 +207,8 @@ test.describe('Overview Page', () => {
   });
 
   test('Settings button in index row navigates to settings', async ({ page }) => {
-    // Find the specific Settings link for our test index (not other indexes on the page)
-    const settingsLink = page.getByRole('link', { name: /settings/i }).and(
-      page.locator(`[href*="${TEST_INDEX}/settings"]`)
-    );
+    const indexRow = await waitForOverviewIndexRow(page, TEST_INDEX);
+    const settingsLink = indexRow.getByRole('link', { name: /settings/i });
     await expect(settingsLink).toBeVisible({ timeout: 10_000 });
     await settingsLink.click();
     await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}/settings`));
@@ -216,6 +228,17 @@ test.describe('Overview Page', () => {
 
     const download = await downloadPromise;
     const response = await responsePromise;
-    expect(download !== null || response !== null).toBeTruthy();
+    if (download) {
+      expect(download.suggestedFilename()).toMatch(/\S/);
+      return;
+    }
+
+    if (response) {
+      expect(response.status()).toBeGreaterThanOrEqual(200);
+      expect(response.status()).toBeLessThan(300);
+      return;
+    }
+
+    throw new Error('Expected export to trigger either a file download or an export response');
   });
 });

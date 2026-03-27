@@ -1,6 +1,11 @@
+/**
+ */
 import type { Cache, CacheEvents, FallbackableCacheOptions } from '../types';
 import { createNullCache } from './createNullCache';
 
+/**
+ * TODO: Document createFallbackableCache.
+ */
 export function createFallbackableCache(options: FallbackableCacheOptions): Cache {
   const caches = [...options.caches];
   const current = caches.shift();

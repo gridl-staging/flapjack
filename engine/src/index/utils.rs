@@ -1,6 +1,20 @@
+//! Filesystem helpers for recursive directory copying with temporary-file filtering.
 use crate::error::Result;
 use std::path::Path;
 
+/// Recursively copy a directory tree from `src` to `dst`, skipping entries whose names start with `.tmp`.
+///
+/// Creates `dst` and any intermediate parent directories if they do not exist.
+/// Files that vanish between directory listing and copy are silently skipped.
+///
+/// # Arguments
+///
+/// * `src` — Source directory to copy from. Must exist.
+/// * `dst` — Destination directory. Created if it does not exist.
+///
+/// # Errors
+///
+/// Returns an error if `src` cannot be read, a file copy fails, or directory creation fails.
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
 

@@ -1,3 +1,4 @@
+//! Utilities for translating between Algolia-style hierarchical facet values and Tantivy facet path representations.
 use crate::error::{FlapjackError, Result};
 use serde_json::{Map, Value};
 
@@ -17,6 +18,17 @@ pub fn tantivy_to_algolia_path(tantivy_path: &str) -> String {
     tantivy_path.trim_start_matches('/').replace('/', " > ")
 }
 
+/// Return the string value associated with the highest-numbered `lvlN` key in a JSON object map.
+///
+/// Iterates all keys matching the pattern `lvl<N>` where `N` is a parseable integer, and returns the string value of the key with the largest `N`.
+///
+/// # Arguments
+///
+/// * `obj` - A JSON object map expected to contain hierarchical level keys (e.g. `lvl0`, `lvl1`, `lvl2`).
+///
+/// # Returns
+///
+/// `Some(value)` for the deepest level found, or `None` if no `lvlN` keys exist or the deepest value is not a string.
 pub fn extract_deepest_level(obj: &Map<String, Value>) -> Option<String> {
     let mut max_level = -1;
     let mut deepest = None;
@@ -35,6 +47,22 @@ pub fn extract_deepest_level(obj: &Map<String, Value>) -> Option<String> {
     deepest
 }
 
+/// Convert a facet value into Tantivy-style path strings based on its JSON type.
+///
+/// For objects with hierarchical levels (e.g. `lvl0`, `lvl1`), each key-value pair produces a path like `/<field>.<key>/<value>`. For plain strings, delegates to `algolia_to_tantivy_path`. For arrays, converts each string element independently.
+///
+/// # Arguments
+///
+/// * `field_name` - The facet field name used as the path prefix.
+/// * `value` - A JSON value that may be an object (hierarchical), string, or array of strings.
+///
+/// # Returns
+///
+/// A vector of Tantivy-style facet path strings.
+///
+/// # Errors
+///
+/// Returns `FlapjackError::InvalidDocument` if `value` is not an object, string, or array.
 pub fn extract_facet_paths(field_name: &str, value: &Value) -> Result<Vec<String>> {
     match value {
         Value::Object(map) => {

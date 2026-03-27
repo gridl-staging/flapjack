@@ -5,6 +5,7 @@ import 'package:flapjack_client_core/src/config/host.dart';
 import 'package:flapjack_client_core/src/transport/requester.dart';
 import 'package:dio/dio.dart';
 
+/// TODO: Document ClientOptions.
 final class ClientOptions {
   /// The list of hosts that the client can connect to.
   final Iterable<Host>? hosts;

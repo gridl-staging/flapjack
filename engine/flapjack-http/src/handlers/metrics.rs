@@ -1,11 +1,7 @@
-//! Prometheus `/metrics` endpoint.
-//!
-//! Exposes system-wide gauges (writers, memory, tenants, facet cache) and
-//! per-tenant storage gauges in Prometheus text exposition format.
-
+//! Metrics endpoint and gauge assembly for `/metrics`.
 use axum::extract::State;
 use axum::http::{header, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use prometheus::{Encoder, GaugeVec, Opts, Registry, TextEncoder};
 use std::sync::Arc;
 
@@ -18,17 +14,29 @@ use super::AppState;
 /// poller (see `server.rs`) and stored in `MetricsState`.
 pub async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let registry = Registry::new();
+    let state = state.as_ref();
 
-    // --- System-wide gauges ---
+    register_system_runtime_gauges(&registry, state);
+    register_replication_gauges(&registry, state);
+    register_live_index_state_gauges(&registry, state);
+
+    // --- Per-index billing usage gauges (daily-reset, from usage_counters) ---
+    register_billing_usage_gauges(&registry, &state.usage_counters);
+
+    encode_registry_response(&registry)
+}
+
+/// TODO: Document register_system_runtime_gauges.
+fn register_system_runtime_gauges(registry: &Registry, state: &AppState) {
     let budget = flapjack::get_global_budget();
     register_gauge(
-        &registry,
+        registry,
         "flapjack_active_writers",
         "Number of active index writers",
         budget.active_writers() as f64,
     );
     register_gauge(
-        &registry,
+        registry,
         "flapjack_max_concurrent_writers",
         "Maximum concurrent writers allowed",
         budget.max_concurrent_writers() as f64,
@@ -37,13 +45,13 @@ pub async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
     let observer = flapjack::MemoryObserver::global();
     let mem_stats = observer.stats();
     register_gauge(
-        &registry,
+        registry,
         "flapjack_memory_heap_bytes",
         "Heap allocated bytes",
         mem_stats.heap_allocated_bytes as f64,
     );
     register_gauge(
-        &registry,
+        registry,
         "flapjack_memory_limit_bytes",
         "System memory limit bytes",
         mem_stats.system_limit_bytes as f64,
@@ -54,220 +62,111 @@ pub async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
         flapjack::PressureLevel::Critical => 2.0,
     };
     register_gauge(
-        &registry,
+        registry,
         "flapjack_memory_pressure_level",
         "Memory pressure level (0=normal, 1=elevated, 2=critical)",
         pressure_level,
     );
 
     register_gauge(
-        &registry,
+        registry,
         "flapjack_facet_cache_entries",
         "Number of entries in the facet cache",
         state.manager.facet_cache.len() as f64,
     );
     register_gauge(
-        &registry,
+        registry,
         "flapjack_tenants_loaded",
         "Number of loaded tenant indexes",
         state.manager.loaded_count() as f64,
     );
+}
 
-    // --- Replication gauges ---
-    match &state.replication_manager {
-        Some(repl_mgr) => {
-            register_gauge(
-                &registry,
-                "flapjack_replication_enabled",
-                "Whether replication is enabled (1=yes, 0=no)",
-                1.0,
-            );
-            let peer_gauge = GaugeVec::new(
-                Opts::new(
-                    "flapjack_peer_status",
-                    "Peer health status (1=healthy, 0=unhealthy)",
-                ),
-                &["peer_id"],
-            )
-            .unwrap();
-            registry.register(Box::new(peer_gauge.clone())).unwrap();
-            for ps in repl_mgr.peer_statuses() {
-                let value = if ps.status == "healthy" { 1.0 } else { 0.0 };
-                peer_gauge.with_label_values(&[&ps.peer_id]).set(value);
-            }
-        }
-        None => {
-            register_gauge(
-                &registry,
-                "flapjack_replication_enabled",
-                "Whether replication is enabled (1=yes, 0=no)",
-                0.0,
-            );
-        }
+/// TODO: Document register_replication_gauges.
+fn register_replication_gauges(registry: &Registry, state: &AppState) {
+    register_gauge(
+        registry,
+        "flapjack_replication_enabled",
+        "Whether replication is enabled (1=yes, 0=no)",
+        bool_as_gauge_value(state.replication_manager.is_some()),
+    );
+
+    let Some(repl_mgr) = &state.replication_manager else {
+        return;
+    };
+
+    let peer_gauge = GaugeVec::new(
+        Opts::new(
+            "flapjack_peer_status",
+            "Peer health status (1=healthy, 0=unhealthy)",
+        ),
+        &["peer_id"],
+    )
+    .unwrap();
+    registry.register(Box::new(peer_gauge.clone())).unwrap();
+    for peer_status in repl_mgr.peer_statuses() {
+        peer_gauge
+            .with_label_values(&[&peer_status.peer_id])
+            .set(bool_as_gauge_value(peer_status.status == "healthy"));
     }
+}
 
-    // --- Per-tenant storage gauges (computed inline from loaded tenants) ---
-    {
-        let storage_gauge = GaugeVec::new(
-            Opts::new("flapjack_storage_bytes", "Per-tenant disk storage in bytes"),
-            &["index"],
-        )
-        .unwrap();
-        registry.register(Box::new(storage_gauge.clone())).unwrap();
-        for (tid, bytes) in state.manager.all_tenant_storage() {
-            storage_gauge.with_label_values(&[&tid]).set(bytes as f64);
-        }
-    }
+fn register_live_index_state_gauges(registry: &Registry, state: &AppState) {
+    register_storage_bytes_gauge(registry, state);
+    register_documents_count_gauge(registry, state);
+    register_oplog_sequence_gauge(registry, state);
+}
 
-    // --- Per-index usage counters (from request counting middleware + handlers) ---
-    {
-        let search_gauge = GaugeVec::new(
-            Opts::new(
-                "flapjack_search_requests_total",
-                "Total search requests per index",
-            ),
-            &["index"],
-        )
-        .unwrap();
-        let write_gauge = GaugeVec::new(
-            Opts::new(
-                "flapjack_write_operations_total",
-                "Total write operations per index",
-            ),
-            &["index"],
-        )
-        .unwrap();
-        let read_gauge = GaugeVec::new(
-            Opts::new(
-                "flapjack_read_requests_total",
-                "Total read requests per index",
-            ),
-            &["index"],
-        )
-        .unwrap();
-        let bytes_in_gauge = GaugeVec::new(
-            Opts::new("flapjack_bytes_in_total", "Total bytes ingested per index"),
-            &["index"],
-        )
-        .unwrap();
-        let search_results_gauge = GaugeVec::new(
-            Opts::new(
-                "flapjack_search_results_total",
-                "Total search results returned per index",
-            ),
-            &["index"],
-        )
-        .unwrap();
-        let docs_indexed_gauge = GaugeVec::new(
-            Opts::new(
-                "flapjack_documents_indexed_total",
-                "Total documents indexed per index",
-            ),
-            &["index"],
-        )
-        .unwrap();
-        let docs_deleted_gauge = GaugeVec::new(
-            Opts::new(
-                "flapjack_documents_deleted_total",
-                "Total documents deleted per index",
-            ),
-            &["index"],
-        )
-        .unwrap();
-        registry.register(Box::new(search_gauge.clone())).unwrap();
-        registry.register(Box::new(write_gauge.clone())).unwrap();
-        registry.register(Box::new(read_gauge.clone())).unwrap();
-        registry.register(Box::new(bytes_in_gauge.clone())).unwrap();
-        registry
-            .register(Box::new(search_results_gauge.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(docs_indexed_gauge.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(docs_deleted_gauge.clone()))
-            .unwrap();
+/// TODO: Document register_storage_bytes_gauge.
+fn register_storage_bytes_gauge(registry: &Registry, state: &AppState) {
+    let values = collect_storage_gauge_values(state);
+    register_index_labeled_gauge_values(
+        registry,
+        "flapjack_storage_bytes",
+        "Per-tenant disk storage in bytes",
+        values,
+    );
+}
 
-        for entry in state.usage_counters.iter() {
-            let idx = entry.key();
-            let counters = entry.value();
-            search_gauge.with_label_values(&[idx]).set(
-                counters
-                    .search_count
-                    .load(std::sync::atomic::Ordering::Relaxed) as f64,
-            );
-            write_gauge.with_label_values(&[idx]).set(
-                counters
-                    .write_count
-                    .load(std::sync::atomic::Ordering::Relaxed) as f64,
-            );
-            read_gauge.with_label_values(&[idx]).set(
-                counters
-                    .read_count
-                    .load(std::sync::atomic::Ordering::Relaxed) as f64,
-            );
-            bytes_in_gauge
-                .with_label_values(&[idx])
-                .set(counters.bytes_in.load(std::sync::atomic::Ordering::Relaxed) as f64);
-            search_results_gauge.with_label_values(&[idx]).set(
-                counters
-                    .search_results_total
-                    .load(std::sync::atomic::Ordering::Relaxed) as f64,
-            );
-            docs_indexed_gauge.with_label_values(&[idx]).set(
-                counters
-                    .documents_indexed_total
-                    .load(std::sync::atomic::Ordering::Relaxed) as f64,
-            );
-            docs_deleted_gauge.with_label_values(&[idx]).set(
-                counters
-                    .documents_deleted_total
-                    .load(std::sync::atomic::Ordering::Relaxed) as f64,
-            );
-        }
-    }
+/// TODO: Document register_documents_count_gauge.
+fn register_documents_count_gauge(registry: &Registry, state: &AppState) {
+    let values = state
+        .manager
+        .loaded_tenant_ids()
+        .into_iter()
+        .filter_map(|tenant_id| {
+            state
+                .manager
+                .tenant_doc_count(&tenant_id)
+                .map(|document_count| (tenant_id, document_count as f64))
+        });
+    register_index_labeled_gauge_values(
+        registry,
+        "flapjack_documents_count",
+        "Number of documents per tenant index",
+        values,
+    );
+}
 
-    // --- Per-tenant document count gauges (live from IndexManager) ---
-    {
-        let doc_count_gauge = GaugeVec::new(
-            Opts::new(
-                "flapjack_documents_count",
-                "Number of documents per tenant index",
-            ),
-            &["index"],
-        )
-        .unwrap();
-        registry
-            .register(Box::new(doc_count_gauge.clone()))
-            .unwrap();
-        for tid in state.manager.loaded_tenant_ids() {
-            if let Some(count) = state.manager.tenant_doc_count(&tid) {
-                doc_count_gauge.with_label_values(&[&tid]).set(count as f64);
-            }
-        }
-    }
+fn register_oplog_sequence_gauge(registry: &Registry, state: &AppState) {
+    let values = state
+        .manager
+        .all_tenant_oplog_seqs()
+        .into_iter()
+        .map(|(tenant_id, sequence)| (tenant_id, sequence as f64));
+    register_index_labeled_gauge_values(
+        registry,
+        "flapjack_oplog_current_seq",
+        "Current oplog sequence number per tenant",
+        values,
+    );
+}
 
-    // --- Per-tenant oplog sequence gauges ---
-    {
-        let oplog_seq_gauge = GaugeVec::new(
-            Opts::new(
-                "flapjack_oplog_current_seq",
-                "Current oplog sequence number per tenant",
-            ),
-            &["index"],
-        )
-        .unwrap();
-        registry
-            .register(Box::new(oplog_seq_gauge.clone()))
-            .unwrap();
-        for (tid, seq) in state.manager.all_tenant_oplog_seqs() {
-            oplog_seq_gauge.with_label_values(&[&tid]).set(seq as f64);
-        }
-    }
-
-    // Encode to text
+/// TODO: Document encode_registry_response.
+fn encode_registry_response(registry: &Registry) -> Response {
     let encoder = TextEncoder::new();
-    let metric_families = registry.gather();
+    let mut metric_families = registry.gather();
+    metric_families.extend(crate::latency_middleware::gather_latency_metric_families());
     let mut buffer = Vec::new();
     if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
         return (
@@ -292,6 +191,108 @@ fn register_gauge(registry: &Registry, name: &str, help: &str, value: f64) {
     let gauge = prometheus::Gauge::new(name, help).unwrap();
     registry.register(Box::new(gauge.clone())).unwrap();
     gauge.set(value);
+}
+
+fn bool_as_gauge_value(value: bool) -> f64 {
+    if value {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// TODO: Document collect_storage_gauge_values.
+fn collect_storage_gauge_values(state: &AppState) -> Vec<(String, f64)> {
+    state
+        .metrics_state
+        .as_ref()
+        .and_then(|metrics_state| {
+            let values: Vec<_> = metrics_state
+                .storage_gauges
+                .iter()
+                .map(|entry| (entry.key().clone(), *entry.value() as f64))
+                .collect();
+            (!values.is_empty()).then_some(values)
+        })
+        .unwrap_or_else(|| {
+            state
+                .manager
+                .all_tenant_storage()
+                .into_iter()
+                .map(|(tenant_id, bytes)| (tenant_id, bytes as f64))
+                .collect()
+        })
+}
+
+fn register_index_labeled_gauge_values<I>(registry: &Registry, name: &str, help: &str, values: I)
+where
+    I: IntoIterator<Item = (String, f64)>,
+{
+    let gauge = GaugeVec::new(Opts::new(name, help), &["index"]).unwrap();
+    registry.register(Box::new(gauge.clone())).unwrap();
+    for (index, value) in values {
+        gauge.with_label_values(&[index.as_str()]).set(value);
+    }
+}
+
+/// Register the 7 per-index billing usage gauges from daily-reset `usage_counters`.
+///
+/// These series form the fjcloud metering contract: daily-scoped gauges that reset to
+/// zero on `UsagePersistence::rollup()` and may decrease across process restarts.
+/// They must NOT be relabeled as Prometheus counters without first introducing a
+/// separate cumulative persistence source (see stage 3 research contract).
+fn register_billing_usage_gauges(
+    registry: &Registry,
+    usage_counters: &dashmap::DashMap<String, crate::usage_middleware::TenantUsageCounters>,
+) {
+    use std::sync::atomic::Ordering;
+
+    type CounterAccessor = fn(&crate::usage_middleware::TenantUsageCounters) -> u64;
+    let gauge_defs: &[(&str, &str, CounterAccessor)] = &[
+        (
+            "flapjack_search_requests_total",
+            "Total search requests per index",
+            |c| c.search_count.load(Ordering::Relaxed),
+        ),
+        (
+            "flapjack_write_operations_total",
+            "Total write operations per index",
+            |c| c.write_count.load(Ordering::Relaxed),
+        ),
+        (
+            "flapjack_read_requests_total",
+            "Total read requests per index",
+            |c| c.read_count.load(Ordering::Relaxed),
+        ),
+        (
+            "flapjack_bytes_in_total",
+            "Total bytes ingested per index",
+            |c| c.bytes_in.load(Ordering::Relaxed),
+        ),
+        (
+            "flapjack_search_results_total",
+            "Total search results returned per index",
+            |c| c.search_results_total.load(Ordering::Relaxed),
+        ),
+        (
+            "flapjack_documents_indexed_total",
+            "Total documents indexed per index",
+            |c| c.documents_indexed_total.load(Ordering::Relaxed),
+        ),
+        (
+            "flapjack_documents_deleted_total",
+            "Total documents deleted per index",
+            |c| c.documents_deleted_total.load(Ordering::Relaxed),
+        ),
+    ];
+
+    for &(name, help, accessor) in gauge_defs {
+        let values: Vec<(String, f64)> = usage_counters
+            .iter()
+            .map(|entry| (entry.key().clone(), accessor(entry.value()) as f64))
+            .collect();
+        register_index_labeled_gauge_values(registry, name, help, values);
+    }
 }
 
 /// Shared state for metrics updated by background tasks.
@@ -324,32 +325,52 @@ mod tests {
     use axum::http::Request;
     use axum::routing::get;
     use axum::Router;
-    use flapjack::IndexManager;
     use tempfile::TempDir;
     use tower::ServiceExt;
 
-    fn make_test_state(tmp: &TempDir) -> Arc<AppState> {
-        let manager = IndexManager::new(tmp.path());
-        Arc::new(AppState {
-            manager,
-            key_store: None,
-            replication_manager: None,
-            ssl_manager: None,
-            analytics_engine: None,
-            experiment_store: None,
-            metrics_state: Some(MetricsState::new()),
-            usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-            paused_indexes: crate::pause_registry::PausedIndexes::new(),
-            start_time: std::time::Instant::now(),
-            #[cfg(feature = "vector-search")]
-            embedder_store: std::sync::Arc::new(crate::embedder_store::EmbedderStore::new()),
-        })
+    /// Parse a labeled metric value from Prometheus text output.
+    fn find_metric_value(text: &str, metric_name: &str, label_value: &str) -> f64 {
+        text.lines()
+            .find(|l| l.contains(metric_name) && l.contains(label_value) && !l.starts_with('#'))
+            .unwrap_or_else(|| {
+                panic!(
+                    "metric {}{{..={}}} not found in:\n{}",
+                    metric_name, label_value, text
+                )
+            })
+            .split_whitespace()
+            .last()
+            .unwrap()
+            .parse()
+            .unwrap()
     }
 
+    /// Send a GET /metrics request and return the response body text.
+    async fn fetch_metrics_text(state: std::sync::Arc<crate::handlers::AppState>) -> String {
+        let app = Router::new()
+            .route("/metrics", get(metrics_handler))
+            .with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    /// Verify the `/metrics` endpoint returns HTTP 200 with `text/plain` content type and all expected system-wide gauge names present in the body.
     #[tokio::test]
     async fn metrics_returns_200_with_prometheus_format() {
         let tmp = TempDir::new().unwrap();
-        let state = make_test_state(&tmp);
+        let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
 
         let app = Router::new()
             .route("/metrics", get(metrics_handler))
@@ -419,33 +440,17 @@ mod tests {
         );
     }
 
+    /// TODO: Document metrics_reflects_actual_tenant_count.
     #[tokio::test]
     async fn metrics_reflects_actual_tenant_count() {
         let tmp = TempDir::new().unwrap();
-        let state = make_test_state(&tmp);
+        let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
 
         // Create two tenants
         state.manager.create_tenant("idx1").unwrap();
         state.manager.create_tenant("idx2").unwrap();
 
-        let app = Router::new()
-            .route("/metrics", get(metrics_handler))
-            .with_state(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/metrics")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let text = String::from_utf8(body.to_vec()).unwrap();
+        let text = fetch_metrics_text(state).await;
 
         // Find the flapjack_tenants_loaded line and verify value is 2
         let line = text
@@ -459,40 +464,21 @@ mod tests {
         );
     }
 
+    /// TODO: Document metrics_shows_storage_gauges_after_poller_update.
     #[tokio::test]
     async fn metrics_shows_storage_gauges_after_poller_update() {
         let tmp = TempDir::new().unwrap();
-        let state = make_test_state(&tmp);
+        let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
 
         // Create a tenant so it has some storage
         state.manager.create_tenant("store1").unwrap();
 
-        // Simulate the background poller: call all_tenant_storage() and populate MetricsState
+        // Simulate the background poller by publishing a known storage snapshot.
         let ms = state.metrics_state.as_ref().unwrap();
-        let storage = state.manager.all_tenant_storage();
         ms.storage_gauges.clear();
-        for (tid, bytes) in storage {
-            ms.storage_gauges.insert(tid, bytes);
-        }
+        ms.storage_gauges.insert("store1".to_string(), 1234);
 
-        let app = Router::new()
-            .route("/metrics", get(metrics_handler))
-            .with_state(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/metrics")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let text = String::from_utf8(body.to_vec()).unwrap();
+        let text = fetch_metrics_text(state).await;
 
         // The storage gauge should appear with the tenant label
         assert!(
@@ -504,23 +490,20 @@ mod tests {
             "should contain tenant label 'store1'"
         );
 
-        // Verify the value is non-zero (tantivy creates meta files)
+        // Verify /metrics reads the poller-owned storage snapshot.
         let line = text
             .lines()
             .find(|l| l.contains("store1") && l.contains("flapjack_storage_bytes"))
             .unwrap();
         let value: f64 = line.split_whitespace().last().unwrap().parse().unwrap();
-        assert!(
-            value > 0.0,
-            "storage bytes for store1 should be > 0, got: {}",
-            value
-        );
+        assert_eq!(value, 1234.0, "storage bytes should come from MetricsState");
     }
 
+    /// TODO: Document metrics_includes_per_index_usage_counters.
     #[tokio::test]
     async fn metrics_includes_per_index_usage_counters() {
         let tmp = TempDir::new().unwrap();
-        let state = make_test_state(&tmp);
+        let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
 
         // Simulate some usage counter data
         {
@@ -551,75 +534,44 @@ mod tests {
                 .insert("test_index".to_string(), counters);
         }
 
-        let app = Router::new()
-            .route("/metrics", get(metrics_handler))
-            .with_state(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/metrics")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let text = String::from_utf8(body.to_vec()).unwrap();
+        let text = fetch_metrics_text(state).await;
 
         // Verify all 7 per-index counter gauges appear with correct values
-        let find_value = |metric_name: &str, index: &str| -> f64 {
-            text.lines()
-                .find(|l| l.contains(metric_name) && l.contains(index) && !l.starts_with('#'))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "metric {}{{index={}}} not found in:\n{}",
-                        metric_name, index, text
-                    )
-                })
-                .split_whitespace()
-                .last()
-                .unwrap()
-                .parse()
-                .unwrap()
-        };
-
         assert_eq!(
-            find_value("flapjack_search_requests_total", "test_index"),
+            find_metric_value(&text, "flapjack_search_requests_total", "test_index"),
             5.0
         );
         assert_eq!(
-            find_value("flapjack_write_operations_total", "test_index"),
+            find_metric_value(&text, "flapjack_write_operations_total", "test_index"),
             3.0
         );
         assert_eq!(
-            find_value("flapjack_read_requests_total", "test_index"),
+            find_metric_value(&text, "flapjack_read_requests_total", "test_index"),
             2.0
         );
-        assert_eq!(find_value("flapjack_bytes_in_total", "test_index"), 1024.0);
         assert_eq!(
-            find_value("flapjack_search_results_total", "test_index"),
+            find_metric_value(&text, "flapjack_bytes_in_total", "test_index"),
+            1024.0
+        );
+        assert_eq!(
+            find_metric_value(&text, "flapjack_search_results_total", "test_index"),
             42.0
         );
         assert_eq!(
-            find_value("flapjack_documents_indexed_total", "test_index"),
+            find_metric_value(&text, "flapjack_documents_indexed_total", "test_index"),
             10.0
         );
         assert_eq!(
-            find_value("flapjack_documents_deleted_total", "test_index"),
+            find_metric_value(&text, "flapjack_documents_deleted_total", "test_index"),
             1.0
         );
     }
 
+    /// TODO: Document metrics_counter_values_match_known_operations.
     #[tokio::test]
     async fn metrics_counter_values_match_known_operations() {
         let tmp = TempDir::new().unwrap();
-        let state = make_test_state(&tmp);
+        let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
 
         // Simulate two indexes with different counter values
         {
@@ -638,54 +590,45 @@ mod tests {
             state.usage_counters.insert("idx_b".to_string(), c2);
         }
 
-        let app = Router::new()
-            .route("/metrics", get(metrics_handler))
-            .with_state(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/metrics")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let text = String::from_utf8(body.to_vec()).unwrap();
+        let text = fetch_metrics_text(state).await;
 
         // idx_a counters
         assert!(text.contains("idx_a"), "should contain idx_a label");
         assert!(text.contains("idx_b"), "should contain idx_b label");
 
         // Verify specific values per index
-        let find = |metric: &str, idx: &str| -> f64 {
-            text.lines()
-                .find(|l| l.contains(metric) && l.contains(idx) && !l.starts_with('#'))
-                .unwrap_or_else(|| panic!("{} for {} not found", metric, idx))
-                .split_whitespace()
-                .last()
-                .unwrap()
-                .parse()
-                .unwrap()
-        };
-
-        assert_eq!(find("flapjack_search_requests_total", "idx_a"), 10.0);
-        assert_eq!(find("flapjack_documents_indexed_total", "idx_a"), 100.0);
-        assert_eq!(find("flapjack_write_operations_total", "idx_b"), 7.0);
-        assert_eq!(find("flapjack_documents_deleted_total", "idx_b"), 3.0);
+        assert_eq!(
+            find_metric_value(&text, "flapjack_search_requests_total", "idx_a"),
+            10.0
+        );
+        assert_eq!(
+            find_metric_value(&text, "flapjack_documents_indexed_total", "idx_a"),
+            100.0
+        );
+        assert_eq!(
+            find_metric_value(&text, "flapjack_write_operations_total", "idx_b"),
+            7.0
+        );
+        assert_eq!(
+            find_metric_value(&text, "flapjack_documents_deleted_total", "idx_b"),
+            3.0
+        );
         // idx_a should have 0 writes, idx_b should have 0 searches
-        assert_eq!(find("flapjack_write_operations_total", "idx_a"), 0.0);
-        assert_eq!(find("flapjack_search_requests_total", "idx_b"), 0.0);
+        assert_eq!(
+            find_metric_value(&text, "flapjack_write_operations_total", "idx_a"),
+            0.0
+        );
+        assert_eq!(
+            find_metric_value(&text, "flapjack_search_requests_total", "idx_b"),
+            0.0
+        );
     }
 
+    /// TODO: Document metrics_includes_documents_count_gauge.
     #[tokio::test]
     async fn metrics_includes_documents_count_gauge() {
         let tmp = TempDir::new().unwrap();
-        let state = make_test_state(&tmp);
+        let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
 
         state.manager.create_tenant("docs_idx").unwrap();
         let docs = vec![
@@ -710,24 +653,7 @@ mod tests {
             .await
             .unwrap();
 
-        let app = Router::new()
-            .route("/metrics", get(metrics_handler))
-            .with_state(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/metrics")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let text = String::from_utf8(body.to_vec()).unwrap();
+        let text = fetch_metrics_text(state).await;
 
         let line = text
             .lines()
@@ -746,10 +672,11 @@ mod tests {
         assert_eq!(value, 2.0, "should have 2 docs in the gauge");
     }
 
+    /// TODO: Document metrics_includes_oplog_current_seq_gauge.
     #[tokio::test]
     async fn metrics_includes_oplog_current_seq_gauge() {
         let tmp = TempDir::new().unwrap();
-        let state = make_test_state(&tmp);
+        let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
 
         state.manager.create_tenant("oplog_idx").unwrap();
         let docs = vec![flapjack::types::Document {
@@ -765,24 +692,7 @@ mod tests {
             .await
             .unwrap();
 
-        let app = Router::new()
-            .route("/metrics", get(metrics_handler))
-            .with_state(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/metrics")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let text = String::from_utf8(body.to_vec()).unwrap();
+        let text = fetch_metrics_text(state).await;
 
         let line = text
             .lines()
@@ -805,3 +715,15 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "metrics_billing_contract_tests.rs"]
+mod metrics_billing_contract_tests;
+
+#[cfg(test)]
+#[path = "metrics_live_index_state_tests.rs"]
+mod metrics_live_index_state_tests;
+
+#[cfg(test)]
+#[path = "metrics_latency_tests.rs"]
+mod metrics_latency_tests;

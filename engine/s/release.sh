@@ -3,20 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/ui.sh"
+source "$SCRIPT_DIR/lib/version.sh"
 
-GH_REPO="gridlhq/flapjack"
+GH_REPO="gridl-hq/flapjack"
 
-# Get latest version from git tags, or default to 0.0.0
-LATEST_TAG=$(gh release view --repo "$GH_REPO" --json tagName -q .tagName 2>/dev/null | sed 's/^v//' || echo "0.0.0")
-LATEST_VERSION="${LATEST_TAG%-*}"  # Strip any existing pre-release suffix
-
-# Parse version components
-IFS='.' read -r major minor patch <<< "$LATEST_VERSION"
-
-# Auto-increment patch version with -beta suffix
-NEW_PATCH=$((patch + 1))
-AUTO_VERSION="${major}.${minor}.${NEW_PATCH}-beta"
-
+LATEST_TAG=$(latest_release_version "$GH_REPO")
+AUTO_VERSION=$(auto_bump_version "$GH_REPO" "beta" "$LATEST_TAG")
 VERSION="${1:-$AUTO_VERSION}"
 
 banner "Trigger Release" "v${VERSION}"

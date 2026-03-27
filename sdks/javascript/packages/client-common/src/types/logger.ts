@@ -1,3 +1,5 @@
+/**
+ */
 export const LogLevelEnum: Readonly<Record<string, LogLevelType>> = {
   Debug: 1,
   Info: 2,
@@ -6,6 +8,9 @@ export const LogLevelEnum: Readonly<Record<string, LogLevelType>> = {
 
 export type LogLevelType = 1 | 2 | 3;
 
+/**
+ * TODO: Document Logger.
+ */
 export type Logger = {
   /**
    * Logs debug messages.

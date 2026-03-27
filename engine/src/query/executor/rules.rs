@@ -1,15 +1,19 @@
 use super::QueryExecutor;
 use crate::error::Result;
 use crate::index::rules::RuleEffects;
-use crate::types::ScoredDocument;
+use crate::types::{Filter, ScoredDocument};
+use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, TermQuery};
+use tantivy::schema::IndexRecordOption;
 use tantivy::Searcher;
 
 impl QueryExecutor {
+    /// TODO: Document QueryExecutor.apply_rules_to_results.
     pub(crate) fn apply_rules_to_results(
         &self,
         searcher: &Searcher,
         mut documents: Vec<ScoredDocument>,
         effects: &RuleEffects,
+        active_filter: Option<&Filter>,
     ) -> Result<Vec<ScoredDocument>> {
         if !effects.hidden.is_empty() {
             documents.retain(|doc| !effects.hidden.contains(&doc.document.id));
@@ -18,6 +22,17 @@ impl QueryExecutor {
         if effects.pins.is_empty() {
             return Ok(documents);
         }
+
+        let compiled_filter_query = if effects.filter_promotes == Some(true) {
+            active_filter
+                .map(|filter| {
+                    self.filter_compiler
+                        .compile(filter, self.settings.as_deref())
+                })
+                .transpose()?
+        } else {
+            None
+        };
 
         let schema = searcher.schema();
         let id_field = schema
@@ -37,10 +52,21 @@ impl QueryExecutor {
                 pinned_docs.push((documents.remove(pos), *target_pos));
             } else {
                 let term = tantivy::Term::from_field_text(id_field, pin_id);
-                let term_query =
-                    tantivy::query::TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
-                let top_docs =
-                    searcher.search(&term_query, &tantivy::collector::TopDocs::with_limit(1))?;
+                let id_query: Box<dyn TantivyQuery> =
+                    Box::new(TermQuery::new(term, IndexRecordOption::Basic));
+                let lookup_query: Box<dyn TantivyQuery> =
+                    if let Some(filter_query) = compiled_filter_query.as_ref() {
+                        Box::new(BooleanQuery::new(vec![
+                            (Occur::Must, id_query),
+                            (Occur::Must, filter_query.box_clone()),
+                        ]))
+                    } else {
+                        id_query
+                    };
+                let top_docs = searcher.search(
+                    lookup_query.as_ref(),
+                    &tantivy::collector::TopDocs::with_limit(1),
+                )?;
 
                 if !top_docs.is_empty() {
                     let doc_address = top_docs[0].1;

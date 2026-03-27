@@ -13,7 +13,7 @@ mod tokenizer_unit {
     use tantivy::tokenizer::{TokenStream, Tokenizer};
 
     fn tokenize(text: &str) -> Vec<String> {
-        let mut tok = CjkAwareTokenizer;
+        let mut tok = CjkAwareTokenizer::new();
         let mut stream = tok.token_stream(text);
         let mut tokens = Vec::new();
         while stream.advance() {
@@ -31,13 +31,13 @@ mod tokenizer_unit {
             tokens
         );
         assert!(
-            tokens.contains(&"sGaming".to_string()),
-            "should have 'sGaming': {:?}",
+            tokens.contains(&"sgaming".to_string()),
+            "should have 'sgaming': {:?}",
             tokens
         );
         assert!(
-            tokens.contains(&"Laptop".to_string()),
-            "should have 'Laptop': {:?}",
+            tokens.contains(&"laptop".to_string()),
+            "should have 'laptop': {:?}",
             tokens
         );
         let concat: Vec<_> = tokens

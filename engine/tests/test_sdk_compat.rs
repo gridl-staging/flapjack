@@ -1,6 +1,12 @@
+use axum::{
+    body::Body,
+    http::{Method, Request, StatusCode},
+};
 use serde_json::json;
+use tower::ServiceExt;
 
 mod common;
+use common::build_test_app_for_local_requests;
 use common::spawn_server;
 use common::{wait_for_response_task, wait_for_task};
 
@@ -29,6 +35,73 @@ async fn seed_index(base: &str, index: &str, records: Vec<serde_json::Value>) {
         .await
         .unwrap();
     wait_for_response_task(&client, addr, resp).await;
+}
+
+async fn local_json_request(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    body: Option<serde_json::Value>,
+) -> axum::http::Response<Body> {
+    let mut headers = vec![
+        ("x-algolia-application-id", "test-app"),
+        ("x-algolia-api-key", "test-key"),
+    ];
+
+    let req_body = if let Some(value) = body {
+        headers.push(("content-type", "application/json"));
+        Body::from(value.to_string())
+    } else {
+        Body::empty()
+    };
+
+    local_request(app, method, uri, &headers, req_body).await
+}
+
+async fn local_request(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    headers: &[(&str, &str)],
+    body: Body,
+) -> axum::http::Response<Body> {
+    let mut builder = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+
+    app.clone()
+        .oneshot(builder.body(body).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn local_response_json(resp: axum::http::Response<Body>) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn wait_for_local_task_published(app: &axum::Router, task_id: i64) {
+    for _ in 0..5000 {
+        let resp =
+            local_json_request(app, Method::GET, &format!("/1/tasks/{}", task_id), None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = local_response_json(resp).await;
+
+        if body == json!({"status": "published", "pendingTask": false}) {
+            return;
+        }
+        if body == json!({"status": "notPublished", "pendingTask": true}) {
+            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+            continue;
+        }
+
+        panic!("unexpected task payload shape while waiting: {}", body);
+    }
+
+    panic!("Task {} did not complete within timeout", task_id);
 }
 
 #[tokio::test]
@@ -237,9 +310,9 @@ async fn test_partial_update_creates_when_missing() {
     assert_eq!(obj["name"], "New Widget");
 }
 
-/// POST /1/indexes/{indexName}/{objectID}/partial?createIfNotExists=false — no-op when missing
+/// POST /1/indexes/{indexName}/{objectID}/partial?createIfNotExists=false — 404 when missing
 #[tokio::test]
-async fn test_partial_update_noop_when_missing() {
+async fn test_partial_update_missing_with_no_create_returns_404() {
     let (addr, _dir) = spawn_server().await;
     let client = reqwest::Client::new();
     let base = format!("http://{}", addr);
@@ -257,25 +330,10 @@ async fn test_partial_update_noop_when_missing() {
         .await
         .unwrap();
 
-    // Algolia returns 200 even for no-op
-    assert!(res.status().is_success());
-
-    wait_for_response_task(&client, &addr, res).await;
-
-    // Verify it was NOT created
-    let res = client
-        .get(format!("{}/1/indexes/products/ghost", base))
-        .header("x-algolia-application-id", "test-app")
-        .header("x-algolia-api-key", "test-key")
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(
-        res.status(),
-        404,
-        "object should not exist when createIfNotExists=false"
-    );
+    assert_eq!(res.status(), 404);
+    let err: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(err["status"], 404);
+    assert_eq!(err["message"], "ObjectID does not exist");
 }
 
 /// Batch addObject without objectID should auto-generate a UUID
@@ -301,6 +359,11 @@ async fn test_batch_add_object_auto_id() {
 
     assert!(res.status().is_success());
     let body: serde_json::Value = res.json().await.unwrap();
+    let task_id = body["taskID"]
+        .as_i64()
+        .or_else(|| body["taskID"].as_u64().map(|v| v as i64))
+        .expect("batch response should include taskID");
+    wait_for_task(&client, &addr, task_id).await;
 
     let ids = body["objectIDs"].as_array().unwrap();
     assert_eq!(ids.len(), 1);
@@ -405,6 +468,135 @@ async fn test_settings_roundtrip() {
     assert!(
         settings.get("attributesForFaceting").is_some(),
         "attributesForFaceting missing"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// searchableAttributes unordered() round-trip
+// ──────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_searchable_attributes_unordered_roundtrip() {
+    let (addr, _dir) = spawn_server().await;
+    let client = algolia_client();
+    let base = format!("http://{}", addr);
+
+    seed_index(
+        &base,
+        "products",
+        vec![json!({"objectID": "1", "name": "A"})],
+    )
+    .await;
+
+    // PUT settings with unordered() modifier
+    let res = h(client.put(format!("{}/1/indexes/products/settings", base)))
+        .json(&json!({
+            "searchableAttributes": ["unordered(title)", "description"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "PUT settings: {}", res.status());
+
+    // GET settings — verify unordered() wrapper preserved
+    let res = h(client.get(format!("{}/1/indexes/products/settings", base)))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "GET settings: {}", res.status());
+    let settings: serde_json::Value = res.json().await.unwrap();
+    let sa = settings["searchableAttributes"]
+        .as_array()
+        .expect("searchableAttributes should be array");
+    assert_eq!(sa[0], "unordered(title)");
+    assert_eq!(sa[1], "description");
+}
+
+// ──────────────────────────────────────────────────────────────────
+// numericAttributesForFiltering legacy alias through HTTP handler
+// ──────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_numeric_attributes_legacy_alias_http_roundtrip() {
+    let (addr, _dir) = spawn_server().await;
+    let client = algolia_client();
+    let base = format!("http://{}", addr);
+
+    seed_index(
+        &base,
+        "products",
+        vec![json!({"objectID": "1", "name": "A"})],
+    )
+    .await;
+
+    // PUT using the LEGACY name (numericAttributesToIndex) — must not be reported as unsupported
+    let res = h(client.put(format!("{}/1/indexes/products/settings", base)))
+        .json(&json!({
+            "numericAttributesToIndex": ["price", "quantity"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "PUT settings: {}", res.status());
+    let body: serde_json::Value = res.json().await.unwrap();
+    // Must NOT have unsupportedParams — the alias should be recognized
+    assert!(
+        body.get("unsupportedParams").is_none(),
+        "numericAttributesToIndex should be accepted via alias, not reported as unsupported: {:?}",
+        body
+    );
+
+    // GET settings — verify it comes back under the CANONICAL name
+    let res = h(client.get(format!("{}/1/indexes/products/settings", base)))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "GET settings: {}", res.status());
+    let settings: serde_json::Value = res.json().await.unwrap();
+    let naf = settings["numericAttributesForFiltering"]
+        .as_array()
+        .expect("numericAttributesForFiltering should be present");
+    assert_eq!(naf, &vec![json!("price"), json!("quantity")]);
+}
+
+// ──────────────────────────────────────────────────────────────────
+// allowCompressionOfIntegerArray round-trip (no-op compat field)
+// ──────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_allow_compression_of_integer_array_roundtrip() {
+    let (addr, _dir) = spawn_server().await;
+    let client = algolia_client();
+    let base = format!("http://{}", addr);
+
+    seed_index(
+        &base,
+        "products",
+        vec![json!({"objectID": "1", "name": "A"})],
+    )
+    .await;
+
+    // PUT settings with allowCompressionOfIntegerArray
+    let res = h(client.put(format!("{}/1/indexes/products/settings", base)))
+        .json(&json!({
+            "allowCompressionOfIntegerArray": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "PUT settings: {}", res.status());
+
+    // GET settings — verify the value comes back
+    let res = h(client.get(format!("{}/1/indexes/products/settings", base)))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "GET settings: {}", res.status());
+    let settings: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(
+        settings["allowCompressionOfIntegerArray"],
+        json!(true),
+        "allowCompressionOfIntegerArray should round-trip"
     );
 }
 
@@ -1065,6 +1257,45 @@ async fn test_browse_index() {
     assert!(
         !hits2.is_empty(),
         "cursor page should have remaining results"
+    );
+}
+
+#[tokio::test]
+async fn test_browse_response_includes_query_and_params() {
+    let (addr, _dir) = spawn_server().await;
+    let client = algolia_client();
+    let base = format!("http://{}", addr);
+
+    seed_index(
+        &base,
+        "products",
+        vec![
+            json!({"objectID": "1", "name": "Alpha"}),
+            json!({"objectID": "2", "name": "Beta"}),
+            json!({"objectID": "3", "name": "Gamma"}),
+        ],
+    )
+    .await;
+
+    let res = h(client.post(format!("{}/1/indexes/products/browse", base)))
+        .json(&json!({"query": "Alpha", "hitsPerPage": 2}))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "browse: {}", res.status());
+    let body: serde_json::Value = res.json().await.unwrap();
+
+    let query = body["query"]
+        .as_str()
+        .expect("browse response must include string 'query'");
+    assert_eq!(query, "Alpha");
+
+    let params = body["params"]
+        .as_str()
+        .expect("browse response must include string 'params'");
+    assert!(
+        params.contains("query=Alpha"),
+        "browse params should include encoded query, got: {params}"
     );
 }
 
@@ -3591,4 +3822,466 @@ mod algolia_equivalence {
             }
         }
     }
+}
+
+// ── BUG-3: Error response shape — { "message": "...", "status": N } ─────────
+
+// ── BUG-1/BUG-2: Task status route + Algolia response shape parity ──────────
+
+#[tokio::test]
+async fn test_task_status_routes_return_algolia_shape_after_publish() {
+    let (app, _dir) = build_test_app_for_local_requests(None);
+
+    let resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/products/batch",
+        Some(json!({
+            "requests": [{
+                "action": "addObject",
+                "body": {"objectID": "task-route-1", "name": "Widget"}
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let write_body: serde_json::Value = local_response_json(resp).await;
+    let task_id = write_body["taskID"].as_i64().unwrap();
+
+    wait_for_local_task_published(&app, task_id).await;
+
+    let expected = json!({
+        "status": "published",
+        "pendingTask": false
+    });
+
+    for path in [
+        format!("/1/task/{}", task_id),
+        format!("/1/tasks/{}", task_id),
+        format!("/1/indexes/products/task/{}", task_id),
+    ] {
+        let resp = local_json_request(&app, Method::GET, &path, None).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = local_response_json(resp).await;
+        assert_eq!(body, expected, "task body must exactly match Algolia shape");
+        assert_eq!(body.as_object().unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn test_task_status_pending_returns_not_published_shape() {
+    let (app, _dir) = build_test_app_for_local_requests(None);
+
+    // Create burst writes so at least one task remains pending while prior tasks process.
+    let mut last_task_id = None;
+    for batch in 0..8 {
+        let requests: Vec<serde_json::Value> = (0..150)
+            .map(|i| {
+                json!({
+                    "action": "addObject",
+                    "body": {
+                        "objectID": format!("pending-{}-{}", batch, i),
+                        "title": format!("Pending task payload {} {}", batch, i),
+                    }
+                })
+            })
+            .collect();
+
+        let resp = local_json_request(
+            &app,
+            Method::POST,
+            "/1/indexes/products/batch",
+            Some(json!({ "requests": requests })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = local_response_json(resp).await;
+        last_task_id = body["taskID"].as_i64();
+    }
+
+    let task_id = last_task_id.expect("missing taskID from write response");
+    let mut saw_pending = false;
+    for _ in 0..250 {
+        let resp =
+            local_json_request(&app, Method::GET, &format!("/1/task/{}", task_id), None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = local_response_json(resp).await;
+
+        if body == json!({"status": "notPublished", "pendingTask": true}) {
+            saw_pending = true;
+            break;
+        }
+        if body == json!({"status": "published", "pendingTask": false}) {
+            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+            continue;
+        }
+
+        panic!("unexpected task payload shape: {}", body);
+    }
+
+    assert!(
+        saw_pending,
+        "expected at least one pending task response with notPublished/pendingTask=true"
+    );
+
+    wait_for_local_task_published(&app, task_id).await;
+}
+
+#[tokio::test]
+async fn test_error_response_nonexistent_index_404_json() {
+    let (app, _dir) = build_test_app_for_local_requests(None);
+    let resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/nonexistent_idx/query",
+        Some(json!({"query": "test"})),
+    )
+    .await;
+
+    assert_eq!(resp.status(), 404);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.contains("application/json"),
+        "Content-Type must be application/json, got: {}",
+        ct
+    );
+
+    let body: serde_json::Value = local_response_json(resp).await;
+    assert!(body["message"].is_string(), "must have 'message' field");
+    assert_eq!(body["status"], 404, "status must be 404");
+    assert_eq!(body.as_object().unwrap().len(), 2);
+    // Must NOT have old fields
+    assert!(body.get("error").is_none(), "must not have 'error' field");
+    assert!(
+        body.get("request_id").is_none(),
+        "must not have 'request_id' field"
+    );
+    assert!(
+        body.get("suggestion").is_none(),
+        "must not have 'suggestion' field"
+    );
+    assert!(body.get("docs").is_none(), "must not have 'docs' field");
+}
+
+#[tokio::test]
+async fn test_error_response_auth_403_json() {
+    let (app, _dir) = build_test_app_for_local_requests(Some("test-admin-key"));
+
+    // Request with wrong API key should be forbidden.
+    let resp = local_request(
+        &app,
+        Method::POST,
+        "/1/indexes/test_idx/query",
+        &[
+            ("x-algolia-api-key", "wrong-key"),
+            ("x-algolia-application-id", "test"),
+            ("content-type", "application/json"),
+        ],
+        Body::from(json!({"query": "test"}).to_string()),
+    )
+    .await;
+
+    let status = resp.status().as_u16();
+    assert_eq!(status, 403, "auth error should be 403");
+
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.contains("application/json"),
+        "Content-Type must be application/json, got: {}",
+        ct
+    );
+
+    let body: serde_json::Value = local_response_json(resp).await;
+    assert!(body["message"].is_string(), "must have 'message' field");
+    assert_eq!(
+        body["status"], status,
+        "status field must match HTTP status"
+    );
+    assert_eq!(body.as_object().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn test_error_response_invalid_json_400() {
+    let (app, _dir) = build_test_app_for_local_requests(None);
+    let resp = local_request(
+        &app,
+        Method::POST,
+        "/1/indexes/test_idx/batch",
+        &[
+            ("x-algolia-application-id", "test-app"),
+            ("x-algolia-api-key", "test-key"),
+            ("content-type", "application/json"),
+        ],
+        Body::from("this is not json {{{"),
+    )
+    .await;
+
+    let status = resp.status().as_u16();
+    assert_eq!(status, 400, "invalid JSON should be 400");
+
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.contains("application/json"),
+        "Content-Type must be application/json, got: {}",
+        ct
+    );
+
+    let body: serde_json::Value = local_response_json(resp).await;
+    assert!(body["message"].is_string(), "must have 'message' field");
+    assert_eq!(body["status"], 400, "status must be 400");
+    assert_eq!(body.as_object().unwrap().len(), 2);
+}
+
+// ── BUG-4: GET object 404 must be JSON (not plain text) ────────────────────
+
+#[tokio::test]
+async fn test_get_object_missing_returns_algolia_json_404() {
+    let (app, _dir) = build_test_app_for_local_requests(None);
+
+    let write_resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/products/batch",
+        Some(json!({
+            "requests": [{
+                "action": "addObject",
+                "body": {"objectID": "exists-1", "name": "Seed"}
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(write_resp.status(), StatusCode::OK);
+    let write_body: serde_json::Value = local_response_json(write_resp).await;
+    let task_id = write_body["taskID"].as_i64().unwrap();
+    wait_for_local_task_published(&app, task_id).await;
+
+    let resp = local_json_request(
+        &app,
+        Method::GET,
+        "/1/indexes/products/does-not-exist",
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        content_type.contains("application/json"),
+        "Content-Type must be application/json, got: {}",
+        content_type
+    );
+
+    let body = local_response_json(resp).await;
+    assert_eq!(
+        body,
+        json!({"message": "ObjectID does not exist", "status": 404})
+    );
+    assert_eq!(body.as_object().unwrap().len(), 2);
+}
+
+// ── Stage 5: Chat endpoint contract tests ──────────────────────────────────
+
+#[tokio::test]
+async fn test_chat_404_when_neural_search_not_enabled() {
+    let (app, _dir) = build_test_app_for_local_requests(None);
+
+    // Create a standard index (no NeuralSearch mode)
+    let write_resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/chat_test_plain/batch",
+        Some(json!({
+            "requests": [{
+                "action": "addObject",
+                "body": {"objectID": "doc1", "title": "Hello world"}
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(write_resp.status(), StatusCode::OK);
+    let write_body: serde_json::Value = local_response_json(write_resp).await;
+    let task_id = write_body["taskID"].as_i64().unwrap();
+    wait_for_local_task_published(&app, task_id).await;
+
+    // POST /chat on a non-NeuralSearch index should return 404
+    let resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/chat_test_plain/chat",
+        Some(json!({"query": "hello"})),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "chat should return 404 when NeuralSearch mode is not enabled"
+    );
+    let body = local_response_json(resp).await;
+    assert!(
+        body["message"].as_str().is_some(),
+        "404 response must include a message field"
+    );
+}
+
+#[tokio::test]
+async fn test_chat_returns_valid_response_shape() {
+    let (app, _dir) = build_test_app_for_local_requests(None);
+
+    // Seed documents
+    let write_resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/chat_test_neural/batch",
+        Some(json!({
+            "requests": [
+                {"action": "addObject", "body": {"objectID": "doc1", "title": "Rust programming language", "body": "Rust is a systems programming language."}},
+                {"action": "addObject", "body": {"objectID": "doc2", "title": "Python programming", "body": "Python is great for data science."}},
+                {"action": "addObject", "body": {"objectID": "doc3", "title": "Go language", "body": "Go uses goroutines for concurrency."}}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(write_resp.status(), StatusCode::OK);
+    let write_body: serde_json::Value = local_response_json(write_resp).await;
+    let task_id = write_body["taskID"].as_i64().unwrap();
+    wait_for_local_task_published(&app, task_id).await;
+
+    // Enable NeuralSearch mode on this index
+    let settings_resp = local_json_request(
+        &app,
+        Method::PUT,
+        "/1/indexes/chat_test_neural/settings",
+        Some(json!({"mode": "neuralSearch", "userData": {"aiProvider": {"baseUrl": "stub", "apiKey": "stub"}}})),
+    )
+    .await;
+    assert_eq!(settings_resp.status(), StatusCode::OK);
+    let settings_body: serde_json::Value = local_response_json(settings_resp).await;
+    let task_id = settings_body["taskID"].as_i64().unwrap();
+    wait_for_local_task_published(&app, task_id).await;
+
+    // POST /chat should succeed
+    let resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/chat_test_neural/chat",
+        Some(json!({"query": "Rust programming"})),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "chat should return 200 when NeuralSearch mode is enabled"
+    );
+    let body = local_response_json(resp).await;
+
+    // Verify response shape: answer (string), sources (array), conversationId (string)
+    assert!(
+        body["answer"].is_string(),
+        "response must have 'answer' string field, got: {}",
+        body
+    );
+    assert!(
+        body["sources"].is_array(),
+        "response must have 'sources' array field, got: {}",
+        body
+    );
+    assert!(
+        body["conversationId"].is_string(),
+        "response must have 'conversationId' string field, got: {}",
+        body
+    );
+}
+
+#[tokio::test]
+async fn test_chat_sources_contain_matching_hits() {
+    let (app, _dir) = build_test_app_for_local_requests(None);
+
+    // Seed documents
+    let write_resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/chat_test_hits/batch",
+        Some(json!({
+            "requests": [
+                {"action": "addObject", "body": {"objectID": "rust1", "title": "Rust language", "body": "Rust is fast and memory-safe."}},
+                {"action": "addObject", "body": {"objectID": "python1", "title": "Python scripting", "body": "Python is interpreted."}},
+                {"action": "addObject", "body": {"objectID": "go1", "title": "Go concurrency", "body": "Go uses goroutines."}}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(write_resp.status(), StatusCode::OK);
+    let write_body: serde_json::Value = local_response_json(write_resp).await;
+    let task_id = write_body["taskID"].as_i64().unwrap();
+    wait_for_local_task_published(&app, task_id).await;
+
+    // Enable NeuralSearch mode
+    let settings_resp = local_json_request(
+        &app,
+        Method::PUT,
+        "/1/indexes/chat_test_hits/settings",
+        Some(json!({"mode": "neuralSearch", "userData": {"aiProvider": {"baseUrl": "stub", "apiKey": "stub"}}})),
+    )
+    .await;
+    assert_eq!(settings_resp.status(), StatusCode::OK);
+    let settings_body: serde_json::Value = local_response_json(settings_resp).await;
+    let task_id = settings_body["taskID"].as_i64().unwrap();
+    wait_for_local_task_published(&app, task_id).await;
+
+    // POST /chat searching for "Rust"
+    let resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/chat_test_hits/chat",
+        Some(json!({"query": "Rust"})),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = local_response_json(resp).await;
+
+    let sources = body["sources"].as_array().expect("sources must be array");
+    assert!(
+        !sources.is_empty(),
+        "sources should not be empty for query 'Rust'"
+    );
+
+    // Each source must have an objectID
+    for source in sources {
+        assert!(
+            source["objectID"].is_string(),
+            "each source must have objectID, got: {}",
+            source
+        );
+    }
+
+    // The first source should be the Rust document
+    let first_id = sources[0]["objectID"].as_str().unwrap();
+    assert_eq!(
+        first_id, "rust1",
+        "first source should be the Rust document"
+    );
 }

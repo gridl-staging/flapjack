@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node", "@playwright/test"],
+    "baseUrl": ".",
+    "paths": {}
+  },
+  "include": ["tour/**/*.ts"]
+}

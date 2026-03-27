@@ -17,7 +17,7 @@ jobs:
     steps:
       - id: check
         run: |
-          if [ "${{ github.repository }}" = "gridlhq/flapjack" ] || [ "${{ github.repository }}" = "gridlhq/flapjack_dev" ] || [ "${{ github.repository }}" = "gridlhq-staging/flapjack" ]; then
+          if [ "${{ github.repository }}" = "gridl-hq/flapjack" ] || [ "${{ github.repository }}" = "gridl-dev/flapjack_dev" ] || [ "${{ github.repository }}" = "gridl-staging/flapjack" ]; then
             echo "is-public-repo=true" >> $GITHUB_OUTPUT
           else
             echo "is-public-repo=false" >> $GITHUB_OUTPUT
@@ -65,20 +65,14 @@ jobs:
           -p flapjack -p flapjack-http -p flapjack-server
           --all-targets --features vector-search
           -- -D warnings
-          -A clippy::too_many_arguments
-          -A clippy::type_complexity
-          -A clippy::only_used_in_recursion
-          -A deprecated
+          -W clippy::cognitive_complexity
       - name: Clippy (remaining crates)
         run: >
           cargo clippy
           -p flapjack-ssl -p flapjack-replication
           --all-targets
           -- -D warnings
-          -A clippy::too_many_arguments
-          -A clippy::type_complexity
-          -A clippy::only_used_in_recursion
-          -A deprecated
+          -W clippy::cognitive_complexity
 
   rust-tests-fast:
     name: Rust tests (fast)
@@ -169,6 +163,36 @@ jobs:
           retention-days: 1
 
   # ============================================================================
+  # INTEGRATION SMOKE TEST
+  # ============================================================================
+
+  integration-smoke:
+    name: Integration smoke
+    needs: [check-repo, build-server]
+    if: needs.check-repo.outputs.is-public-repo == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download server binary
+        uses: actions/download-artifact@v4
+        with:
+          name: flapjack-server
+          path: /tmp/flapjack
+      - name: Run integration smoke harness
+        run: |
+          set -o pipefail
+          chmod +x /tmp/flapjack/flapjack
+          SMOKE_LOG="$RUNNER_TEMP/integration-smoke.log"
+          FLAPJACK_BIN=/tmp/flapjack/flapjack bash engine/tests/integration_smoke.sh 2>&1 | tee "$SMOKE_LOG"
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-smoke-log
+          path: ${{ runner.temp }}/integration-smoke.log
+          retention-days: 7
+
+  # ============================================================================
   # DASHBOARD TESTS
   # ============================================================================
 
@@ -225,9 +249,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -265,9 +291,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -305,9 +333,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -356,9 +386,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -390,9 +422,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Install Poetry
         run: pipx install poetry
       - name: Setup Python
@@ -463,9 +497,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -489,9 +525,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
@@ -517,9 +555,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -544,9 +584,11 @@ jobs:
       - name: Start Flapjack server
         run: |
           chmod +x /tmp/flapjack/flapjack
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -592,9 +634,11 @@ jobs:
         if: steps.check-tests.outputs.has-tests == 'true'
         run: |
           chmod +x /tmp/flapjack/flapjack
-          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data &
-          sleep 3
-          curl -sf http://localhost:7700/health || (echo "Server failed to start" && exit 1)
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          /tmp/flapjack/flapjack --no-auth --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup PHP
         if: steps.check-tests.outputs.has-tests == 'true'
         uses: shivammathur/setup-php@v2

@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
 import {
   ArrowRightLeft,
   Loader2,
@@ -16,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import api from '@/lib/api';
+import { useAuth } from '@/hooks/useAuth';
 
 interface MigrationResult {
   status: string;
@@ -33,6 +34,33 @@ interface AlgoliaIndexInfo {
   updatedAt: string;
 }
 
+function buildDashboardAuthHeaders(): Record<string, string> {
+  const { apiKey, appId } = useAuth.getState();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'x-algolia-application-id': appId || 'flapjack',
+  };
+
+  if (apiKey) {
+    headers['x-algolia-api-key'] = apiKey;
+  }
+
+  return headers;
+}
+
+async function postSensitiveMigrationRequest<TResponse>(
+  url: string,
+  body: Record<string, unknown>,
+): Promise<TResponse> {
+  // The shared dashboard client persists request bodies into API Logs.
+  // Send third-party Algolia credentials outside that logger so secrets never
+  // land in sessionStorage or the Search Logs UI.
+  const response = await axios.post<TResponse>(url, body, {
+    headers: buildDashboardAuthHeaders(),
+  });
+  return response.data;
+}
+
 export function Migrate() {
   const queryClient = useQueryClient();
 
@@ -46,14 +74,24 @@ export function Migrate() {
   // Algolia index listing
   const [algoliaIndexes, setAlgoliaIndexes] = useState<AlgoliaIndexInfo[] | null>(null);
   const [indexListError, setIndexListError] = useState<string | null>(null);
+  const trimmedAppId = appId.trim();
+  const trimmedApiKey = apiKey.trim();
+  const trimmedSourceIndex = sourceIndex.trim();
+  const trimmedTargetIndex = targetIndex.trim();
+  const effectiveTarget = trimmedTargetIndex || trimmedSourceIndex;
+
+  const resetIndexListingState = () => {
+    setAlgoliaIndexes(null);
+    setIndexListError(null);
+  };
 
   const fetchIndexes = useMutation({
     mutationFn: async () => {
-      const response = await api.post<{ indexes: AlgoliaIndexInfo[] }>(
+      const data = await postSensitiveMigrationRequest<{ indexes: AlgoliaIndexInfo[] }>(
         '/1/algolia-list-indexes',
-        { appId: appId.trim(), apiKey: apiKey.trim() }
+        { appId: trimmedAppId, apiKey: trimmedApiKey },
       );
-      return response.data.indexes;
+      return data.indexes;
     },
     onSuccess: (indexes) => {
       setAlgoliaIndexes(indexes);
@@ -77,34 +115,29 @@ export function Migrate() {
   const migration = useMutation({
     mutationFn: async () => {
       const body: Record<string, unknown> = {
-        appId: appId.trim(),
-        apiKey: apiKey.trim(),
-        sourceIndex: sourceIndex.trim(),
+        appId: trimmedAppId,
+        apiKey: trimmedApiKey,
+        sourceIndex: trimmedSourceIndex,
       };
-      const target = targetIndex.trim();
-      if (target) body.targetIndex = target;
+      if (trimmedTargetIndex) {
+        body.targetIndex = trimmedTargetIndex;
+      }
       if (overwrite) body.overwrite = true;
 
-      const response = await api.post<MigrationResult>(
+      return postSensitiveMigrationRequest<MigrationResult>(
         '/1/migrate-from-algolia',
         body
       );
-      return response.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['indexes'] });
     },
   });
 
-  const handleMigrate = useCallback(() => {
-    migration.mutate();
-  }, [migration]);
-
-  const canFetchIndexes = appId.trim() && apiKey.trim() && !fetchIndexes.isPending;
+  const hasCredentials = Boolean(trimmedAppId && trimmedApiKey);
+  const canFetchIndexes = hasCredentials && !fetchIndexes.isPending;
   const canSubmit =
-    appId.trim() && apiKey.trim() && sourceIndex.trim() && !migration.isPending;
-
-  const effectiveTarget = targetIndex.trim() || sourceIndex.trim();
+    Boolean(trimmedAppId && trimmedApiKey && trimmedSourceIndex) && !migration.isPending;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -129,8 +162,7 @@ export function Migrate() {
                 value={appId}
                 onChange={(e) => {
                   setAppId(e.target.value);
-                  setAlgoliaIndexes(null);
-                  setIndexListError(null);
+                  resetIndexListingState();
                 }}
                 placeholder="YourAlgoliaAppId"
                 disabled={migration.isPending}
@@ -146,8 +178,7 @@ export function Migrate() {
                   value={apiKey}
                   onChange={(e) => {
                     setApiKey(e.target.value);
-                    setAlgoliaIndexes(null);
-                    setIndexListError(null);
+                    resetIndexListingState();
                   }}
                   placeholder="Your Algolia Admin API key"
                   disabled={migration.isPending}
@@ -157,8 +188,10 @@ export function Migrate() {
                 <button
                   type="button"
                   onClick={() => setShowKey(!showKey)}
+                  aria-label={showKey ? 'Hide API key' : 'Show API key'}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   tabIndex={-1}
+                  data-testid="toggle-api-key-visibility"
                 >
                   {showKey ? (
                     <EyeOff className="h-4 w-4" />
@@ -174,7 +207,7 @@ export function Migrate() {
           </div>
 
           {/* Load Indexes button */}
-          {appId.trim() && apiKey.trim() && (
+          {hasCredentials && (
             <div className="pt-1">
               <Button
                 variant="outline"
@@ -283,7 +316,7 @@ export function Migrate() {
                 id="target-index"
                 value={targetIndex}
                 onChange={(e) => setTargetIndex(e.target.value)}
-                placeholder={sourceIndex.trim() || 'Same as source'}
+                placeholder={trimmedSourceIndex || 'Same as source'}
                 disabled={migration.isPending}
               />
               <p className="text-xs text-muted-foreground">
@@ -314,7 +347,7 @@ export function Migrate() {
       {/* Action */}
       <Button
         size="lg"
-        onClick={handleMigrate}
+        onClick={() => migration.mutate()}
         disabled={!canSubmit}
         className="w-full"
       >
@@ -445,23 +478,31 @@ function ResultStat({
 }
 
 function getErrorMessage(error: unknown): string {
-  if (!error) return 'Unknown error';
-
-  // Axios error with response data
-  if (
-    typeof error === 'object' &&
-    'response' in error &&
-    (error as Record<string, unknown>).response
-  ) {
-    const resp = (error as { response: { data?: { message?: string }; status?: number } })
-      .response;
-    if (resp.data?.message) return resp.data.message;
-    if (resp.status === 409)
-      return 'Target index already exists. Enable "Overwrite if exists" to replace it.';
-    if (resp.status === 502) return 'Could not connect to Algolia. Check your App ID and API Key.';
-    return `Server returned ${resp.status}`;
+  if (!error) {
+    return 'Unknown error';
   }
 
-  if (error instanceof Error) return error.message;
+  if (axios.isAxiosError<{ message?: string }>(error)) {
+    const status = error.response?.status;
+    const message = error.response?.data?.message;
+
+    if (message) {
+      return message;
+    }
+    if (status === 409) {
+      return 'Target index already exists. Enable "Overwrite if exists" to replace it.';
+    }
+    if (status === 502) {
+      return 'Could not connect to Algolia. Check your App ID and API Key.';
+    }
+    if (status) {
+      return `Server returned ${status}`;
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
   return String(error);
 }

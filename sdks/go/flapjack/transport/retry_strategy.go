@@ -54,6 +54,7 @@ func newRetryStrategy(hosts []StatefulHost, readTimeout, writeTimeout time.Durat
 	}
 }
 
+// TODO: Document RetryStrategy.GetTryableHosts.
 func (s *RetryStrategy) GetTryableHosts(k call.Kind) []Host {
 	s.Lock()
 	defer s.Unlock()
@@ -97,6 +98,7 @@ func (s *RetryStrategy) GetTryableHosts(k call.Kind) []Host {
 	return hosts
 }
 
+// TODO: Document RetryStrategy.Decide.
 func (s *RetryStrategy) Decide(h Host, code int, err error) Outcome {
 	s.Lock()
 	defer s.Unlock()

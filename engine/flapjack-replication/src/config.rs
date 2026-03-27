@@ -18,76 +18,101 @@ impl NodeConfig {
     /// Load node configuration from {data_dir}/node.json or return standalone default
     pub fn load_or_default(data_dir: &Path) -> Self {
         let node_json = data_dir.join("node.json");
-
-        if node_json.exists() {
-            match std::fs::read_to_string(&node_json) {
-                Ok(content) => match serde_json::from_str::<NodeConfig>(&content) {
-                    Ok(config) => {
-                        tracing::info!(
-                            "Loaded node config: node_id={}, peers={}",
-                            config.node_id,
-                            config.peers.len()
-                        );
-                        return config;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to parse node.json: {}, using defaults", e);
-                    }
-                },
-                Err(e) => {
-                    tracing::error!("Failed to read node.json: {}, using defaults", e);
-                }
-            }
+        if let Some(config) = Self::load_from_file(&node_json) {
+            return config;
         }
 
-        // Default: standalone mode, but check env vars for Docker/EC2 deployments.
-        let node_id = std::env::var("FLAPJACK_NODE_ID").unwrap_or_else(|_| {
+        let config = Self {
+            node_id: Self::default_node_id(),
+            bind_addr: Self::default_bind_addr(),
+            peers: Self::parse_env_peers(),
+        };
+        Self::log_default_source(&config);
+        config
+    }
+
+    /// TODO: Document NodeConfig.load_from_file.
+    fn load_from_file(node_json: &Path) -> Option<Self> {
+        if !node_json.exists() {
+            return None;
+        }
+
+        let content = match std::fs::read_to_string(node_json) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::error!("Failed to read node.json: {}, using defaults", error);
+                return None;
+            }
+        };
+
+        match serde_json::from_str::<NodeConfig>(&content) {
+            Ok(config) => {
+                tracing::info!(
+                    "Loaded node config: node_id={}, peers={}",
+                    config.node_id,
+                    config.peers.len()
+                );
+                Some(config)
+            }
+            Err(error) => {
+                tracing::error!("Failed to parse node.json: {}, using defaults", error);
+                None
+            }
+        }
+    }
+
+    fn default_node_id() -> String {
+        std::env::var("FLAPJACK_NODE_ID").unwrap_or_else(|_| {
             hostname::get()
                 .ok()
-                .and_then(|h| h.into_string().ok())
+                .and_then(|hostname| hostname.into_string().ok())
                 .unwrap_or_else(|| "unknown".to_string())
-        });
+        })
+    }
 
-        let bind_addr =
-            std::env::var("FLAPJACK_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:7700".to_string());
+    fn default_bind_addr() -> String {
+        std::env::var("FLAPJACK_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:7700".to_string())
+    }
 
-        // Parse FLAPJACK_PEERS env var: comma-separated "node_id=addr" pairs.
-        // Example: "node-b=http://node-b:7700,node-c=http://node-c:7700"
-        let peers = std::env::var("FLAPJACK_PEERS")
+    fn parse_env_peers() -> Vec<PeerConfig> {
+        std::env::var("FLAPJACK_PEERS")
             .unwrap_or_default()
             .split(',')
-            .filter(|s| !s.trim().is_empty())
-            .filter_map(|peer| {
-                let mut parts = peer.splitn(2, '=');
-                let peer_id = parts.next()?.trim().to_string();
-                let addr = parts.next()?.trim().to_string();
-                if peer_id.is_empty() || addr.is_empty() {
-                    return None;
-                }
-                Some(PeerConfig {
-                    node_id: peer_id,
-                    addr,
-                })
-            })
-            .collect::<Vec<_>>();
+            .filter_map(Self::parse_peer_entry)
+            .collect()
+    }
 
-        if peers.is_empty() {
+    /// TODO: Document NodeConfig.parse_peer_entry.
+    fn parse_peer_entry(peer: &str) -> Option<PeerConfig> {
+        if peer.trim().is_empty() {
+            return None;
+        }
+
+        let mut parts = peer.splitn(2, '=');
+        let peer_id = parts.next()?.trim().to_string();
+        let addr = parts.next()?.trim().to_string();
+        if peer_id.is_empty() || addr.is_empty() {
+            return None;
+        }
+
+        Some(PeerConfig {
+            node_id: peer_id,
+            addr,
+        })
+    }
+
+    fn log_default_source(config: &NodeConfig) {
+        if config.peers.is_empty() {
             tracing::info!(
                 "No node.json found, running in standalone mode: node_id={}",
-                node_id
+                config.node_id
             );
         } else {
             tracing::info!(
                 "No node.json found, loaded {} peer(s) from FLAPJACK_PEERS: node_id={}",
-                peers.len(),
-                node_id
+                config.peers.len(),
+                config.node_id
             );
-        }
-
-        NodeConfig {
-            node_id,
-            bind_addr,
-            peers,
         }
     }
 }
@@ -118,6 +143,7 @@ mod tests {
         assert!(!config.node_id.is_empty());
     }
 
+    /// Verify that a well-formed `node.json` file is parsed and its node ID, bind address, and peer list are returned verbatim.
     #[test]
     fn test_load_or_default_valid_file() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -143,6 +169,7 @@ mod tests {
         assert_eq!(config.peers[0].addr, "http://peer1:7700");
     }
 
+    /// Verify that a malformed `node.json` file is gracefully ignored, falling back to standalone defaults with no peers.
     #[test]
     fn test_load_or_default_invalid_json() {
         let _guard = ENV_MUTEX.lock().unwrap();
@@ -162,6 +189,7 @@ mod tests {
         assert_eq!(config.peers.len(), 0);
     }
 
+    /// Verify that `FLAPJACK_NODE_ID` and `FLAPJACK_PEERS` environment variables are used to construct the config when no `node.json` exists, including correct parsing of multiple comma-separated `id=addr` pairs.
     #[test]
     fn test_load_or_default_flapjack_peers_env_var() {
         let _guard = ENV_MUTEX.lock().unwrap();
@@ -186,6 +214,7 @@ mod tests {
         assert_eq!(config.peers[1].addr, "http://node-c:7701");
     }
 
+    /// Verify that a single-entry `FLAPJACK_PEERS` value (no trailing comma) is parsed into exactly one peer with the expected node ID and IP-based address.
     #[test]
     fn test_load_or_default_single_peer_env() {
         let _guard = ENV_MUTEX.lock().unwrap();
@@ -218,6 +247,7 @@ mod tests {
         assert_eq!(config.peers.len(), 0);
     }
 
+    /// Verify that a valid `node.json` file takes precedence over `FLAPJACK_NODE_ID` and `FLAPJACK_PEERS` environment variables set at the same time.
     #[test]
     fn test_node_json_takes_precedence_over_env() {
         let _guard = ENV_MUTEX.lock().unwrap();

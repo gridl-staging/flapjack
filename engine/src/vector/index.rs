@@ -1,3 +1,4 @@
+//! HNSW vector index with persistent storage. Wraps the usearch library to provide string document ID mapping, add/remove/search operations, and disk persistence.
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -69,6 +70,16 @@ pub struct VectorIndex {
 }
 
 impl VectorIndex {
+    /// Create a new HNSW vector index with the specified dimensions and distance metric.
+    ///
+    /// # Arguments
+    ///
+    /// * `dimensions` - Number of dimensions for vectors in this index
+    /// * `metric` - Distance metric (e.g., cosine, L2, etc.)
+    ///
+    /// # Returns
+    ///
+    /// A new empty VectorIndex, or an error if index creation fails.
     pub fn new(dimensions: usize, metric: MetricKind) -> Result<Self, VectorError> {
         let options = IndexOptions {
             dimensions,
@@ -87,6 +98,18 @@ impl VectorIndex {
         })
     }
 
+    /// Add or replace a vector under the given document ID.
+    ///
+    /// If the document already exists, the old vector is removed and re-added under the same internal key. Otherwise, a new ID mapping is created.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc_id` - Unique string identifier for the document
+    /// * `vector` - Vector slice; must match the index's configured dimensions
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) on success, or an error if dimensions mismatch or HNSW operation fails.
     pub fn add(&mut self, doc_id: &str, vector: &[f32]) -> Result<(), VectorError> {
         if vector.len() != self.dimensions {
             return Err(VectorError::DimensionMismatch {
@@ -131,6 +154,18 @@ impl VectorIndex {
         Ok(())
     }
 
+    /// Search for k nearest neighbor vectors to the given query vector.
+    ///
+    /// Returns an empty vector if the index is empty.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query vector; must match the index's configured dimensions
+    /// * `k` - Maximum number of results to return
+    ///
+    /// # Returns
+    ///
+    /// A vector of VectorSearchResult sorted by distance, or an error if dimensions mismatch or search fails.
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<VectorSearchResult>, VectorError> {
         if query.len() != self.dimensions {
             return Err(VectorError::DimensionMismatch {
@@ -157,6 +192,33 @@ impl VectorIndex {
         Ok(results)
     }
 
+    /// Retrieve the vector associated with a document ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc_id` - Unique string identifier for the document
+    ///
+    /// # Returns
+    ///
+    /// Ok(Some(vec)) if the document exists, Ok(None) if not found, or an error if retrieval fails.
+    pub fn get(&self, doc_id: &str) -> Result<Option<Vec<f32>>, VectorError> {
+        let Some(key) = self.id_map.get_key(doc_id) else {
+            return Ok(None);
+        };
+
+        let mut vector = vec![0.0f32; self.dimensions];
+        let matches = self
+            .inner
+            .get(key, &mut vector)
+            .map_err(|e| VectorError::HnswError(e.to_string()))?;
+
+        if matches == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(vector))
+    }
+
     pub fn len(&self) -> usize {
         self.id_map.len()
     }
@@ -173,6 +235,17 @@ impl VectorIndex {
         self.inner.memory_usage()
     }
 
+    /// Persist the index and ID mappings to a directory on disk.
+    ///
+    /// Creates the directory if it does not exist. Writes the HNSW index to `index.usearch` and metadata to `id_map.json`.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Directory path where index files will be written
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) on success, or an error if I/O or serialization fails.
     pub fn save(&self, dir: &Path) -> Result<(), VectorError> {
         std::fs::create_dir_all(dir)?;
 
@@ -195,6 +268,18 @@ impl VectorIndex {
         Ok(())
     }
 
+    /// Load a previously saved vector index from disk.
+    ///
+    /// Reads the HNSW data and ID mappings, handling empty indices gracefully.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Directory path containing `index.usearch` and `id_map.json`
+    /// * `metric` - Distance metric to use (must match the original index for correct results)
+    ///
+    /// # Returns
+    ///
+    /// A loaded VectorIndex, or an error if files are missing or corrupted.
     pub fn load(dir: &Path, metric: MetricKind) -> Result<Self, VectorError> {
         let meta_path = dir.join("id_map.json");
         let meta_json = std::fs::read_to_string(&meta_path)?;
@@ -264,6 +349,7 @@ mod tests {
         assert_eq!(map.len(), 1);
     }
 
+    /// Verify removal of documents via both `remove_by_doc` and `remove_by_key` paths, ensuring bidirectional cleanup.
     #[test]
     fn test_remove() {
         let mut map = IdMap::new();
@@ -343,6 +429,18 @@ mod tests {
     }
 
     #[test]
+    fn test_get_existing_and_missing_vector() {
+        let mut idx = VectorIndex::new(3, cos_metric()).unwrap();
+        idx.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
+
+        let found = idx.get("doc1").unwrap().unwrap();
+        assert_eq!(found, vec![1.0, 0.0, 0.0]);
+
+        assert!(idx.get("missing").unwrap().is_none());
+    }
+
+    /// Verify that adding a vector under an existing doc ID replaces the old vector while reusing its internal key.
+    #[test]
     fn test_add_duplicate_doc_replaces() {
         let mut idx = VectorIndex::new(3, cos_metric()).unwrap();
         let key1 = {
@@ -413,6 +511,7 @@ mod tests {
 
     // ── Persistence tests (2.16) ──
 
+    /// Verify that saved indices load correctly with preserved document count, dimensions, and search results.
     #[test]
     fn test_save_and_load_roundtrip() {
         let tmp = tempfile::TempDir::new().unwrap();

@@ -1,3 +1,5 @@
+"""
+"""
 from os import environ
 from typing import Optional
 
@@ -8,6 +10,7 @@ from flapjacksearch.http.user_agent import UserAgent
 
 
 class AbtestingV3Config(BaseConfig):
+    """TODO: Document AbtestingV3Config."""
     def __init__(
         self,
         app_id: Optional[str],
@@ -50,6 +53,7 @@ class AbtestingV3Config(BaseConfig):
         self.region = region
 
     def set_default_hosts(self):
+        """TODO: Document AbtestingV3Config.set_default_hosts."""
         if self.hosts is not None:
             return
 

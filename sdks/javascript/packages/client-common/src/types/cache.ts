@@ -1,3 +1,8 @@
+/**
+ */
+/**
+ * TODO: Document Cache.
+ */
 export type Cache = {
   /**
    * Gets the value of the given `key`.
@@ -38,6 +43,9 @@ export type MemoryCacheOptions = {
   serializable?: boolean | undefined;
 };
 
+/**
+ * TODO: Document BrowserLocalStorageOptions.
+ */
 export type BrowserLocalStorageOptions = {
   /**
    * The cache key.

@@ -36,7 +36,16 @@ function createFlapjackRequester(opts = {}) {
       const text = await response.text();
 
       if (opts.debug) {
-        console.log('REQUEST:', request.method, url.pathname, JSON.stringify(JSON.parse(request.data || '{}'), null, 2));
+        let debugPayload = request.data || '{}';
+        if (request.data) {
+          try {
+            debugPayload = JSON.stringify(JSON.parse(request.data), null, 2);
+          } catch {
+            // Some requests may carry non-JSON payloads; log raw body without crashing debug mode.
+            debugPayload = request.data;
+          }
+        }
+        console.log('REQUEST:', request.method, url.pathname, debugPayload);
         console.log('RESPONSE:', response.status, text.substring(0, 200));
       }
 

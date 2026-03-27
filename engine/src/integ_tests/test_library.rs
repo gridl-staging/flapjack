@@ -1,8 +1,4 @@
-//! Library integration tests
-//!
-//! Combines:
-//! - test_library_usage.rs: Index-level API, multi-tenant, persistence
-//! - test_phase1_validation.rs: Prefix search, filters, nested fields, nulls
+//! Integration tests covering Index and IndexManager APIs including document ingestion, persistence, tenant isolation, prefix and typo-tolerant search, numeric and compound filters, nested-field flattening, mixed-type tolerance, and null handling.
 
 mod library_usage {
     use crate::index::{schema::Schema, Index};
@@ -12,6 +8,7 @@ mod library_usage {
     use std::collections::HashMap;
     use tempfile::TempDir;
 
+    /// Verify that `add_documents_simple` indexes JSON documents and that the resulting segment readers report the correct document count.
     #[test]
     fn test_simple_api_add_and_verify() {
         let temp_dir = TempDir::new().unwrap();
@@ -44,6 +41,7 @@ mod library_usage {
         assert_eq!(num_docs, 2);
     }
 
+    /// Verify that `add_documents_simple` treats `_id` as a valid document identifier, matching Algolia-style ID conventions.
     #[test]
     fn test_simple_api_accepts_underscore_id() {
         let temp_dir = TempDir::new().unwrap();
@@ -66,6 +64,7 @@ mod library_usage {
         assert_eq!(num_docs, 2);
     }
 
+    /// Verify the low-level writer path using a typed `Document` with explicit `FieldValue` entries, committing manually, and confirming the document is visible after a reader reload.
     #[test]
     fn test_manual_writer_with_document_type() {
         let temp_dir = TempDir::new().unwrap();
@@ -101,6 +100,7 @@ mod library_usage {
         assert_eq!(num_docs, 1);
     }
 
+    /// Verify that two indexes created under separate subdirectories maintain independent document stores with no cross-contamination.
     #[test]
     fn test_multiple_isolated_indexes() {
         let temp_dir = TempDir::new().unwrap();
@@ -141,6 +141,7 @@ mod library_usage {
         assert_eq!(c_count, 1);
     }
 
+    /// Verify that documents survive an index close-and-reopen cycle by writing two documents, dropping the `Index`, reopening from the same path, and asserting the count is preserved.
     #[test]
     fn test_persistence_across_reopen() {
         let temp_dir = TempDir::new().unwrap();
@@ -170,6 +171,7 @@ mod library_usage {
         }
     }
 
+    /// Verify the `IndexManager` end-to-end path: create a tenant, add typed documents with text and integer fields, then assert that a keyword search returns the expected hit.
     #[tokio::test]
     async fn test_manager_add_and_search() {
         let temp_dir = TempDir::new().unwrap();
@@ -210,6 +212,7 @@ mod library_usage {
         );
     }
 
+    /// Verify that `IndexManager` enforces tenant isolation by inserting documents into two tenants and confirming a search term present in one tenant returns zero results in the other.
     #[tokio::test]
     async fn test_manager_tenant_isolation() {
         let temp_dir = TempDir::new().unwrap();
@@ -251,6 +254,7 @@ mod phase1_validation {
     use serde_json::json;
     use tempfile::TempDir;
 
+    /// Verify prefix search and typo tolerance through `IndexManager`: exact prefix matches return all matching documents, a more specific prefix narrows results, and a misspelled query still matches via fuzzy tolerance.
     #[tokio::test]
     async fn test_schemaless_prefix_search_end_to_end() {
         let temp_dir = TempDir::new().unwrap();
@@ -300,6 +304,7 @@ mod phase1_validation {
         );
     }
 
+    /// Verify that a `GreaterThanOrEqual` numeric filter restricts search results to documents whose field value meets the threshold.
     #[tokio::test]
     async fn test_filter_numeric_range() {
         let temp_dir = TempDir::new().unwrap();
@@ -329,6 +334,7 @@ mod phase1_validation {
         assert_eq!(results.documents[0].document.id, "1");
     }
 
+    /// Verify that an `And` compound filter combining a numeric range constraint with a facet equality constraint correctly narrows results to documents satisfying both conditions.
     #[tokio::test]
     async fn test_filter_and_combination() {
         let temp_dir = TempDir::new().unwrap();
@@ -376,6 +382,7 @@ mod phase1_validation {
         assert_eq!(results.documents[0].document.id, "1");
     }
 
+    /// Verify that documents with nested JSON objects are flattened during indexing so that full-text search matches values inside nested fields.
     #[tokio::test]
     async fn test_nested_field_queries() {
         let temp_dir = TempDir::new().unwrap();
@@ -401,6 +408,7 @@ mod phase1_validation {
         assert_eq!(results.documents[0].document.id, "1");
     }
 
+    /// Verify Algolia-compatible silent-fail behavior when a field contains mixed types: numeric filters apply only to documents with numeric values and silently skip documents where the field is a string.
     #[tokio::test]
     async fn test_mixed_type_documents() {
         let temp_dir = TempDir::new().unwrap();
@@ -434,6 +442,7 @@ mod phase1_validation {
         assert_eq!(results.documents[0].document.id, "1");
     }
 
+    /// Verify graceful handling of null values: documents with null fields or null elements inside arrays are indexed without error, and facet filters match only the non-null values in mixed arrays.
     #[tokio::test]
     async fn test_null_handling() {
         let temp_dir = TempDir::new().unwrap();

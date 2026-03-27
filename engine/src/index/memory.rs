@@ -21,6 +21,7 @@ impl Default for MemoryBudgetConfig {
 }
 
 impl MemoryBudgetConfig {
+    /// TODO: Document MemoryBudgetConfig.from_env.
     pub fn from_env() -> Self {
         MemoryBudgetConfig {
             max_buffer_mb: env::var("FLAPJACK_MAX_BUFFER_MB")

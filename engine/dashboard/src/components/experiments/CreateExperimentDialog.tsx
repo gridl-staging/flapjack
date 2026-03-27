@@ -1,3 +1,6 @@
+/**
+ * @module Four-step wizard dialog component for creating A/B search experiments, supporting both query-override and variant-index modes with traffic-split configuration and runtime estimation.
+ */
 import { useEffect, useMemo, useState } from 'react';
 import { useIndexes } from '@/hooks/useIndexes';
 import { useCreateExperiment } from '@/hooks/useExperiments';
@@ -79,6 +82,14 @@ function estimateRuntimeDays(baseDaysAt50Pct: number, trafficSplitPercent: numbe
   return Math.round(baseDaysAt50Pct * splitFactor);
 }
 
+/**
+ * Multi-step wizard dialog for creating A/B search experiments.
+ * 
+ * Guides the user through four steps: naming and index/metric selection, variant configuration (query overrides or separate index), traffic split and runtime estimation, and a final review before launch. All form state resets when the dialog closes.
+ * 
+ * @param open - Whether the dialog is visible.
+ * @param onOpenChange - Callback to toggle dialog visibility.
+ */
 export function CreateExperimentDialog({ open, onOpenChange }: CreateExperimentDialogProps) {
   const { data: indexes } = useIndexes();
   const createExperiment = useCreateExperiment();
@@ -143,6 +154,13 @@ export function CreateExperimentDialog({ open, onOpenChange }: CreateExperimentD
     return true;
   }
 
+  /**
+   * Assembles the variant configuration object based on the selected wizard mode.
+   * 
+   * In Mode B, returns a payload pointing to a separate variant index. In Mode A, returns query-level overrides (synonyms, rules, filters) applied to the same index.
+   * 
+   * @returns The variant descriptor sent as part of the create-experiment request.
+   */
   function buildVariantPayload() {
     if (mode === 'modeB') {
       return {
@@ -165,6 +183,13 @@ export function CreateExperimentDialog({ open, onOpenChange }: CreateExperimentD
     };
   }
 
+  /**
+   * Validates inputs and submits the experiment creation request.
+   * 
+   * Bails out silently if Mode B is selected with an invalid variant index. On success, closes the dialog. Errors are handled by the mutation hook (toast notifications).
+   * 
+   * @throws Delegates mutation errors to the `useCreateExperiment` hook's error handling.
+   */
   async function handleLaunch() {
     if (mode === 'modeB' && (!variantIndexName || variantIndexName === indexName)) {
       return;

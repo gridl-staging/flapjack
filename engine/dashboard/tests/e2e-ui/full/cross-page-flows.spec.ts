@@ -14,8 +14,9 @@
  * - Settings → modify attribute → save → Search → verify → revert
  */
 import { test, expect } from '../../fixtures/auth.fixture';
-import { API_BASE, API_HEADERS, TEST_INDEX } from '../helpers';
-import { deleteIndex, addDocuments, searchIndex, getRules, deleteRule, getSettings, updateSettings } from '../../fixtures/api-helpers';
+import { API_BASE, API_HEADERS, TEST_INDEX, waitForOverviewIndexRow } from '../helpers';
+import { deleteIndex, addDocuments, searchIndex, getSettings, updateSettings } from '../../fixtures/api-helpers';
+import { createIsolatedMerchandisingScenario } from '../scenario-helpers';
 
 test.describe('Cross-Page Flows', () => {
 
@@ -24,10 +25,10 @@ test.describe('Cross-Page Flows', () => {
   test('clicking index on Overview navigates to its Search page', async ({ page }) => {
     await page.goto('/overview');
     await expect(page.getByTestId('stat-card-indexes')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(TEST_INDEX).first()).toBeVisible({ timeout: 10_000 });
+    const indexRow = await waitForOverviewIndexRow(page, TEST_INDEX);
 
     // Click the index name to navigate
-    await page.getByText(TEST_INDEX).first().click();
+    await indexRow.getByRole('heading', { name: TEST_INDEX }).click();
     await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}`));
 
     // Search page should load with results panel
@@ -55,8 +56,8 @@ test.describe('Cross-Page Flows', () => {
     await createDialog.getByRole('button', { name: /create index/i }).click();
     await expect(createDialog).not.toBeVisible({ timeout: 10_000 });
 
-    // Verify index appears on overview
-    await expect(page.getByText(tempIndex).first()).toBeVisible({ timeout: 10_000 });
+    // Wait for the actual overview row, not the creation toast text.
+    const overviewRow = await waitForOverviewIndexRow(page, tempIndex);
 
     // Step 2: Add a document via batch API (the /documents POST may not auto-create)
     await addDocuments(request, tempIndex, [
@@ -69,8 +70,8 @@ test.describe('Cross-Page Flows', () => {
       expect(body.nbHits ?? 0).toBeGreaterThan(0);
     }).toPass({ timeout: 15_000 });
 
-    // Step 3: Navigate to search page for the new index
-    await page.goto(`/index/${tempIndex}`);
+    // Step 3: Open the new index through visible UI on Overview
+    await overviewRow.getByRole('heading', { name: tempIndex }).click();
     await expect(
       page.getByTestId('results-panel').or(page.getByText(/no results found/i))
     ).toBeVisible({ timeout: 15_000 });
@@ -83,59 +84,65 @@ test.describe('Cross-Page Flows', () => {
     // Verify result appears
     await expect(page.getByText('Lifecycle Test Product').first()).toBeVisible({ timeout: 15_000 });
 
-    // Step 4: Delete the index via API and verify it's gone from Overview
-    await deleteIndex(request, tempIndex);
-
-    await page.goto('/overview');
+    // Step 4: Return to Overview and delete the index through visible UI
+    const sidebar = page.locator('aside').or(page.locator('nav'));
+    await sidebar.getByRole('link', { name: 'Overview' }).click();
     await expect(page.getByTestId('stat-card-indexes')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(tempIndex)).not.toBeVisible({ timeout: 10_000 });
+    const refreshedOverviewRow = await waitForOverviewIndexRow(page, tempIndex);
+
+    await refreshedOverviewRow.getByTitle(`Delete index "${tempIndex}"`).click();
+    const deleteDialog = page.getByRole('dialog');
+    await expect(deleteDialog).toBeVisible({ timeout: 10_000 });
+    await deleteDialog.getByRole('button', { name: 'Delete' }).click();
+    await expect(refreshedOverviewRow).not.toBeVisible({ timeout: 10_000 });
   });
 
   // ---------- Merchandising → Save as Rule → Rules Page ----------
 
   test('pin result in Merchandising, save as rule, verify on Rules page', async ({ page, request }) => {
-    // Navigate to Merchandising
-    await page.goto(`/index/${TEST_INDEX}/merchandising`);
-    await expect(page.getByText('Merchandising Studio').first()).toBeVisible({ timeout: 15_000 });
+    const isolatedScenario = await createIsolatedMerchandisingScenario(request, 'cross-page-save-rule');
 
-    // Search for a product
-    const searchInput = page.getByPlaceholder(/search query to merchandise/i);
-    await searchInput.fill('tablet');
-    await page.getByRole('button', { name: /^Search$/i }).click();
+    try {
+      // Navigate to Merchandising
+      await page.goto(`/index/${isolatedScenario.indexName}/merchandising`);
+      await expect(page.getByText('Merchandising Studio').first()).toBeVisible({ timeout: 15_000 });
 
-    const cards = page.getByTestId('merch-card');
-    await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+      // Search for the isolated fixture
+      const searchInput = page.getByPlaceholder(/search query to merchandise/i);
+      await searchInput.fill(isolatedScenario.searchQuery);
+      await page.getByRole('button', { name: /^Search$/i }).click();
 
-    // Pin the first result
-    const firstCard = cards.first();
-    const pinBtn = firstCard.getByRole('button', { name: /pin/i });
-    await pinBtn.first().click();
-    await expect(page.getByText(/Pinned #/i).first()).toBeVisible({ timeout: 5_000 });
+      const cards = page.getByTestId('merch-card');
+      await expect(cards.first()).toBeVisible({ timeout: 10_000 });
 
-    // Save as Rule
-    const saveBtn = page.getByRole('button', { name: /Save as Rule/i });
-    await expect(saveBtn).toBeVisible();
+      // Pin the first result
+      const firstCard = cards.first();
+      const pinBtn = firstCard.getByRole('button', { name: /pin/i });
+      await pinBtn.first().click();
+      await expect(page.getByText(/Pinned #/i).first()).toBeVisible({ timeout: 5_000 });
 
-    const responsePromise = page.waitForResponse(
-      resp => resp.url().includes('/rules'),
-      { timeout: 10_000 }
-    );
-    await saveBtn.click();
-    await responsePromise;
+      // Save as Rule
+      const saveBtn = page.getByRole('button', { name: /Save as Rule/i });
+      await expect(saveBtn).toBeVisible();
 
-    // Navigate to Rules page
-    await page.goto(`/index/${TEST_INDEX}/rules`);
-    await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
+      const responsePromise = page.waitForResponse(
+        resp => resp.url().includes('/rules'),
+        { timeout: 10_000 }
+      );
+      await saveBtn.click();
+      await responsePromise;
 
-    // Verify a rule with "tablet" pattern appears
-    await expect(page.getByText(/tablet/).first()).toBeVisible({ timeout: 10_000 });
+      // Navigate to Rules page via shared index tab bar
+      await page.getByTestId('index-tab-rules').click();
+      await expect(page).toHaveURL(new RegExp(`/index/${isolatedScenario.indexName}/rules`));
+      await expect(page.getByRole('button', { name: /add rule/i })).toBeVisible({ timeout: 15_000 });
 
-    // Cleanup: delete merch-created rules via API
-    const { items } = await getRules(request, TEST_INDEX);
-    for (const rule of items) {
-      if (rule.objectID?.startsWith('merch-')) {
-        await deleteRule(request, TEST_INDEX, rule.objectID);
-      }
+      // Verify the saved merchandising rule uses the isolated query pattern
+      await expect(page.getByTestId('rules-list').getByText(isolatedScenario.searchQuery).first()).toBeVisible({
+        timeout: 10_000,
+      });
+    } finally {
+      await deleteIndex(request, isolatedScenario.indexName);
     }
   });
 
@@ -166,18 +173,43 @@ test.describe('Cross-Page Flows', () => {
     // Get original settings for restore
     const originalSettings = await getSettings(request, TEST_INDEX);
 
-    // Navigate to Settings page
-    await page.goto(`/index/${TEST_INDEX}/settings`);
-    await expect(page.getByRole('heading', { name: /settings/i })).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText('Searchable Attributes').first()).toBeVisible({ timeout: 10_000 });
+    try {
+      // Navigate to Settings page
+      await page.goto(`/index/${TEST_INDEX}/settings`);
+      await expect(page.getByRole('heading', { name: /settings/i })).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText('Searchable Attributes').first()).toBeVisible({ timeout: 10_000 });
 
-    // Verify the seeded searchable attributes are shown
-    await expect(page.getByText('name').first()).toBeVisible();
-    await expect(page.getByText('description').first()).toBeVisible();
-    await expect(page.getByText('brand').first()).toBeVisible();
+      // Toggle a seeded searchable attribute to trigger dirty form state
+      const tagsChip = page.getByTestId('attr-chip-tags').first();
+      await expect(tagsChip).toBeVisible({ timeout: 10_000 });
+      await tagsChip.click();
+      await expect(tagsChip.locator('svg')).toHaveCount(0);
 
-    // Restore original settings to avoid test pollution
-    await updateSettings(request, TEST_INDEX, originalSettings);
+      const saveButton = page.getByRole('button', { name: /save/i });
+      await expect(saveButton).toBeVisible({ timeout: 5_000 });
+
+      const saveResponsePromise = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' &&
+          response.url().includes(`/1/indexes/${TEST_INDEX}/settings`) &&
+          (response.status() === 200 || response.status() === 207),
+        { timeout: 15_000 },
+      );
+      await Promise.all([
+        saveButton.click(),
+        saveResponsePromise,
+      ]);
+      await expect(saveButton).not.toBeVisible({ timeout: 10_000 });
+
+      await page.reload();
+      await expect(page.getByRole('heading', { name: /settings/i })).toBeVisible({ timeout: 10_000 });
+      const reloadedTagsChip = page.getByTestId('attr-chip-tags').first();
+      await expect(reloadedTagsChip).toBeVisible({ timeout: 10_000 });
+      await expect(reloadedTagsChip.locator('svg')).toHaveCount(0);
+    } finally {
+      // Restore original settings to avoid test pollution
+      await updateSettings(request, TEST_INDEX, originalSettings);
+    }
   });
 
   // ---------- Search with Analytics → Analytics Page ----------
@@ -226,18 +258,20 @@ test.describe('Cross-Page Flows', () => {
       page.getByTestId('results-panel').or(page.getByText(/no results found/i))
     ).toBeVisible({ timeout: 15_000 });
 
-    // Navigate to Settings via nav link
-    await page.getByRole('link', { name: /settings/i }).click();
+    // Navigate to Settings via shared index tab bar
+    await page.getByTestId('index-tab-settings').click();
     await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}/settings`));
     await expect(page.getByRole('heading', { name: /settings/i })).toBeVisible({ timeout: 10_000 });
 
-    // Navigate to Rules via sidebar or nav
-    await page.goto(`/index/${TEST_INDEX}/rules`);
-    await expect(page.getByText('Rules').first()).toBeVisible({ timeout: 15_000 });
+    // Navigate to Rules via shared index tab bar
+    await page.getByTestId('index-tab-rules').click();
+    await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}/rules`));
+    await expect(page.getByRole('button', { name: /add rule/i })).toBeVisible({ timeout: 15_000 });
 
-    // Navigate to Synonyms
-    await page.goto(`/index/${TEST_INDEX}/synonyms`);
-    await expect(page.getByText('Synonyms').first()).toBeVisible({ timeout: 15_000 });
+    // Navigate to Synonyms via shared index tab bar
+    await page.getByTestId('index-tab-synonyms').click();
+    await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}/synonyms`));
+    await expect(page.getByRole('button', { name: /add synonym/i })).toBeVisible({ timeout: 15_000 });
 
     // Navigate back to Overview via sidebar
     const sidebar = page.locator('aside').or(page.locator('nav'));

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { CreateKeyDialog } from '@/components/keys/CreateKeyDialog';
 
 export function ApiKeys() {
@@ -16,6 +17,10 @@ export function ApiKeys() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [filterIndex, setFilterIndex] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    keyValue: string;
+    description: string;
+  } | null>(null);
 
   // Collect all unique index names from keys + indexes list for the filter bar
   const allIndexNames = useMemo(() => {
@@ -33,6 +38,9 @@ export function ApiKeys() {
       (key) => !key.indexes || key.indexes.length === 0 || key.indexes.includes(filterIndex)
     );
   }, [keys, filterIndex]);
+  const filterSummary = filterIndex
+    ? `Viewing keys that can access ${filterIndex}`
+    : 'Viewing keys across all indexes';
 
   const handleCopy = useCallback(async (keyValue: string) => {
     try {
@@ -44,21 +52,23 @@ export function ApiKeys() {
     }
   }, []);
 
-  const handleDelete = useCallback(
-    async (keyValue: string, description: string) => {
-      const confirmed = confirm(
-        `Are you sure you want to delete the API key "${description || keyValue}"? This action cannot be undone.`
-      );
-      if (!confirmed) return;
+  const handleDeleteRequest = useCallback((keyValue: string, description: string) => {
+    setDeleteTarget({
+      keyValue,
+      description: description || keyValue,
+    });
+  }, []);
 
-      try {
-        await deleteKey.mutateAsync(keyValue);
-      } catch (err) {
-        console.error('Failed to delete key:', err);
-      }
-    },
-    [deleteKey]
-  );
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+
+    try {
+      await deleteKey.mutateAsync(deleteTarget.keyValue);
+      setDeleteTarget(null);
+    } catch (err) {
+      console.error('Failed to delete key:', err);
+    }
+  }, [deleteKey, deleteTarget]);
 
   if (isLoading) {
     return (
@@ -101,6 +111,9 @@ export function ApiKeys() {
           <p className="text-sm text-muted-foreground mt-1">
             Manage API keys for authenticating requests to Flapjack
           </p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Review each key&apos;s scope, permissions, and lifecycle before sharing it.
+          </p>
         </div>
         <Button onClick={() => setShowCreateDialog(true)}>
           <Plus className="h-4 w-4 mr-1" />
@@ -112,15 +125,17 @@ export function ApiKeys() {
       {allIndexNames.length > 0 && keys && keys.length > 0 && (
         <div data-testid="index-filter-bar">
           <div className="text-sm font-medium mb-1 flex items-center gap-1.5">
-            Filter by Index
+            Filter by Index Access
             <InfoTooltip content="Filter keys by which index they can access. Keys with 'All Indexes' scope appear in every filter." />
           </div>
           <p className="text-xs text-muted-foreground mb-2" data-testid="filter-help-text">
             Select an index to see which API keys have access to it
           </p>
+          <p className="text-xs text-muted-foreground mb-2">{filterSummary}</p>
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setFilterIndex(null)}
+              aria-pressed={filterIndex === null}
               className={`px-3 py-1 rounded-md text-sm border transition-colors ${
                 filterIndex === null
                   ? 'border-primary bg-primary/10 font-medium'
@@ -134,6 +149,7 @@ export function ApiKeys() {
               <button
                 key={name}
                 onClick={() => setFilterIndex(name === filterIndex ? null : name)}
+                aria-pressed={filterIndex === name}
                 className={`px-3 py-1 rounded-md text-sm border transition-colors ${
                   filterIndex === name
                     ? 'border-primary bg-primary/10 font-medium'
@@ -171,34 +187,39 @@ export function ApiKeys() {
                     <h3 className="font-semibold">
                       {key.description || 'Untitled Key'}
                     </h3>
-                    <div className="flex items-center gap-2 mt-2">
-                      <code className="text-sm bg-muted px-2 py-1 rounded font-mono">
-                        {key.value}
-                      </code>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleCopy(key.value)}
-                      >
-                        {copiedKey === key.value ? (
-                          <>
-                            <Check className="h-3 w-3 mr-1" />
-                            Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3 w-3 mr-1" />
-                            Copy
-                          </>
-                        )}
-                      </Button>
+                    <div className="mt-3">
+                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">
+                        Key Value
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <code className="text-sm bg-muted px-2 py-1 rounded font-mono">
+                          {key.value}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleCopy(key.value)}
+                        >
+                          {copiedKey === key.value ? (
+                            <>
+                              <Check className="h-3 w-3 mr-1" />
+                              Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3 w-3 mr-1" />
+                              Copy
+                            </>
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </div>
 
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleDelete(key.value, key.description || '')}
+                    onClick={() => handleDeleteRequest(key.value, key.description || '')}
                     disabled={deleteKey.isPending}
                     data-testid="delete-key-btn"
                   >
@@ -229,6 +250,19 @@ export function ApiKeys() {
                   )}
                 </div>
 
+                {key.restrictSources && key.restrictSources.length > 0 && (
+                  <div data-testid="key-restrict-sources">
+                    <div className="text-sm font-medium mb-2">Restrict Sources</div>
+                    <div className="flex flex-wrap gap-2">
+                      {key.restrictSources.map((source) => (
+                        <Badge key={`${key.value}-${source}`} variant="outline">
+                          {source}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* ACL */}
                 <div>
                   <div className="text-sm font-medium mb-2">Permissions</div>
@@ -240,40 +274,42 @@ export function ApiKeys() {
                     ))}
                   </div>
                 </div>
-
                 {/* Details */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  {key.maxHitsPerQuery && (
-                    <div>
-                      <div className="text-muted-foreground">Max Hits/Query</div>
-                      <div className="font-medium">
-                        {key.maxHitsPerQuery.toLocaleString()}
+                <div>
+                  <div className="text-sm font-medium mb-2">Lifecycle & Limits</div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    {key.maxHitsPerQuery && (
+                      <div>
+                        <div className="text-muted-foreground">Max Hits/Query</div>
+                        <div className="font-medium">
+                          {key.maxHitsPerQuery.toLocaleString()}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {key.maxQueriesPerIPPerHour && (
-                    <div>
-                      <div className="text-muted-foreground">Max Queries/IP/Hour</div>
-                      <div className="font-medium">
-                        {key.maxQueriesPerIPPerHour.toLocaleString()}
+                    {key.maxQueriesPerIPPerHour && (
+                      <div>
+                        <div className="text-muted-foreground">Max Queries/IP/Hour</div>
+                        <div className="font-medium">
+                          {key.maxQueriesPerIPPerHour.toLocaleString()}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {key.expiresAt && (
-                    <div>
-                      <div className="text-muted-foreground">Expires</div>
-                      <div className="font-medium">
-                        {new Date(key.expiresAt * 1000).toLocaleDateString()}
+                    {key.expiresAt && (
+                      <div>
+                        <div className="text-muted-foreground">Expires</div>
+                        <div className="font-medium">
+                          {new Date(key.expiresAt * 1000).toLocaleDateString()}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  <div>
-                    <div className="text-muted-foreground">Created</div>
-                    <div className="font-medium">
-                      {new Date(key.createdAt * 1000).toLocaleDateString()}
+                    <div>
+                      <div className="text-muted-foreground">Created</div>
+                      <div className="font-medium">
+                        {new Date(key.createdAt * 1000).toLocaleDateString()}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -287,6 +323,27 @@ export function ApiKeys() {
       <CreateKeyDialog
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
+      />
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Delete API Key"
+        description={
+          <>
+            Are you sure you want to delete the API key{' '}
+            <code className="font-mono text-sm bg-muted px-1 py-0.5 rounded">
+              {deleteTarget?.description}
+            </code>
+            ? This action cannot be undone.
+          </>
+        }
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={handleConfirmDelete}
+        isPending={deleteKey.isPending}
       />
     </div>
   );

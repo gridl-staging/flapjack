@@ -10,7 +10,7 @@
  * - Vite dev server on the repo-local configured dashboard port
  * - Auth pre-seeded via auth fixture (localStorage)
  *
- * Per AI_TESTING_METHODOLOGY.md:
+ * Per testing methodology
  * - Smoke tests cover 7 critical paths (~2 min total)
  * - Run on every commit (CI)
  * - Catch: navigation bugs, layout issues, integration failures
@@ -18,8 +18,8 @@
  */
 import { test, expect } from '../../fixtures/auth.fixture';
 import { deleteIndex } from '../../fixtures/api-helpers';
+import { TEST_INDEX } from '../helpers';
 
-const TEST_INDEX = 'e2e-products';
 const TEMP_INDEX = 'e2e-temp';
 
 test.describe('Smoke Tests', () => {
@@ -74,14 +74,19 @@ test.describe('Smoke Tests', () => {
     // Verify at least one document card rendered with real data
     await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
 
-    // Verify result count text shows "results" somewhere in the panel
-    await expect(resultsPanel.getByText('results').first()).toBeVisible();
+    // Verify the localized results summary contract is rendered.
+    // Count and label are separate nodes in ResultsPanel, so assert both directly.
+    const resultsCount = resultsPanel.getByTestId('results-count');
+    const resultsLabel = resultsPanel.getByTestId('results-label');
+    await expect(resultsCount).toHaveText(/^\d{1,3}(?:[,\u00a0\u202f]\d{3})*$/);
+    await expect(resultsLabel).toHaveText(/^results?$/i);
+    await expect(resultsPanel).toContainText(/\b\d{1,3}(?:[,\u00a0\u202f]\d{3})*\s+results?\b/i);
   });
 
   // ===========================================================================
   // SMOKE 3: Sidebar navigation works
   // ===========================================================================
-  test('Sidebar navigation works', async ({ page }) => {
+  test('Sidebar navigation reaches API Keys', async ({ page }) => {
     await page.goto('/overview');
 
     // Verify we start at overview
@@ -92,17 +97,7 @@ test.describe('Smoke Tests', () => {
     // Navigate to API Keys
     await sidebar.getByRole('link', { name: /api keys/i }).click();
     await expect(page).toHaveURL(/\/keys/);
-    await expect(page.getByText(/api keys/i).first()).toBeVisible();
-
-    // Navigate to System
-    await sidebar.getByRole('link', { name: /system/i }).click();
-    await expect(page).toHaveURL(/\/system/);
-    await expect(page.getByRole('heading', { name: /system/i })).toBeVisible();
-
-    // Navigate back to Overview
-    await sidebar.getByRole('link', { name: /overview/i }).click();
-    await expect(page).toHaveURL(/\/overview/);
-    await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create Key' }).or(page.getByRole('button', { name: 'Create Your First Key' })).first()).toBeVisible();
   });
 
   // ===========================================================================

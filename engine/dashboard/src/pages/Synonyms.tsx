@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useSynonyms, useSaveSynonym, useDeleteSynonym, useClearSynonyms } from '@/hooks/useSynonyms';
 import type { Synonym, SynonymType } from '@/lib/types';
 
@@ -54,6 +55,11 @@ export function Synonyms() {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingSynonym, setEditingSynonym] = useState<Synonym | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [pendingAction, setPendingAction] = useState<
+    | { type: 'delete'; objectID: string }
+    | { type: 'clear-all' }
+    | null
+  >(null);
 
   const { data, isLoading } = useSynonyms({
     indexName: indexName || '',
@@ -70,15 +76,25 @@ export function Synonyms() {
     setIsCreating(false);
   }, [saveSynonym]);
 
-  const handleDelete = useCallback(async (objectID: string) => {
-    if (!confirm(`Delete synonym "${objectID}"?`)) return;
-    await deleteSynonym.mutateAsync(objectID);
-  }, [deleteSynonym]);
+  const handleDeleteRequest = useCallback((objectID: string) => {
+    setPendingAction({ type: 'delete', objectID });
+  }, []);
 
-  const handleClearAll = useCallback(async () => {
-    if (!confirm('Delete ALL synonyms for this index? This cannot be undone.')) return;
-    await clearSynonyms.mutateAsync();
-  }, [clearSynonyms]);
+  const handleClearAllRequest = useCallback(() => {
+    setPendingAction({ type: 'clear-all' });
+  }, []);
+
+  const handleConfirmAction = useCallback(async () => {
+    if (!pendingAction) return;
+
+    if (pendingAction.type === 'delete') {
+      await deleteSynonym.mutateAsync(pendingAction.objectID);
+    } else {
+      await clearSynonyms.mutateAsync();
+    }
+
+    setPendingAction(null);
+  }, [clearSynonyms, deleteSynonym, pendingAction]);
 
   const handleCreate = useCallback((type: SynonymType) => {
     setEditingSynonym(getEmptySynonym(type));
@@ -113,7 +129,7 @@ export function Synonyms() {
         </div>
         <div className="flex items-center gap-2">
           {data && data.nbHits > 0 && (
-            <Button variant="outline" size="sm" onClick={handleClearAll}>
+            <Button variant="outline" size="sm" onClick={handleClearAllRequest}>
               <Trash2 className="h-4 w-4 mr-1" />
               Clear All
             </Button>
@@ -185,8 +201,8 @@ export function Synonyms() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleDelete(synonym.objectID)}
-                    disabled={deleteSynonym.isPending}
+                    onClick={() => handleDeleteRequest(synonym.objectID)}
+                    disabled={deleteSynonym.isPending || clearSynonyms.isPending}
                     aria-label="Delete"
                   >
                     <Trash2 className="h-4 w-4 text-destructive" />
@@ -208,6 +224,31 @@ export function Synonyms() {
           isPending={saveSynonym.isPending}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingAction !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingAction(null);
+        }}
+        title={pendingAction?.type === 'delete' ? 'Delete Synonym' : 'Delete All Synonyms'}
+        description={
+          pendingAction?.type === 'delete'
+            ? (
+              <>
+                Are you sure you want to delete synonym{' '}
+                <code className="font-mono text-sm bg-muted px-1 py-0.5 rounded">
+                  {pendingAction.objectID}
+                </code>
+                ? This action cannot be undone.
+              </>
+            )
+            : 'Delete ALL synonyms for this index? This cannot be undone.'
+        }
+        confirmLabel={pendingAction?.type === 'delete' ? 'Delete' : 'Delete All'}
+        variant="destructive"
+        onConfirm={handleConfirmAction}
+        isPending={deleteSynonym.isPending || clearSynonyms.isPending}
+      />
     </div>
   );
 }

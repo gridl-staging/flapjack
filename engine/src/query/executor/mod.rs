@@ -1,9 +1,10 @@
 use crate::error::Result;
 use crate::index::document::DocumentConverter;
-use crate::index::settings::IndexSettings;
+use crate::index::settings::{strip_unordered_prefix, IndexSettings};
 use crate::query::filter::FilterCompiler;
 use crate::query::parser::ShortQueryPlaceholder;
 use crate::types::{Filter, ScoredDocument, SearchResult};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tantivy::query::{BooleanQuery, BoostQuery, Occur, Query as TantivyQuery, TermQuery};
 use tantivy::schema::IndexRecordOption;
@@ -18,6 +19,8 @@ mod relevance;
 mod rules;
 mod sorting;
 
+pub use facets::FacetSearchParams;
+
 pub struct QueryExecutor {
     pub(crate) converter: Arc<DocumentConverter>,
     pub(crate) filter_compiler: FilterCompiler,
@@ -25,11 +28,14 @@ pub struct QueryExecutor {
     pub(crate) settings: SettingsRef,
     pub(crate) json_search_field: tantivy::schema::Field,
     pub(crate) searchable_paths: Vec<String>,
+    /// Set of paths that have the `unordered(...)` modifier - position penalty is disabled
+    pub(crate) unordered_paths: HashSet<String>,
     pub(crate) query_text: String,
     pub(crate) max_values_per_facet: Option<usize>,
 }
 
 impl QueryExecutor {
+    /// TODO: Document QueryExecutor.new.
     pub fn new(converter: Arc<DocumentConverter>, schema: tantivy::schema::Schema) -> Self {
         let json_search_field = schema
             .get_field("_json_search")
@@ -41,6 +47,7 @@ impl QueryExecutor {
             settings: None,
             json_search_field,
             searchable_paths: vec![],
+            unordered_paths: HashSet::new(),
             query_text: String::new(),
             max_values_per_facet: None,
         }
@@ -51,10 +58,25 @@ impl QueryExecutor {
         self
     }
 
+    /// TODO: Document QueryExecutor.with_settings.
     pub fn with_settings(mut self, settings: SettingsRef) -> Self {
+        // Reset derived path state on each call so repeated builder usage stays correct.
+        self.searchable_paths.clear();
+        self.unordered_paths.clear();
+
         if let Some(ref s) = settings {
             if let Some(ref attrs) = s.searchable_attributes {
-                self.searchable_paths = attrs.clone();
+                // Strip `unordered(...)` wrapper and track which paths are unordered.
+                self.searchable_paths = attrs
+                    .iter()
+                    .map(|a| {
+                        let stripped = strip_unordered_prefix(a).to_string();
+                        if stripped != *a {
+                            self.unordered_paths.insert(stripped.clone());
+                        }
+                        stripped
+                    })
+                    .collect();
             }
         }
         self.settings = settings;
@@ -129,6 +151,7 @@ impl QueryExecutor {
 
     // Expands short queries (≤2 chars) by enumerating matching terms from the index.
     // Recursively handles nested BooleanQueries containing ShortQueryPlaceholders.
+    /// TODO: Document QueryExecutor.expand_short_query_with_searcher.
     pub(crate) fn expand_short_query_with_searcher(
         &self,
         query: Box<dyn TantivyQuery>,
@@ -180,6 +203,7 @@ impl QueryExecutor {
         Ok(query)
     }
 
+    /// TODO: Document QueryExecutor.expand_placeholder.
     fn expand_placeholder(
         &self,
         placeholder: &ShortQueryPlaceholder,
@@ -254,6 +278,7 @@ impl QueryExecutor {
         Ok(documents)
     }
 
+    /// TODO: Document QueryExecutor.build_result.
     pub(crate) fn build_result(
         &self,
         documents: Vec<ScoredDocument>,
@@ -263,8 +288,16 @@ impl QueryExecutor {
             documents,
             total,
             facets: std::collections::HashMap::new(),
+            facets_stats: std::collections::HashMap::new(),
             user_data: Vec::new(),
             applied_rules: Vec::new(),
+            parsed_query: self.query_text.clone(),
+            exhaustive_facet_values: true,
+            exhaustive_rules_match: true,
+            query_after_removal: None,
+            rendering_content: None,
+            effective_around_lat_lng: None,
+            effective_around_radius: None,
         }
     }
 }

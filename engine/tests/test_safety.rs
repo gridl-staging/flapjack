@@ -7,6 +7,7 @@
 mod common;
 
 mod cold_start_cache_bounds {
+    use super::common::faceted_search_options;
     use flapjack::index::settings::IndexSettings;
     use flapjack::types::{Document, FacetRequest, FieldValue};
     use flapjack::IndexManager;
@@ -147,7 +148,13 @@ mod cold_start_cache_bounds {
         for i in 0..20 {
             manager.facet_cache.insert(
                 format!("t1:q{}:category", i),
-                std::sync::Arc::new((std::time::Instant::now(), 0, HashMap::new())),
+                std::sync::Arc::new((
+                    std::time::Instant::now(),
+                    0,
+                    HashMap::new(),
+                    HashMap::new(),
+                    true,
+                )),
             );
         }
         assert_eq!(
@@ -179,7 +186,8 @@ mod cold_start_cache_bounds {
 
         for i in 0..20 {
             let query = format!("q{}", i);
-            let _ = manager.search_with_facets("t1", &query, None, None, 1, 0, Some(&facets));
+            let options = faceted_search_options(None, None, 1, 0, Some(&facets));
+            let _ = manager.search_with_options("t1", &query, &options);
         }
 
         let cache_len = manager.facet_cache.len();
@@ -199,8 +207,9 @@ mod cold_start_cache_bounds {
             path: "/category".to_string(),
         }];
 
+        let options = faceted_search_options(None, None, 10, 0, Some(&facets));
         let r1 = manager
-            .search_with_facets("t1", "product", None, None, 10, 0, Some(&facets))
+            .search_with_options("t1", "product", &options)
             .unwrap();
         assert!(!r1.facets.is_empty(), "should have facet results");
         assert!(
@@ -209,7 +218,7 @@ mod cold_start_cache_bounds {
         );
 
         let r2 = manager
-            .search_with_facets("t1", "product", None, None, 10, 0, Some(&facets))
+            .search_with_options("t1", "product", &options)
             .unwrap();
         assert_eq!(
             r1.facets["category"].len(),
@@ -227,8 +236,9 @@ mod cold_start_cache_bounds {
             path: "/category".to_string(),
         }];
 
+        let warm_options = faceted_search_options(None, None, 10, 0, Some(&facets));
         let _ = manager
-            .search_with_facets("t1", "product", None, None, 10, 0, Some(&facets))
+            .search_with_options("t1", "product", &warm_options)
             .unwrap();
         assert!(!manager.facet_cache.is_empty(), "cache should have entries");
 
@@ -243,8 +253,9 @@ mod cold_start_cache_bounds {
             .await
             .unwrap();
 
+        let refreshed_options = faceted_search_options(None, None, 100, 0, Some(&facets));
         let r = manager
-            .search_with_facets("t1", "product", None, None, 100, 0, Some(&facets))
+            .search_with_options("t1", "product", &refreshed_options)
             .unwrap();
         let cat_paths: Vec<&str> = r.facets["category"]
             .iter()
@@ -266,10 +277,58 @@ mod memory_safety {
     };
     use flapjack::types::{Document, FieldValue, TaskStatus};
     use flapjack::IndexManager;
+    use serial_test::serial;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::net::TcpListener;
+
+    fn is_port_binding_restricted_error(err: &std::io::Error) -> bool {
+        err.kind() == std::io::ErrorKind::PermissionDenied
+    }
+
+    struct PressureOverrideGuard<'a> {
+        observer: &'a flapjack::MemoryObserver,
+        restore_to: Option<flapjack::PressureLevel>,
+    }
+
+    impl<'a> PressureOverrideGuard<'a> {
+        fn new(observer: &'a flapjack::MemoryObserver) -> Self {
+            Self {
+                observer,
+                restore_to: observer.pressure_override(),
+            }
+        }
+    }
+
+    impl Drop for PressureOverrideGuard<'_> {
+        fn drop(&mut self) {
+            self.observer.set_pressure_override(self.restore_to);
+        }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(original) = &self.original {
+                std::env::set_var(self.key, original);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_oversized_document_rejected() {
@@ -469,8 +528,12 @@ mod memory_safety {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_size_limit() {
-        std::env::set_var("FLAPJACK_MAX_BATCH_SIZE", "5");
+        let _batch_size_guard = EnvVarGuard::set("FLAPJACK_MAX_BATCH_SIZE", "5");
+        let observer = flapjack::MemoryObserver::global();
+        let _pressure_override_guard = PressureOverrideGuard::new(observer);
+        observer.set_pressure_override(Some(flapjack::PressureLevel::Normal));
 
         let (addr, _tmp) = common::spawn_server().await;
         let client = reqwest::Client::new();
@@ -509,9 +572,8 @@ mod memory_safety {
             .unwrap();
         assert_eq!(resp.status(), 400, "Expected 400 for batch too large");
         let body: serde_json::Value = resp.json().await.unwrap();
-        assert_eq!(body["error"], "batch_too_large");
-
-        std::env::remove_var("FLAPJACK_MAX_BATCH_SIZE");
+        assert!(body["message"].as_str().unwrap().contains("Batch size"));
+        assert_eq!(body["status"], 400);
     }
 
     #[tokio::test]
@@ -563,7 +625,7 @@ mod memory_safety {
         );
     }
 
-    async fn spawn_server_with_pressure_middleware() -> (String, TempDir) {
+    async fn spawn_server_with_pressure_middleware() -> Option<(String, TempDir)> {
         let temp_dir = TempDir::new().unwrap();
         let manager = flapjack::IndexManager::new(temp_dir.path());
 
@@ -573,18 +635,25 @@ mod memory_safety {
             replication_manager: None,
             ssl_manager: None,
             analytics_engine: None,
+            recommend_config: Default::default(),
+            dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+                temp_dir.path(),
+            )),
             metrics_state: None,
             usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
             paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+            usage_persistence: None,
+            geoip_reader: None,
+            notification_service: None,
             start_time: std::time::Instant::now(),
+            conversation_store:
+                flapjack_http::conversation_store::ConversationStore::default_shared(),
             experiment_store: None,
-            #[cfg(feature = "vector-search")]
             embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
         });
 
-        let health_route = Router::new()
-            .route("/health", get(flapjack_http::handlers::health))
-            .with_state(state.clone());
+        let health_route =
+            flapjack_http::router::build_public_health_routes().with_state(state.clone());
 
         let protected = Router::new()
             .route("/1/indexes", post(flapjack_http::handlers::create_index))
@@ -596,14 +665,9 @@ mod memory_safety {
                 "/1/indexes/:indexName/query",
                 post(flapjack_http::handlers::search),
             )
+            .route("/1/task/:task_id", get(flapjack_http::handlers::get_task))
             .route("/1/tasks/:task_id", get(flapjack_http::handlers::get_task))
             .with_state(state.clone());
-
-        let auth_middleware = middleware::from_fn(
-            move |request: axum::extract::Request, next: middleware::Next| async move {
-                flapjack_http::auth::authenticate_and_authorize(request, next).await
-            },
-        );
 
         let mgr_for_pressure = Arc::clone(&state.manager);
         let default_cap = state
@@ -625,13 +689,19 @@ mod memory_safety {
             },
         );
 
+        // Auth middleware is intentionally omitted: key_store is None (open mode).
+        // This matches production behavior in router.rs where auth_layer is only
+        // applied when key_store is Some.
         let app = Router::new()
             .merge(health_route)
             .merge(protected)
-            .layer(memory_middleware)
-            .layer(auth_middleware);
+            .layer(memory_middleware);
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if is_port_binding_restricted_error(&err) => return None,
+            Err(err) => panic!("failed to bind test listener: {err}"),
+        };
         let addr = listener.local_addr().unwrap().to_string();
 
         tokio::spawn(async move {
@@ -651,14 +721,39 @@ mod memory_safety {
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         }
-        (addr, temp_dir)
+        Some((addr, temp_dir))
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_memory_pressure_levels() {
-        let (addr, _tmp) = spawn_server_with_pressure_middleware().await;
+        let Some((addr, _tmp)) = spawn_server_with_pressure_middleware().await else {
+            eprintln!(
+                "Skipping memory_safety::test_memory_pressure_levels due to sandbox-restricted port binding"
+            );
+            return;
+        };
         let client = reqwest::Client::new();
         let observer = flapjack::MemoryObserver::global();
+        let _pressure_override_guard = PressureOverrideGuard::new(observer);
+        let assert_memory_pressure_body = |body: &serde_json::Value, expected_level: &str| {
+            assert_eq!(
+                body["error"], "memory_pressure",
+                "error payload should expose memory_pressure error code"
+            );
+            assert!(
+                body["allocated_mb"].is_number(),
+                "error payload should expose allocated_mb as number"
+            );
+            assert!(
+                body["limit_mb"].is_number(),
+                "error payload should expose limit_mb as number"
+            );
+            assert_eq!(
+                body["level"], expected_level,
+                "error payload should expose expected pressure level"
+            );
+        };
 
         // --- Normal: everything should pass through the middleware ---
         observer.set_pressure_override(Some(flapjack::PressureLevel::Normal));
@@ -703,7 +798,7 @@ mod memory_safety {
             "503 should include Retry-After: 5 header"
         );
         let body: serde_json::Value = resp.json().await.unwrap();
-        assert_eq!(body["error"], "memory_pressure");
+        assert_memory_pressure_body(&body, "critical");
 
         let resp = client
             .post(format!("http://{}/1/indexes/test_idx/query", addr))
@@ -716,6 +811,15 @@ mod memory_safety {
             503,
             "Search should be rejected under critical pressure"
         );
+        assert_eq!(
+            resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok()),
+            Some("5"),
+            "Critical-pressure query rejection should include Retry-After: 5 header"
+        );
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_memory_pressure_body(&body, "critical");
 
         let resp = client
             .get(format!("http://{}/health", addr))
@@ -747,6 +851,15 @@ mod memory_safety {
             503,
             "Writes should be rejected under elevated pressure"
         );
+        assert_eq!(
+            resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok()),
+            Some("5"),
+            "Elevated-pressure write rejection should include Retry-After: 5 header"
+        );
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_memory_pressure_body(&body, "elevated");
 
         let resp = client
             .post(format!("http://{}/1/indexes/test_idx/query", addr))
@@ -759,6 +872,15 @@ mod memory_safety {
             503,
             "POST search should be rejected under elevated pressure"
         );
+        assert_eq!(
+            resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok()),
+            Some("5"),
+            "Elevated-pressure query rejection should include Retry-After: 5 header"
+        );
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_memory_pressure_body(&body, "elevated");
 
         let resp = client
             .get(format!("http://{}/health", addr))
@@ -770,7 +892,53 @@ mod memory_safety {
             200,
             "Health should return 200 under elevated pressure"
         );
+    }
 
+    #[test]
+    #[serial]
+    fn pressure_override_guard_restores_previous_override_on_unwind() {
+        let observer = flapjack::MemoryObserver::global();
+        observer.set_pressure_override(Some(flapjack::PressureLevel::Elevated));
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = PressureOverrideGuard::new(observer);
+            observer.set_pressure_override(Some(flapjack::PressureLevel::Critical));
+            assert_eq!(observer.pressure_level(), flapjack::PressureLevel::Critical);
+            panic!("intentional panic to verify override restoration");
+        }));
+
+        assert_eq!(observer.pressure_level(), flapjack::PressureLevel::Elevated);
         observer.set_pressure_override(None);
+    }
+
+    #[test]
+    #[serial]
+    fn pressure_override_guard_restores_existing_override_without_manual_restore_value() {
+        let observer = flapjack::MemoryObserver::global();
+        observer.set_pressure_override(Some(flapjack::PressureLevel::Elevated));
+        {
+            let _guard = PressureOverrideGuard::new(observer);
+            observer.set_pressure_override(Some(flapjack::PressureLevel::Critical));
+            assert_eq!(observer.pressure_level(), flapjack::PressureLevel::Critical);
+        }
+
+        assert_eq!(
+            observer.pressure_level(),
+            flapjack::PressureLevel::Elevated,
+            "guard should restore pre-existing override even when caller does not pass it explicitly"
+        );
+        observer.set_pressure_override(None);
+    }
+
+    #[test]
+    fn bind_permission_denied_is_detected_as_restricted() {
+        let err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "sandbox blocked");
+        assert!(is_port_binding_restricted_error(&err));
+    }
+
+    #[test]
+    fn non_permission_bind_errors_are_not_marked_restricted() {
+        let err = std::io::Error::new(std::io::ErrorKind::AddrInUse, "already in use");
+        assert!(!is_port_binding_restricted_error(&err));
     }
 }

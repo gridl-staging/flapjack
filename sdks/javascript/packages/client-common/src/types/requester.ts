@@ -1,3 +1,5 @@
+/**
+ */
 export type Headers = Record<string, string>;
 
 export type QueryParameters = Record<string, any>;
@@ -7,6 +9,9 @@ export type QueryParameters = Record<string, any>;
  */
 export type Method = 'DELETE' | 'GET' | 'PATCH' | 'POST' | 'PUT';
 
+/**
+ * TODO: Document Request.
+ */
 export type Request = {
   method: Method;
   /**

@@ -5,6 +5,7 @@ import 'package:flapjack_client_search/src/model/get_api_key_response.dart';
 import 'package:flapjack_client_search/src/model/task_status.dart';
 import 'package:collection/collection.dart';
 
+/// TODO: Document WaitTask.
 extension WaitTask on SearchClient {
   /// Wait for a [taskID] to complete before executing the next line of code, to synchronize index
   /// updates. All write operations in Flapjack are asynchronous by design. It means that when you add

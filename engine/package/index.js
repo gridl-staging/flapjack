@@ -1,4 +1,4 @@
-import irregularPlurals_ from './irregular-plurals.json' with {type: 'json'};
+import irregularPlurals_ from './lang/plurals/irregular-plurals-en.json' with {type: 'json'};
 
 const irregularPlurals = new Map(Object.entries(irregularPlurals_));
 

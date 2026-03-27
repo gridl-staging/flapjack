@@ -1,3 +1,5 @@
+"""
+"""
 from os import environ
 from typing import Dict, Optional
 
@@ -6,6 +8,7 @@ from flapjacksearch.http.user_agent import UserAgent
 
 
 class BaseConfig:
+    """TODO: Document BaseConfig."""
     def __init__(self, app_id: Optional[str] = None, api_key: Optional[str] = None):
         app_id = (
             environ.get("FLAPJACK_APP_ID")

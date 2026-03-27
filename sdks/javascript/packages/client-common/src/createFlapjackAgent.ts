@@ -1,5 +1,10 @@
+/**
+ */
 import type { FlapjackAgent, FlapjackAgentOptions } from './types';
 
+/**
+ * TODO: Document createFlapjackAgent.
+ */
 export function createFlapjackAgent(version: string): FlapjackAgent {
   const flapjackAgent = {
     value: `Flapjack for JavaScript (${version})`,

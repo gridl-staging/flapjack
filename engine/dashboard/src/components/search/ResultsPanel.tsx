@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useSearch } from '@/hooks/useSearch';
 import { useDeleteDocument } from '@/hooks/useDocuments';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -17,6 +18,34 @@ interface ResultsPanelProps {
   userToken?: string;
 }
 
+function buildFieldOrder(hits: Array<Record<string, unknown>> | undefined): string[] {
+  if (!hits || hits.length === 0) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const order: string[] = [];
+
+  for (const hit of hits) {
+    for (const key of Object.keys(hit)) {
+      if (key === 'objectID' || key === '_highlightResult' || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      order.push(key);
+    }
+  }
+
+  return order;
+}
+
+function getHitPosition(params: SearchParams, index: number): number {
+  const page = params.page || 0;
+  const hitsPerPage = params.hitsPerPage || 20;
+  return page * hitsPerPage + index + 1;
+}
+
 export const ResultsPanel = memo(function ResultsPanel({
   indexName,
   params,
@@ -30,6 +59,7 @@ export const ResultsPanel = memo(function ResultsPanel({
     userToken,
   });
   const deleteDoc = useDeleteDocument(indexName);
+  const { preferences: displayPreferences } = useDisplayPreferences(indexName);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   const handlePageChange = useCallback(
@@ -47,29 +77,25 @@ export const ResultsPanel = memo(function ResultsPanel({
   );
 
   const confirmDelete = useCallback(() => {
-    if (pendingDeleteId) {
-      deleteDoc.mutate(pendingDeleteId, {
-        onSettled: () => setPendingDeleteId(null),
-      });
+    if (!pendingDeleteId) {
+      return;
     }
+
+    deleteDoc.mutate(pendingDeleteId, {
+      onSettled: () => setPendingDeleteId(null),
+    });
   }, [pendingDeleteId, deleteDoc]);
+
+  const handleDeleteDialogOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      setPendingDeleteId(null);
+    }
+  }, []);
 
   // Compute a stable field order from all hits so every DocumentCard
   // shows fields in the same order (first-seen across the result set).
   const fieldOrder = useMemo(() => {
-    if (!data?.hits?.length) return [];
-    const seen = new Set<string>();
-    const order: string[] = [];
-    for (const hit of data.hits) {
-      for (const key of Object.keys(hit)) {
-        if (key === 'objectID' || key === '_highlightResult') continue;
-        if (!seen.has(key)) {
-          seen.add(key);
-          order.push(key);
-        }
-      }
-    }
-    return order;
+    return buildFieldOrder(data?.hits);
   }, [data?.hits]);
 
   const currentPage = params.page || 0;
@@ -132,8 +158,9 @@ export const ResultsPanel = memo(function ResultsPanel({
       <Card className="p-4">
         <div className="flex items-center justify-between">
           <div className="text-sm">
-            <span className="font-semibold">{data.nbHits.toLocaleString()}</span>
-            <span className="text-muted-foreground ml-1">
+            <span className="font-semibold" data-testid="results-count">{data.nbHits.toLocaleString()}</span>
+            {' '}
+            <span className="text-muted-foreground ml-1" data-testid="results-label">
               {data.nbHits === 1 ? 'result' : 'results'}
             </span>
             <span className="text-muted-foreground mx-2">•</span>
@@ -144,7 +171,7 @@ export const ResultsPanel = memo(function ResultsPanel({
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" data-testid="pagination-controls">
               <Button
                 variant="outline"
                 size="sm"
@@ -176,13 +203,13 @@ export const ResultsPanel = memo(function ResultsPanel({
             key={hit.objectID || index}
             document={hit}
             fieldOrder={fieldOrder}
+            displayPreferences={displayPreferences}
             onDelete={handleDelete}
             isDeleting={deleteDoc.isPending}
             onClick={
               onResultClick
                 ? () => {
-                    const position = (params.page || 0) * (params.hitsPerPage || 20) + index + 1;
-                    onResultClick(hit.objectID, position, data.queryID);
+                    onResultClick(hit.objectID, getHitPosition(params, index), data.queryID);
                   }
                 : undefined
             }
@@ -192,7 +219,7 @@ export const ResultsPanel = memo(function ResultsPanel({
 
       <ConfirmDialog
         open={pendingDeleteId !== null}
-        onOpenChange={(open) => { if (!open) setPendingDeleteId(null); }}
+        onOpenChange={handleDeleteDialogOpenChange}
         title="Delete Document"
         description={
           <>

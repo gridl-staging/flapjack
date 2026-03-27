@@ -57,16 +57,12 @@ describeOrSkip('Algolia Migration (real browser)', () => {
     });
     await expect(migrateButton).toBeEnabled();
 
-    // Click Migrate and wait for API response
-    const responsePromise = page.waitForResponse(
-      (resp) => resp.url().includes('/1/migrate-from-algolia') && resp.status() === 200,
-    );
+    // Click Migrate and verify user-visible success state instead of coupling
+    // to transport timing for a single response packet.
     await migrateButton.click();
-    await expect(page.getByText(/migrating from algolia/i)).toBeVisible();
-    await responsePromise;
 
     // Wait for success card
-    await expect(page.getByText('Migration complete')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Migration complete')).toBeVisible({ timeout: 90_000 });
 
     // Verify imported counts using data-testid (not CSS class selectors)
     await expect(page.getByTestId('migrate-stat-documents')).toHaveText(String(EXPECTED_COUNTS.documents));

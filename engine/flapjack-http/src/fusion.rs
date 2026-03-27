@@ -105,6 +105,7 @@ mod tests {
         assert_eq!(results[2].doc_id, "Z");
     }
 
+    /// Verify that documents appearing in both BM25 and vector lists rank above single-source documents under 50/50 weighting, and that tie-breaking favors higher BM25 rank.
     #[test]
     fn test_rrf_equal_blend() {
         // BM25: [A, B, C], Vector: [C, A, D]
@@ -142,6 +143,7 @@ mod tests {
         assert!(ids.contains(&"C"));
     }
 
+    /// Verify graceful handling when one or both input lists are empty: empty+empty yields no results, and a single non-empty source still produces output.
     #[test]
     fn test_rrf_empty_inputs() {
         // Both empty
@@ -161,6 +163,7 @@ mod tests {
         assert_eq!(results[0].doc_id, "X");
     }
 
+    /// Verify that fused scores are sorted in non-increasing order across 20 documents with reversed BM25/vector rankings.
     #[test]
     fn test_rrf_scores_monotonically_decrease() {
         let bm25: Vec<String> = (0..20).map(|i| format!("doc{}", i)).collect();
@@ -179,6 +182,7 @@ mod tests {
         }
     }
 
+    /// Verify that `semantic_score` is populated with `1.0 - distance` for documents present in vector results and is `None` for BM25-only documents.
     #[test]
     fn test_rrf_fused_result_includes_vector_similarity() {
         let bm25 = vec!["A".to_string(), "B".to_string()];

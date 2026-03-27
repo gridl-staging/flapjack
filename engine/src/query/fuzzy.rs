@@ -1,3 +1,4 @@
+//! Fuzzy query building with automatic edit-distance adjustment based on term length.
 use crate::error::Result;
 use tantivy::query::{BooleanQuery, FuzzyTermQuery, Occur, Query};
 use tantivy::schema::Field;
@@ -46,6 +47,19 @@ impl FuzzyQueryBuilder {
     }
 }
 
+/// Expand a base query by adding fuzzy term variants for specified fields.
+///
+/// Creates a fuzzy query for each combination of the provided terms and fields, then combines the base query and all fuzzy variants using OR logic. This allows documents matching either the original query or any fuzzy variant to be included in results.
+///
+/// # Arguments
+///
+/// * `base_query` — The original query to include as-is
+/// * `fields` — Fields to apply fuzzy matching to
+/// * `query_terms` — Terms to generate fuzzy variants for
+///
+/// # Returns
+///
+/// A BooleanQuery with all clauses optional, combining the base query with fuzzy variants generated for each term-field pair.
 pub fn apply_fuzzy_to_terms(
     base_query: Box<dyn Query>,
     fields: &[Field],

@@ -4,13 +4,26 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { SettingSection, Field, FieldChips } from './shared';
-import { SearchModeSection } from './SearchModeSection';
-import { EmbedderPanel } from './EmbedderPanel';
+import { SettingSection, Field } from './shared';
+import {
+  ArrayFieldEditor,
+  SUPPORTED_QUERY_LANGUAGES,
+  parseCommaSeparated,
+} from './fieldEditors';
+import { DisplaySettingsTab, VectorAiSettingsTab } from './SettingsTabContent';
 import { useIndexFields } from '@/hooks/useIndexFields';
 import { useReindex } from '@/hooks/useReindex';
 import type { IndexSettings } from '@/lib/types';
+
+type SettingsTabValue =
+  | 'search'
+  | 'ranking'
+  | 'language'
+  | 'facets'
+  | 'display'
+  | 'vector-ai';
 
 interface SettingsFormProps {
   settings: Partial<IndexSettings>;
@@ -28,6 +41,8 @@ export const SettingsForm = memo(function SettingsForm({
   const { data: fields = [], isLoading: fieldsLoading } = useIndexFields(indexName);
   const reindex = useReindex(indexName);
   const [showReindexConfirm, setShowReindexConfirm] = useState(false);
+  const [activeTab, setActiveTab] = useState<SettingsTabValue>('search');
+  const distinctAttributeListId = `distinct-attributes-${indexName}`;
 
   // Compare current facet settings against the saved (server) values to determine
   // whether a reindex is needed. If they differ, the user changed facets since last save/reindex.
@@ -39,10 +54,7 @@ export const SettingsForm = memo(function SettingsForm({
 
   const handleArrayChange = useCallback(
     (key: keyof IndexSettings, value: string) => {
-      const array = value
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const array = parseCommaSeparated(value);
       onChange({ [key]: array.length > 0 ? array : undefined });
     },
     [onChange]
@@ -74,279 +86,357 @@ export const SettingsForm = memo(function SettingsForm({
     [settings, onChange]
   );
 
+  const handleQueryLanguagesChange = useCallback(
+    (event: React.ChangeEvent<HTMLSelectElement>) => {
+      const selected = Array.from(event.target.selectedOptions, (option) => option.value);
+      onChange({ queryLanguages: selected.length > 0 ? selected : undefined });
+    },
+    [onChange]
+  );
+
+  const handleSemanticEventSourcesChange = useCallback(
+    (value: string) => {
+      const eventSources = parseCommaSeparated(value);
+      onChange({
+        semanticSearch:
+          eventSources.length > 0
+            ? { ...(settings.semanticSearch || {}), eventSources }
+            : undefined,
+      });
+    },
+    [onChange, settings.semanticSearch]
+  );
+
+  const distinctEnabled =
+    settings.distinct === true ||
+    (typeof settings.distinct === 'number' && settings.distinct > 0);
+  const distinctValue =
+    typeof settings.distinct === 'number' && settings.distinct > 0
+      ? settings.distinct
+      : 1;
+
+  const handleDistinctEnabledChange = useCallback(
+    (enabled: boolean) => {
+      if (!enabled) {
+        onChange({ distinct: false, attributeForDistinct: undefined });
+        return;
+      }
+      onChange({ distinct: distinctValue });
+    },
+    [distinctValue, onChange]
+  );
+
+  const handleDistinctValueChange = useCallback(
+    (value: string) => {
+      const parsed = parseInt(value, 10);
+      if (isNaN(parsed) || parsed < 1) {
+        onChange({ distinct: 1 });
+        return;
+      }
+      onChange({ distinct: parsed });
+    },
+    [onChange]
+  );
+
+  const queryTypeValue: NonNullable<IndexSettings['queryType']> =
+    settings.queryType || 'prefixLast';
+
   return (
-    <div className="space-y-6">
-      {/* Search Behavior */}
-      <SettingSection
-        title="Search Behavior"
-        description="Configure how search queries are processed"
-      >
-        <Field
-          label="Searchable Attributes"
-          description="Click fields to toggle, or type comma-separated values below"
-        >
-          <FieldChips
-            availableFields={fields}
-            selectedValues={settings.searchableAttributes || []}
-            onToggle={(name) => handleFieldToggle('searchableAttributes', name)}
-            isLoading={fieldsLoading}
-          />
-          <Textarea
-            value={settings.searchableAttributes?.join(', ') || ''}
-            onChange={(e) =>
-              handleArrayChange('searchableAttributes', e.target.value)
-            }
-            placeholder="title, description, tags"
-            rows={2}
-          />
-        </Field>
+    <div className="space-y-4">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTabValue)}>
+        <div className="overflow-x-auto">
+          <TabsList className="h-auto w-full min-w-[720px] justify-start gap-1 bg-muted/50 p-1">
+            <TabsTrigger value="search" data-testid="settings-tab-search">Search</TabsTrigger>
+            <TabsTrigger value="ranking" data-testid="settings-tab-ranking">Ranking</TabsTrigger>
+            <TabsTrigger value="language" data-testid="settings-tab-language-text">
+              Language & Text
+            </TabsTrigger>
+            <TabsTrigger value="facets" data-testid="settings-tab-facets-filters">
+              Facets & Filters
+            </TabsTrigger>
+            <TabsTrigger value="display" data-testid="settings-tab-display">Display</TabsTrigger>
+            <TabsTrigger value="vector-ai" data-testid="settings-tab-vector-ai">
+              Vector / AI
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
-        <Field
-          label="Hits Per Page"
-          description="Default number of results per page"
-        >
-          <Input
-            type="number"
-            min="1"
-            max="1000"
-            value={settings.hitsPerPage || ''}
-            onChange={(e) => handleNumberChange('hitsPerPage', e.target.value)}
-            placeholder="20"
-          />
-        </Field>
-      </SettingSection>
+        <TabsContent value="search" className="mt-4">
+          <SettingSection
+            title="Search"
+            description="Configure how search queries are processed"
+          >
+            <ArrayFieldEditor
+              fieldKey="searchableAttributes"
+              label="Searchable Attributes"
+              description="Click fields to toggle, or type comma-separated values below"
+              placeholder="title, description, tags"
+              selectedValues={settings.searchableAttributes}
+              availableFields={fields}
+              isLoading={fieldsLoading}
+              onFieldToggle={handleFieldToggle}
+              onArrayChange={handleArrayChange}
+            />
 
-      {/* Search Mode */}
-      <SearchModeSection
-        mode={settings.mode}
-        embedders={settings.embedders}
-        onChange={onChange}
-      />
-
-      {/* Embedders */}
-      <EmbedderPanel
-        embedders={settings.embedders}
-        onChange={onChange}
-      />
-
-      {/* Faceting */}
-      <SettingSection
-        title="Faceting"
-        description="Configure faceted search and filtering"
-        warning={facetsNeedReindex ? 'Reindex needed' : undefined}
-        warningDetail={
-          facetsNeedReindex
-            ? 'Facet attributes have changed. Save your settings, then re-index so existing documents pick up the new facets.'
-            : undefined
-        }
-        warningAction={
-          facetsNeedReindex ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowReindexConfirm(true)}
-              disabled={reindex.isPending}
-              className="h-6 text-xs"
+            <Field
+              label="Hits Per Page"
+              description="Default number of results per page"
             >
-              {reindex.isPending ? (
-                <>
-                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                  Re-indexing...
-                </>
+              <Input
+                type="number"
+                min="1"
+                max="1000"
+                value={settings.hitsPerPage || ''}
+                onChange={(e) => handleNumberChange('hitsPerPage', e.target.value)}
+                placeholder="20"
+              />
+            </Field>
+
+            <Field
+              label="Query Type"
+              description="Controls prefix matching strategy during query processing"
+            >
+              <select
+                value={queryTypeValue}
+                onChange={(e) =>
+                  onChange({ queryType: e.target.value as NonNullable<IndexSettings['queryType']> })
+                }
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <option value="prefixLast">Prefix Last</option>
+                <option value="prefixAll">Prefix All</option>
+                <option value="prefixNone">Prefix None</option>
+              </select>
+            </Field>
+          </SettingSection>
+        </TabsContent>
+
+        <TabsContent value="ranking" className="mt-4">
+          <SettingSection
+            title="Ranking"
+            description="Configure ranking order and duplicate handling"
+          >
+            <Field
+              label="Ranking Criteria"
+              description="Comma-separated list of ranking criteria (typo, geo, words, filters, proximity, attribute, exact)"
+            >
+              <Textarea
+                value={settings.ranking?.join(', ') || ''}
+                onChange={(e) => handleArrayChange('ranking', e.target.value)}
+                placeholder="typo, geo, words, filters, proximity, attribute, exact"
+                rows={3}
+              />
+            </Field>
+
+            <Field
+              label="Custom Ranking"
+              description="Comma-separated list of custom ranking attributes (use asc() or desc())"
+            >
+              <Textarea
+                value={settings.customRanking?.join(', ') || ''}
+                onChange={(e) => handleArrayChange('customRanking', e.target.value)}
+                placeholder="desc(popularity), asc(price)"
+                rows={2}
+              />
+            </Field>
+
+            <Field
+              label="Distinct"
+              description="Enable duplicate control and set how many duplicates are kept"
+            >
+              <div className="space-y-3">
+                <Switch
+                  checked={distinctEnabled}
+                  onCheckedChange={handleDistinctEnabledChange}
+                  data-testid="distinct-enabled-switch"
+                />
+                {distinctEnabled && (
+                  <Input
+                    type="number"
+                    min="1"
+                    value={distinctValue}
+                    onChange={(e) => handleDistinctValueChange(e.target.value)}
+                    placeholder="1"
+                  />
+                )}
+              </div>
+            </Field>
+
+            {distinctEnabled && (
+              <Field
+                label="Attribute For Distinct"
+                description="Choose the attribute used to identify duplicate records"
+              >
+                <Input
+                  list={distinctAttributeListId}
+                  value={settings.attributeForDistinct || ''}
+                  onChange={(e) =>
+                    onChange({ attributeForDistinct: e.target.value || undefined })
+                  }
+                  placeholder="sku"
+                />
+                <datalist id={distinctAttributeListId}>
+                  {fields.map((field) => (
+                    <option key={field.name} value={field.name} />
+                  ))}
+                </datalist>
+              </Field>
+            )}
+          </SettingSection>
+        </TabsContent>
+
+        <TabsContent value="language" className="mt-4">
+          <SettingSection
+            title="Language & Text"
+            description="Configure language-aware text processing behavior"
+          >
+            <Field
+              label="Query Languages"
+              description="Select supported language codes used for language-specific processing"
+            >
+              <select
+                multiple
+                value={settings.queryLanguages || []}
+                onChange={handleQueryLanguagesChange}
+                data-testid="query-languages-select"
+                className="min-h-[144px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                {SUPPORTED_QUERY_LANGUAGES.map((languageCode) => (
+                  <option key={languageCode} value={languageCode}>
+                    {languageCode}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field
+              label="Remove Stop Words"
+              description="Enable stop words removal for better search relevance"
+            >
+              <Switch
+                checked={settings.removeStopWords === true}
+                onCheckedChange={(checked) =>
+                  handleBooleanChange('removeStopWords', checked)
+                }
+              />
+            </Field>
+
+            <Field
+              label="Ignore Plurals"
+              description="Treat singular and plural forms as equivalent"
+            >
+              <Switch
+                checked={settings.ignorePlurals === true}
+                onCheckedChange={(checked) =>
+                  handleBooleanChange('ignorePlurals', checked)
+                }
+              />
+            </Field>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field
+                label="Min Word Size for 1 Typo"
+                description="Minimum word length to allow 1 typo"
+              >
+                <Input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={settings.minWordSizefor1Typo || ''}
+                  onChange={(e) =>
+                    handleNumberChange('minWordSizefor1Typo', e.target.value)
+                  }
+                  placeholder="4"
+                />
+              </Field>
+
+              <Field
+                label="Min Word Size for 2 Typos"
+                description="Minimum word length to allow 2 typos"
+              >
+                <Input
+                  type="number"
+                  min="1"
+                  max="20"
+                  value={settings.minWordSizefor2Typos || ''}
+                  onChange={(e) =>
+                    handleNumberChange('minWordSizefor2Typos', e.target.value)
+                  }
+                  placeholder="8"
+                />
+              </Field>
+            </div>
+          </SettingSection>
+        </TabsContent>
+
+        <TabsContent value="facets" className="mt-4">
+          <SettingSection
+            title="Facets & Filters"
+            description="Configure faceted search and filtering"
+            warning={facetsNeedReindex ? 'Reindex needed' : undefined}
+            warningDetail={
+              facetsNeedReindex
+                ? 'Facet attributes have changed. Save your settings, then re-index so existing documents pick up the new facets.'
+                : undefined
+            }
+            warningAction={
+              facetsNeedReindex ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowReindexConfirm(true)}
+                  disabled={reindex.isPending}
+                  className="h-6 text-xs"
+                >
+                  {reindex.isPending ? (
+                    <>
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      Re-indexing...
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw className="mr-1 h-3 w-3" />
+                      Re-index now
+                    </>
+                  )}
+                </Button>
               ) : (
-                <>
-                  <RotateCcw className="h-3 w-3 mr-1" />
-                  Re-index now
-                </>
-              )}
-            </Button>
-          ) : (
-            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-              Up to date
-            </span>
-          )
-        }
-      >
-        <Field
-          label="Attributes For Faceting"
-          description="Click fields to toggle, or type comma-separated values below"
-        >
-          <FieldChips
-            availableFields={fields}
-            selectedValues={settings.attributesForFaceting || []}
-            onToggle={(name) => handleFieldToggle('attributesForFaceting', name)}
-            isLoading={fieldsLoading}
-          />
-          <Textarea
-            value={settings.attributesForFaceting?.join(', ') || ''}
-            onChange={(e) =>
-              handleArrayChange('attributesForFaceting', e.target.value)
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                  Up to date
+                </span>
+              )
             }
-            placeholder="category, brand, color"
-            rows={2}
-          />
-        </Field>
-      </SettingSection>
-
-      {/* Ranking */}
-      <SettingSection
-        title="Ranking & Sorting"
-        description="Configure how results are ranked"
-      >
-        <Field
-          label="Ranking Criteria"
-          description="Comma-separated list of ranking criteria (typo, geo, words, filters, proximity, attribute, exact)"
-        >
-          <Textarea
-            value={settings.ranking?.join(', ') || ''}
-            onChange={(e) => handleArrayChange('ranking', e.target.value)}
-            placeholder="typo, geo, words, filters, proximity, attribute, exact"
-            rows={3}
-          />
-        </Field>
-
-        <Field
-          label="Custom Ranking"
-          description="Comma-separated list of custom ranking attributes (use asc() or desc())"
-        >
-          <Textarea
-            value={settings.customRanking?.join(', ') || ''}
-            onChange={(e) => handleArrayChange('customRanking', e.target.value)}
-            placeholder="desc(popularity), asc(price)"
-            rows={2}
-          />
-        </Field>
-      </SettingSection>
-
-      {/* Display */}
-      <SettingSection
-        title="Display & Highlighting"
-        description="Configure what data is returned and highlighted"
-      >
-        <Field
-          label="Attributes To Retrieve"
-          description="Click fields to toggle, or type comma-separated values below"
-        >
-          <FieldChips
-            availableFields={fields}
-            selectedValues={settings.attributesToRetrieve || []}
-            onToggle={(name) => handleFieldToggle('attributesToRetrieve', name)}
-            isLoading={fieldsLoading}
-          />
-          <Textarea
-            value={settings.attributesToRetrieve?.join(', ') || ''}
-            onChange={(e) =>
-              handleArrayChange('attributesToRetrieve', e.target.value)
-            }
-            placeholder="title, description, image, price"
-            rows={2}
-          />
-        </Field>
-
-        <Field
-          label="Attributes To Highlight"
-          description="Click fields to toggle, or type comma-separated values below"
-        >
-          <FieldChips
-            availableFields={fields}
-            selectedValues={settings.attributesToHighlight || []}
-            onToggle={(name) => handleFieldToggle('attributesToHighlight', name)}
-            isLoading={fieldsLoading}
-          />
-          <Textarea
-            value={settings.attributesToHighlight?.join(', ') || ''}
-            onChange={(e) =>
-              handleArrayChange('attributesToHighlight', e.target.value)
-            }
-            placeholder="title, description"
-            rows={2}
-          />
-        </Field>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Highlight Pre Tag" description="Opening tag for highlights">
-            <Input
-              value={settings.highlightPreTag || ''}
-              onChange={(e) =>
-                onChange({ highlightPreTag: e.target.value || undefined })
-              }
-              placeholder="<em>"
-            />
-          </Field>
-
-          <Field label="Highlight Post Tag" description="Closing tag for highlights">
-            <Input
-              value={settings.highlightPostTag || ''}
-              onChange={(e) =>
-                onChange({ highlightPostTag: e.target.value || undefined })
-              }
-              placeholder="</em>"
-            />
-          </Field>
-        </div>
-      </SettingSection>
-
-      {/* Advanced */}
-      <SettingSection title="Advanced" description="Advanced search configuration">
-        <Field
-          label="Remove Stop Words"
-          description="Enable stop words removal for better search relevance"
-        >
-          <Switch
-            checked={settings.removeStopWords === true}
-            onCheckedChange={(checked) =>
-              handleBooleanChange('removeStopWords', checked)
-            }
-          />
-        </Field>
-
-        <Field
-          label="Ignore Plurals"
-          description="Treat singular and plural forms as equivalent"
-        >
-          <Switch
-            checked={settings.ignorePlurals === true}
-            onCheckedChange={(checked) =>
-              handleBooleanChange('ignorePlurals', checked)
-            }
-          />
-        </Field>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Field
-            label="Min Word Size for 1 Typo"
-            description="Minimum word length to allow 1 typo"
           >
-            <Input
-              type="number"
-              min="1"
-              max="10"
-              value={settings.minWordSizefor1Typo || ''}
-              onChange={(e) =>
-                handleNumberChange('minWordSizefor1Typo', e.target.value)
-              }
-              placeholder="4"
+            <ArrayFieldEditor
+              fieldKey="attributesForFaceting"
+              label="Attributes For Faceting"
+              description="Click fields to toggle, or type comma-separated values below"
+              placeholder="category, brand, color"
+              selectedValues={settings.attributesForFaceting}
+              availableFields={fields}
+              isLoading={fieldsLoading}
+              onFieldToggle={handleFieldToggle}
+              onArrayChange={handleArrayChange}
             />
-          </Field>
+          </SettingSection>
+        </TabsContent>
 
-          <Field
-            label="Min Word Size for 2 Typos"
-            description="Minimum word length to allow 2 typos"
-          >
-            <Input
-              type="number"
-              min="1"
-              max="20"
-              value={settings.minWordSizefor2Typos || ''}
-              onChange={(e) =>
-                handleNumberChange('minWordSizefor2Typos', e.target.value)
-              }
-              placeholder="8"
-            />
-          </Field>
-        </div>
-      </SettingSection>
+        <DisplaySettingsTab
+          settings={settings}
+          fields={fields}
+          fieldsLoading={fieldsLoading}
+          onChange={onChange}
+          onFieldToggle={handleFieldToggle}
+          onArrayChange={handleArrayChange}
+        />
+
+        <VectorAiSettingsTab
+          settings={settings}
+          onChange={onChange}
+          onSemanticEventSourcesChange={handleSemanticEventSourcesChange}
+        />
+      </Tabs>
 
       <ConfirmDialog
         open={showReindexConfirm}

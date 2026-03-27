@@ -1,62 +1,33 @@
 import { createFlapjackClient, FLAPJACK_ADMIN_KEY, FLAPJACK_URL } from './lib/flapjack-client.js';
+import {
+  createTestRunner,
+  bindClientHelpers,
+} from './lib/test-helpers.js';
 
 const client = createFlapjackClient();
 
 const TEST_INDEX = 'contract_test_' + Date.now();
-
-async function waitForIndexing(indexName, expectedCount, maxWaitMs = 5000) {
-  const start = Date.now();
-  while (Date.now() - start < maxWaitMs) {
-    const search = await client.search({
-      requests: [{ indexName, query: '', hitsPerPage: 1 }]
-    });
-    if (search.results[0].nbHits >= expectedCount) {
-      return true;
-    }
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  return false;
-}
-
-async function waitForObject(indexName, objectID, predicate, maxWaitMs = 5000) {
-  const start = Date.now();
-  while (Date.now() - start < maxWaitMs) {
-    try {
-      const obj = await client.getObject({ indexName, objectID });
-      if (predicate(obj)) {
-        return obj;
-      }
-    } catch (e) {
-      // Keep polling until object appears/updates
-    }
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  return null;
-}
-
-async function waitForIndexMissing(indexName, maxWaitMs = 5000) {
-  const start = Date.now();
-  while (Date.now() - start < maxWaitMs) {
-    const list = await client.listIndices();
-    if (Array.isArray(list.items) && !list.items.some((idx) => idx.name === indexName)) {
-      return true;
-    }
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  return false;
-}
+const BROWSE_TEST_INDEX = `${TEST_INDEX}_browse`;
+const { test, runAllTests } = createTestRunner();
+const {
+  waitForSearch,
+  waitForObject,
+  waitForIndexMissing,
+  cleanupIndexes,
+} = bindClientHelpers(client);
 
 async function cleanup() {
-  try {
-    await client.deleteIndex({ indexName: TEST_INDEX });
-  } catch (e) {
-  }
+  await cleanupIndexes([TEST_INDEX, BROWSE_TEST_INDEX]);
 }
 
-const tests = [];
-
-function test(name, fn) {
-  tests.push({ name, fn });
+async function waitForIndexing(indexName, expectedCount, maxWaitMs = 5000) {
+  const result = await waitForSearch(
+    indexName,
+    { query: '', hitsPerPage: 1 },
+    (searchResult) => searchResult.nbHits >= expectedCount,
+    maxWaitMs
+  );
+  return Boolean(result);
 }
 
 test('POST /1/indexes/{indexName}/batch - addObject', async () => {
@@ -373,8 +344,21 @@ test('POST /1/indexes/*/objects - attributesToRetrieve', async () => {
 });
 
 test('POST /1/indexes/{indexName}/browse - cursor pagination', async () => {
+  await client.saveObjects({
+    indexName: BROWSE_TEST_INDEX,
+    objects: [
+      { objectID: 'b1', name: 'Browse Item 1' },
+      { objectID: 'b2', name: 'Browse Item 2' },
+      { objectID: 'b3', name: 'Browse Item 3' },
+      { objectID: 'b4', name: 'Browse Item 4' },
+      { objectID: 'b5', name: 'Browse Item 5' }
+    ]
+  });
+
+  await waitForIndexing(BROWSE_TEST_INDEX, 5);
+
   const page1 = await client.browse({
-    indexName: TEST_INDEX,
+    indexName: BROWSE_TEST_INDEX,
     browseParams: { hitsPerPage: 2 }
   });
   
@@ -387,7 +371,7 @@ test('POST /1/indexes/{indexName}/browse - cursor pagination', async () => {
   }
   
   const page2 = await client.browse({
-    indexName: TEST_INDEX,
+    indexName: BROWSE_TEST_INDEX,
     browseParams: { cursor: page1.cursor, hitsPerPage: 2 }
   });
   
@@ -514,6 +498,252 @@ test('POST /1/indexes/{indexName}/facets/{facetName}/query - facet search', asyn
   }
 });
 
+// =========================================================================
+// Stage 1 Settings Round-Trip
+// =========================================================================
+
+test('PUT/GET settings - numericAttributesForFiltering round-trip', async () => {
+  await client.setSettings({
+    indexName: TEST_INDEX,
+    indexSettings: {
+      numericAttributesForFiltering: ['price', 'rating']
+    }
+  });
+
+  const settings = await client.getSettings({ indexName: TEST_INDEX });
+  if (!Array.isArray(settings.numericAttributesForFiltering)) {
+    throw new Error(`Expected numericAttributesForFiltering array, got ${typeof settings.numericAttributesForFiltering}`);
+  }
+  if (settings.numericAttributesForFiltering.length !== 2) {
+    throw new Error(`Expected 2 items, got ${settings.numericAttributesForFiltering.length}`);
+  }
+  if (!settings.numericAttributesForFiltering.includes('price')) {
+    throw new Error('Expected "price" in numericAttributesForFiltering');
+  }
+  if (!settings.numericAttributesForFiltering.includes('rating')) {
+    throw new Error('Expected "rating" in numericAttributesForFiltering');
+  }
+});
+
+test('PUT/GET settings - searchableAttributes with unordered() round-trip', async () => {
+  await client.setSettings({
+    indexName: TEST_INDEX,
+    indexSettings: {
+      searchableAttributes: ['unordered(name)', 'brand', 'unordered(description)']
+    }
+  });
+
+  const settings = await client.getSettings({ indexName: TEST_INDEX });
+  if (!Array.isArray(settings.searchableAttributes)) {
+    throw new Error(`Expected searchableAttributes array, got ${typeof settings.searchableAttributes}`);
+  }
+  if (!settings.searchableAttributes.includes('unordered(name)')) {
+    throw new Error(`Expected 'unordered(name)' in searchableAttributes, got: ${JSON.stringify(settings.searchableAttributes)}`);
+  }
+  if (!settings.searchableAttributes.includes('unordered(description)')) {
+    throw new Error(`Expected 'unordered(description)' in searchableAttributes, got: ${JSON.stringify(settings.searchableAttributes)}`);
+  }
+
+  // Restore
+  await client.setSettings({
+    indexName: TEST_INDEX,
+    indexSettings: {
+      searchableAttributes: ['name', 'description']
+    }
+  });
+});
+
+test('PUT/GET settings - allowCompressionOfIntegerArray round-trip', async () => {
+  await client.setSettings({
+    indexName: TEST_INDEX,
+    indexSettings: {
+      allowCompressionOfIntegerArray: true
+    }
+  });
+
+  const settings = await client.getSettings({ indexName: TEST_INDEX });
+  if (settings.allowCompressionOfIntegerArray !== true) {
+    throw new Error(`Expected allowCompressionOfIntegerArray=true, got ${settings.allowCompressionOfIntegerArray}`);
+  }
+
+  // Set to false and verify
+  await client.setSettings({
+    indexName: TEST_INDEX,
+    indexSettings: {
+      allowCompressionOfIntegerArray: false
+    }
+  });
+
+  const settings2 = await client.getSettings({ indexName: TEST_INDEX });
+  if (settings2.allowCompressionOfIntegerArray !== false) {
+    throw new Error(`Expected allowCompressionOfIntegerArray=false, got ${settings2.allowCompressionOfIntegerArray}`);
+  }
+});
+
+// =========================================================================
+// API Key CRUD
+// =========================================================================
+
+test('POST /1/keys - create API key', async () => {
+  const response = await fetch(`${FLAPJACK_URL}/1/keys`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-algolia-api-key': FLAPJACK_ADMIN_KEY,
+      'x-algolia-application-id': 'flapjack'
+    },
+    body: JSON.stringify({
+      acl: ['search', 'browse'],
+      description: 'SDK matrix test key',
+      indexes: [TEST_INDEX]
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Create key failed (${response.status}): ${await response.text()}`);
+  }
+
+  const result = await response.json();
+  if (!result.key) {
+    throw new Error('Expected "key" in create key response');
+  }
+
+  // Store for subsequent tests
+  globalThis.__testApiKey = result.key;
+});
+
+test('GET /1/keys - list API keys', async () => {
+  const response = await fetch(`${FLAPJACK_URL}/1/keys`, {
+    headers: {
+      'x-algolia-api-key': FLAPJACK_ADMIN_KEY,
+      'x-algolia-application-id': 'flapjack'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`List keys failed (${response.status}): ${await response.text()}`);
+  }
+
+  const result = await response.json();
+  if (!Array.isArray(result.keys)) {
+    throw new Error(`Expected "keys" array, got ${typeof result.keys}`);
+  }
+});
+
+test('GET /1/keys/:key - get specific API key', async () => {
+  const key = globalThis.__testApiKey;
+  if (!key) throw new Error('No test API key from previous test');
+
+  const response = await fetch(`${FLAPJACK_URL}/1/keys/${key}`, {
+    headers: {
+      'x-algolia-api-key': FLAPJACK_ADMIN_KEY,
+      'x-algolia-application-id': 'flapjack'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Get key failed (${response.status}): ${await response.text()}`);
+  }
+
+  const result = await response.json();
+  if (result.value !== key) {
+    throw new Error(`Expected key value "${key}", got "${result.value}"`);
+  }
+});
+
+test('DELETE /1/keys/:key - delete API key', async () => {
+  const key = globalThis.__testApiKey;
+  if (!key) throw new Error('No test API key from previous test');
+
+  const response = await fetch(`${FLAPJACK_URL}/1/keys/${key}`, {
+    method: 'DELETE',
+    headers: {
+      'x-algolia-api-key': FLAPJACK_ADMIN_KEY,
+      'x-algolia-application-id': 'flapjack'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Delete key failed (${response.status}): ${await response.text()}`);
+  }
+
+  // Verify key is gone
+  const getResponse = await fetch(`${FLAPJACK_URL}/1/keys/${key}`, {
+    headers: {
+      'x-algolia-api-key': FLAPJACK_ADMIN_KEY,
+      'x-algolia-application-id': 'flapjack'
+    }
+  });
+
+  if (getResponse.ok) {
+    throw new Error('Key should have been deleted but GET returned 200');
+  }
+});
+
+// =========================================================================
+// InstantSearch Response Shapes
+// =========================================================================
+
+test('Search response - InstantSearch-compatible shape (hits, facets, pagination, highlighting)', async () => {
+  // Ensure we have data and faceting configured
+  await client.setSettings({
+    indexName: TEST_INDEX,
+    indexSettings: {
+      attributesForFaceting: ['brand', 'category'],
+      searchableAttributes: ['name']
+    }
+  });
+
+  await client.saveObjects({
+    indexName: TEST_INDEX,
+    objects: [
+      { objectID: 'is_1', name: 'InstantSearch Test Product', brand: 'TestBrand', category: 'TestCat' }
+    ]
+  });
+
+  await waitForIndexing(TEST_INDEX, 1);
+
+  const result = await client.search({
+    requests: [{
+      indexName: TEST_INDEX,
+      query: 'InstantSearch',
+      facets: ['brand', 'category'],
+      hitsPerPage: 5,
+      page: 0
+    }]
+  });
+
+  const r = result.results[0];
+
+  // hits array
+  if (!Array.isArray(r.hits)) {
+    throw new Error('Missing hits array');
+  }
+
+  // pagination metadata
+  if (typeof r.nbHits !== 'number') throw new Error(`nbHits must be number, got ${typeof r.nbHits}`);
+  if (typeof r.page !== 'number') throw new Error(`page must be number, got ${typeof r.page}`);
+  if (typeof r.nbPages !== 'number') throw new Error(`nbPages must be number, got ${typeof r.nbPages}`);
+  if (typeof r.hitsPerPage !== 'number') throw new Error(`hitsPerPage must be number, got ${typeof r.hitsPerPage}`);
+  if (typeof r.processingTimeMS !== 'number') throw new Error(`processingTimeMS must be number, got ${typeof r.processingTimeMS}`);
+
+  // facets object
+  if (!r.facets || typeof r.facets !== 'object') {
+    throw new Error('Missing facets object in response');
+  }
+
+  // _highlightResult in hits
+  if (r.hits.length > 0) {
+    const hit = r.hits[0];
+    if (!hit._highlightResult) {
+      throw new Error('Missing _highlightResult in hit');
+    }
+    if (!hit.objectID) {
+      throw new Error('Missing objectID in hit');
+    }
+  }
+});
+
 test('DELETE /1/indexes/{indexName} - delete index', async () => {
   const tempIndex = 'temp_' + Date.now();
   
@@ -552,37 +782,8 @@ test('DELETE /1/indexes/{indexName} - delete index', async () => {
   }
 });
 
-async function runAllTests() {
-  console.log(`\n=== Running ${tests.length} Contract Tests ===\n`);
-  
-  await cleanup();
-  
-  let passed = 0;
-  let failed = 0;
-  
-  for (const { name, fn } of tests) {
-    try {
-      await fn();
-      console.log(`✓ ${name}`);
-      passed++;
-    } catch (e) {
-      console.log(`✗ ${name}`);
-      console.log(`  Error: ${e.message}`);
-      if (e.stack) {
-        console.log(`  ${e.stack.split('\n')[1]}`);
-      }
-      failed++;
-    }
-  }
-  
-  console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
-  
-  await cleanup();
-  
-  process.exit(failed > 0 ? 1 : 0);
-}
-
-runAllTests().catch(e => {
-  console.error('Fatal error:', e);
-  process.exit(1);
+runAllTests({
+  banner: 'Contract Tests',
+  setup: cleanup,
+  cleanup,
 });

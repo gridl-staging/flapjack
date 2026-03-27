@@ -1,6 +1,11 @@
+/**
+ */
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 
+/**
+ * TODO: Document HealthDetail.
+ */
 export interface HealthDetail {
   status: string;
   active_writers: number;
@@ -15,6 +20,10 @@ export interface HealthDetail {
   pressure_level: string;
   allocator: string;
   build_profile: string;
+  capabilities: {
+    vectorSearch: boolean;
+    vectorSearchLocal: boolean;
+  };
 }
 
 export interface InternalStatus {
@@ -29,12 +38,32 @@ export interface InternalStatus {
   };
 }
 
+type HealthDetailResponse = Omit<HealthDetail, 'capabilities'> & {
+  capabilities?: Partial<HealthDetail['capabilities']>;
+};
+
+const HEALTH_DETAIL_QUERY_KEY = ['health-detail'] as const;
+const INTERNAL_STATUS_QUERY_KEY = ['internal-status'] as const;
+
+function normalizeHealthDetail(data: HealthDetailResponse): HealthDetail {
+  return {
+    ...data,
+    capabilities: {
+      vectorSearch: data.capabilities?.vectorSearch ?? false,
+      vectorSearchLocal: data.capabilities?.vectorSearchLocal ?? false,
+    },
+  };
+}
+
+/**
+ * TODO: Document useHealthDetail.
+ */
 export function useHealthDetail() {
   return useQuery<HealthDetail>({
-    queryKey: ['health-detail'],
+    queryKey: HEALTH_DETAIL_QUERY_KEY,
     queryFn: async () => {
-      const { data } = await api.get('/health');
-      return data;
+      const { data } = await api.get<HealthDetailResponse>('/health');
+      return normalizeHealthDetail(data);
     },
     refetchInterval: 5000,
     retry: 1,
@@ -43,7 +72,7 @@ export function useHealthDetail() {
 
 export function useInternalStatus() {
   return useQuery<InternalStatus>({
-    queryKey: ['internal-status'],
+    queryKey: INTERNAL_STATUS_QUERY_KEY,
     queryFn: async () => {
       const { data } = await api.get('/internal/status');
       return data;

@@ -1,13 +1,53 @@
+/**
+ */
 import { useQuery } from '@tanstack/react-query';
 import { parsePrometheusText, type PrometheusMetric } from '@/lib/prometheusParser';
+import { useAuth } from '@/hooks/useAuth';
 
+const DEFAULT_METRICS_APP_ID = 'flapjack';
+const METRICS_QUERY_KEY = 'prometheus-metrics';
+
+function getEffectiveMetricsAppId(appId: string | null | undefined) {
+  return appId || DEFAULT_METRICS_APP_ID;
+}
+
+function getApiKeyFingerprint(apiKey: string | null | undefined) {
+  if (!apiKey) {
+    return 'anonymous';
+  }
+
+  // Fingerprint the credential so React Query invalidates on key rotation
+  // without storing the raw secret in cache metadata.
+  let hash = 2166136261;
+  for (let index = 0; index < apiKey.length; index += 1) {
+    hash ^= apiKey.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return `authenticated:${apiKey.length}:${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * TODO: Document usePrometheusMetrics.
+ */
 export function usePrometheusMetrics() {
+  const appId = useAuth((state) => state.appId);
+  const apiKey = useAuth((state) => state.apiKey);
+  const effectiveAppId = getEffectiveMetricsAppId(appId);
+  const credentialScope = getApiKeyFingerprint(apiKey);
+
   return useQuery<PrometheusMetric[]>({
-    queryKey: ['prometheus-metrics'],
+    queryKey: [METRICS_QUERY_KEY, effectiveAppId, credentialScope],
     queryFn: async () => {
       // Fetch directly from the backend — /metrics can't go through the Vite proxy
       // because the dashboard page route is also /metrics (SPA path conflict).
-      const res = await fetch(`${__BACKEND_URL__}/metrics`);
+      const headers: Record<string, string> = {
+        'x-algolia-application-id': effectiveAppId,
+      };
+      if (apiKey) {
+        headers['x-algolia-api-key'] = apiKey;
+      }
+      const res = await fetch(`${__BACKEND_URL__}/metrics`, { headers });
       if (!res.ok) throw new Error(`Metrics fetch failed: ${res.status}`);
       const text = await res.text();
       return parsePrometheusText(text);

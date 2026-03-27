@@ -1,3 +1,4 @@
+//! Background task queue that serializes long-running index operations (currently export) via a bounded mpsc channel, tracking each task's lifecycle in a shared `DashMap`.
 use crate::error::Result;
 use crate::types::{TaskInfo, TaskStatus, TenantId};
 use dashmap::DashMap;
@@ -43,6 +44,18 @@ impl TaskQueue {
     }
 }
 
+/// Consume commands from the task-queue channel and dispatch each to its handler.
+///
+/// Runs as a long-lived tokio task. On each received `TaskCommand` the weak
+/// `IndexManager` reference is upgraded; if the manager has been dropped the
+/// task status is marked as failed and the loop exits. Currently all commands
+/// are `Export` variants and are forwarded to `process_export`.
+///
+/// # Arguments
+///
+/// * `rx` — Receiving half of the bounded command channel.
+/// * `tasks` — Shared map of in-flight task metadata, updated with status changes.
+/// * `manager_weak` — Weak reference to the `IndexManager`; breaks the loop when dropped.
 async fn process_tasks(
     mut rx: mpsc::Receiver<TaskCommand>,
     tasks: Arc<DashMap<String, TaskInfo>>,
@@ -70,6 +83,22 @@ async fn process_tasks(
     }
 }
 
+/// Execute a full index export for a single tenant.
+///
+/// Flushes in-flight writes by draining the tenant's write queue and awaiting
+/// its write-task handle, then copies the on-disk index directory to
+/// `dest_path` using a blocking filesystem copy. The tenant's writer and
+/// loaded-index entries are removed from the manager regardless of outcome.
+/// Task status in `tasks` is updated to `Processing`, then to `Succeeded` or
+/// `Failed` at each stage.
+///
+/// # Arguments
+///
+/// * `task_id` — Unique identifier used to update status in the shared task map.
+/// * `tenant_id` — Tenant whose index is being exported.
+/// * `dest_path` — Target directory for the recursive copy.
+/// * `manager` — Shared `IndexManager` used to flush writers and locate source data.
+/// * `tasks` — Shared map of task metadata, mutated with progress and outcome.
 async fn process_export(
     _task_id: String,
     _tenant_id: TenantId,

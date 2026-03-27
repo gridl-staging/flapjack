@@ -3,6 +3,21 @@ import { getLocalInstanceConfig } from './local-instance-config';
 
 const instance = getLocalInstanceConfig();
 
+function parseWorkersOverride(rawValue: string | undefined): number | undefined {
+  if (!rawValue) {
+    return undefined;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
+const localWorkersOverride = parseWorkersOverride(process.env.PLAYWRIGHT_E2E_WORKERS);
+
 /**
  * Playwright configuration for Flapjack dashboard.
  *
@@ -19,7 +34,7 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : 3,
+  workers: process.env.CI ? 1 : (localWorkersOverride ?? 3),
   reporter: 'html',
 
   use: {
@@ -60,9 +75,20 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: 'npm run dev',
+    command: 'node scripts/playwright-webserver.mjs',
+    env: {
+      ...process.env,
+      PLAYWRIGHT_WEBSERVER_HOST: instance.host,
+      PLAYWRIGHT_WEBSERVER_PORT: String(instance.dashboardPort),
+      PLAYWRIGHT_WEBSERVER_URL: instance.dashboardBaseUrl,
+      // Always spawn a fresh dashboard process for this run. Reuse mode depends on
+      // a cross-process lease file and can block indefinitely if a stale lease is left behind.
+      PLAYWRIGHT_WEBSERVER_REUSE: '0',
+    },
     url: instance.dashboardBaseUrl,
-    reuseExistingServer: !process.env.CI,
+    // Always start this workspace's Vite server so Playwright never reuses a foreign repo
+    // that happens to already be listening on the shared local dashboard port.
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

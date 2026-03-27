@@ -1,10 +1,7 @@
-//! Facet tests — lib-inline for speed.
-//!
-//! Moved from engine/tests/test_facets.rs so these 43 tests run in-process
-//! via `cargo test --lib` (~1s) instead of nextest process-per-test (~65s).
-//! Only tests that use `flapjack_http` remain in the integration test file.
+//! In-process facet integration tests covering facet counting, filtering, pagination, cache invalidation, hierarchical facets, maxValuesPerFacet enforcement, and edge cases like special characters and missing settings.
 
 use crate::index::settings::IndexSettings;
+use crate::integ_tests::search_compat::SearchCompat;
 use crate::types::{Document, FacetRequest, FieldValue};
 use crate::IndexManager;
 use std::collections::HashMap;
@@ -49,6 +46,16 @@ fn facet_req(field: &str) -> FacetRequest {
     }
 }
 
+/// Create a temporary index with the given facet settings and documents.
+///
+/// # Arguments
+///
+/// * `facet_fields` - Field names to register in `attributesForFaceting`.
+/// * `docs` - Documents to index synchronously.
+///
+/// # Returns
+///
+/// A `(TempDir, Arc<IndexManager>)` tuple; the `TempDir` must be held alive for the index lifetime.
 async fn setup_with_settings(
     facet_fields: Vec<&str>,
     docs: Vec<Document>,
@@ -69,6 +76,15 @@ async fn setup_with_settings(
     (temp_dir, manager)
 }
 
+/// Create a temporary index pre-loaded with 8 electronics-store documents across 5 brands and 5 categories.
+///
+/// # Arguments
+///
+/// * `faceting_attrs` - Faceting attribute strings (may include `searchable(…)` modifiers).
+///
+/// # Returns
+///
+/// A `(TempDir, Arc<IndexManager>)` tuple.
 async fn setup_facet_search_env(
     faceting_attrs: Vec<&str>,
 ) -> (TempDir, std::sync::Arc<IndexManager>) {
@@ -155,6 +171,11 @@ async fn setup_facet_search_env(
     (temp_dir, manager)
 }
 
+/// Create a temporary index with `n` documents, each having a unique `Brand_XXXX` value and `maxValuesPerFacet` set to 10.
+///
+/// # Arguments
+///
+/// * `n` - Number of documents (and distinct brand values) to generate.
 async fn setup_many_brands(n: usize) -> (TempDir, std::sync::Arc<IndexManager>) {
     let temp_dir = TempDir::new().unwrap();
     let manager = IndexManager::new(temp_dir.path());
@@ -189,6 +210,7 @@ async fn setup_many_brands(n: usize) -> (TempDir, std::sync::Arc<IndexManager>) 
 // Regression: bugs fixed in facet collection
 // ============================================================
 
+/// Verify that facet results are non-empty and contain correct per-value counts — regression guard for a bug that returned `HashMap::new()` instead of populated facets.
 #[tokio::test]
 async fn test_facets_returned_not_empty_hashmap() {
     let docs = vec![
@@ -235,6 +257,7 @@ async fn test_facets_returned_not_empty_hashmap() {
     assert_eq!(samsung_count, Some(1), "Samsung should have count=1");
 }
 
+/// Verify that array-valued string fields are expanded into individual facet values with correct counts.
 #[tokio::test]
 async fn test_array_string_fields_indexed_as_facets() {
     let docs = vec![
@@ -296,6 +319,7 @@ async fn test_array_string_fields_indexed_as_facets() {
 // Facets with queries, filters, sort, pagination
 // ============================================================
 
+/// Verify that facet counts are scoped to documents matching a text query.
 #[tokio::test]
 async fn test_facets_with_text_query() {
     let docs = vec![
@@ -336,6 +360,7 @@ async fn test_facets_with_text_query() {
     assert_eq!(samsung.map(|f| f.count), Some(2));
 }
 
+/// Verify that facet counts reflect filter constraints when a `Filter::Equals` is applied.
 #[tokio::test]
 async fn test_facets_with_filter() {
     use crate::types::Filter;
@@ -389,6 +414,7 @@ async fn test_facets_with_filter() {
     assert!(brand_facets.iter().any(|f| f.path == "Samsung"));
 }
 
+/// Verify that facet counts remain consistent across different page offsets.
 #[tokio::test]
 async fn test_facets_with_pagination() {
     let docs = (0..25)
@@ -433,6 +459,7 @@ async fn test_facets_with_pagination() {
     );
 }
 
+/// Verify that an empty query string returns facet counts covering every indexed document.
 #[tokio::test]
 async fn test_facets_empty_query_returns_all_counts() {
     let docs = vec![
@@ -460,6 +487,7 @@ async fn test_facets_empty_query_returns_all_counts() {
 // Multiple facet fields simultaneously
 // ============================================================
 
+/// Verify that requesting multiple facet fields in a single query returns independent counts for each field.
 #[tokio::test]
 async fn test_multiple_facet_fields() {
     let docs = vec![
@@ -512,6 +540,7 @@ async fn test_multiple_facet_fields() {
 // Safety: edge cases, missing config, bad input
 // ============================================================
 
+/// Verify that requesting a facet field not listed in `attributesForFaceting` does not cause an error.
 #[tokio::test]
 async fn test_facets_field_not_in_settings_returns_empty() {
     let docs = vec![doc(
@@ -542,6 +571,7 @@ async fn test_facets_field_not_in_settings_returns_empty() {
     );
 }
 
+/// Verify that searching with facet requests succeeds even when no `settings.json` file exists for the index.
 #[tokio::test]
 async fn test_facets_no_settings_file() {
     let temp_dir = TempDir::new().unwrap();
@@ -562,6 +592,7 @@ async fn test_facets_no_settings_file() {
     );
 }
 
+/// Verify that facet values containing ampersands, apostrophes, and other special characters are indexed and counted correctly.
 #[tokio::test]
 async fn test_facets_special_characters_in_values() {
     let docs = vec![
@@ -593,6 +624,7 @@ async fn test_facets_special_characters_in_values() {
     assert_eq!(att.map(|f| f.count), Some(2), "AT&T should have 2 docs");
 }
 
+/// Verify that string and array facet fields can be queried simultaneously in a single search request.
 #[tokio::test]
 async fn test_facets_mixed_string_and_array_fields() {
     let docs = vec![
@@ -639,6 +671,7 @@ async fn test_facets_mixed_string_and_array_fields() {
     );
 }
 
+/// Verify that documents with empty array fields do not produce spurious facet entries while non-empty arrays are counted normally.
 #[tokio::test]
 async fn test_facets_empty_array_field() {
     let docs = vec![
@@ -673,6 +706,7 @@ async fn test_facets_empty_array_field() {
     }
 }
 
+/// Verify that numeric fields listed in `attributesForFaceting` do not interfere with string facet collection.
 #[tokio::test]
 async fn test_facets_numeric_field_not_indexed() {
     let docs = vec![
@@ -714,6 +748,7 @@ async fn test_facets_numeric_field_not_indexed() {
     );
 }
 
+/// Verify that facet counts are still populated when distinct deduplication is active via `search_with_facets_and_distinct`.
 #[tokio::test]
 async fn test_facets_with_distinct() {
     let docs = vec![
@@ -784,6 +819,7 @@ async fn test_facets_with_distinct() {
 // Correctness: facet counts reflect actual data
 // ============================================================
 
+/// Verify exact facet count accuracy across 100 documents evenly distributed among 4 brand values (25 each).
 #[tokio::test]
 async fn test_facet_counts_accuracy_100_docs() {
     let docs: Vec<Document> = (0..100)
@@ -820,6 +856,7 @@ async fn test_facet_counts_accuracy_100_docs() {
     }
 }
 
+/// Verify that facet counts reflect the intersection of a filter with the full document set.
 #[tokio::test]
 async fn test_facet_counts_with_query_filter_interaction() {
     use crate::types::Filter;
@@ -900,6 +937,7 @@ async fn test_facet_counts_with_query_filter_interaction() {
     );
 }
 
+/// Verify that a `*` wildcard facet request expands to all fields listed in `attributesForFaceting`.
 #[tokio::test]
 async fn test_facets_wildcard_star_expands_to_all() {
     use std::collections::HashSet;
@@ -964,6 +1002,7 @@ async fn test_facets_wildcard_star_expands_to_all() {
     assert_eq!(result.facets.get("brand").unwrap().len(), 2);
 }
 
+/// Verify that facet counts update correctly after new documents are added, ensuring cached facet data is invalidated on write.
 #[tokio::test]
 async fn test_facet_cache_invalidated_on_write() {
     let docs = vec![
@@ -1013,6 +1052,7 @@ async fn test_facet_cache_invalidated_on_write() {
 // Algolia hierarchical facets
 // ============================================================
 
+/// Verify that hierarchical facet fields (Algolia `lvl0` convention) return only top-level children with correct counts.
 #[test]
 fn test_algolia_hierarchical_facets_top_level() {
     use serde_json::json;
@@ -1038,14 +1078,17 @@ fn test_algolia_hierarchical_facets_top_level() {
             &searcher,
             query,
             None,
-            None,
-            10,
-            0,
-            false,
-            Some(&[FacetRequest {
-                field: "categories.lvl0".into(),
-                path: "/categories.lvl0".into(),
-            }]),
+            &crate::query::executor::FacetSearchParams {
+                sort: None,
+                limit: 10,
+                offset: 0,
+                has_text_query: false,
+                facet_requests: Some(&[FacetRequest {
+                    field: "categories.lvl0".into(),
+                    path: "/categories.lvl0".into(),
+                }]),
+                distinct_count: None,
+            },
         )
         .unwrap();
 
@@ -1065,6 +1108,7 @@ fn test_algolia_hierarchical_facets_top_level() {
     );
 }
 
+/// Verify that querying a `lvl1` hierarchical facet field returns second-level facet values with correct counts.
 #[test]
 fn test_facet_drill_down() {
     use serde_json::json;
@@ -1089,14 +1133,17 @@ fn test_facet_drill_down() {
             &searcher,
             query,
             None,
-            None,
-            10,
-            0,
-            false,
-            Some(&[FacetRequest {
-                field: "categories.lvl1".into(),
-                path: "/categories.lvl1".into(),
-            }]),
+            &crate::query::executor::FacetSearchParams {
+                sort: None,
+                limit: 10,
+                offset: 0,
+                has_text_query: false,
+                facet_requests: Some(&[FacetRequest {
+                    field: "categories.lvl1".into(),
+                    path: "/categories.lvl1".into(),
+                }]),
+                distinct_count: None,
+            },
         )
         .unwrap();
 
@@ -1192,6 +1239,7 @@ fn test_facet_set_still_includes_all() {
     assert_eq!(set.len(), 3);
 }
 
+/// Verify that facets configured with the `searchable(…)` modifier are returned with correct counts via `search_full`.
 #[tokio::test]
 async fn test_facet_search_with_searchable_modifier() {
     let (_tmp, mgr) =
@@ -1220,6 +1268,7 @@ async fn test_facet_search_with_searchable_modifier() {
     );
 }
 
+/// Verify that facet values can be filtered by prefix (e.g. "sam" matches Samsung and Samsonite).
 #[tokio::test]
 async fn test_facet_search_prefix_filtering() {
     let (_tmp, mgr) = setup_facet_search_env(vec!["searchable(brand)"]).await;
@@ -1244,6 +1293,7 @@ async fn test_facet_search_prefix_filtering() {
     assert_eq!(sam_matches.len(), 2, "Samsung + Samsonite");
 }
 
+/// Verify that an empty facet search query returns all distinct facet values.
 #[tokio::test]
 async fn test_facet_search_empty_query_returns_all() {
     let (_tmp, mgr) = setup_facet_search_env(vec!["searchable(brand)"]).await;
@@ -1268,6 +1318,7 @@ async fn test_facet_search_empty_query_returns_all() {
     );
 }
 
+/// Verify that the `maxValuesPerFacet` query parameter caps the number of returned facet values.
 #[tokio::test]
 async fn test_facet_search_respects_max_values() {
     let (_tmp, mgr) = setup_facet_search_env(vec!["searchable(brand)"]).await;
@@ -1292,6 +1343,7 @@ async fn test_facet_search_respects_max_values() {
     );
 }
 
+/// Verify end-to-end facet search with prefix matching returns expected brand values (Samsung and Samsonite for "sam").
 #[tokio::test]
 async fn test_facet_search_params_string_integration() {
     let (_tmp, mgr) = setup_facet_search_env(vec!["searchable(brand)"]).await;
@@ -1332,6 +1384,7 @@ async fn test_facet_search_rejects_non_searchable() {
     );
 }
 
+/// Verify that facet values are returned sorted by count in descending order.
 #[tokio::test]
 async fn test_facet_search_sorted_by_count_desc() {
     let (_tmp, mgr) = setup_facet_search_env(vec!["searchable(brand)"]).await;
@@ -1359,6 +1412,7 @@ async fn test_facet_search_sorted_by_count_desc() {
     }
 }
 
+/// Verify that facet count ordering is preserved through JSON serialization and deserialization round-trip.
 #[tokio::test]
 async fn test_facet_json_serialization_preserves_count_order() {
     let (_tmp, mgr) = setup_facet_search_env(vec!["searchable(brand)"]).await;
@@ -1412,6 +1466,7 @@ async fn test_max_values_per_facet_settings_enforced() {
     );
 }
 
+/// Verify that a per-query `maxValuesPerFacet` value lower than the settings value takes precedence.
 #[tokio::test]
 async fn test_max_values_per_facet_query_override() {
     let (_tmp, mgr) = setup_many_brands(50).await;
@@ -1437,6 +1492,7 @@ async fn test_max_values_per_facet_query_override() {
     );
 }
 
+/// Verify that a per-query `maxValuesPerFacet` value higher than the settings value is honored.
 #[tokio::test]
 async fn test_max_values_per_facet_query_override_higher() {
     let (_tmp, mgr) = setup_many_brands(50).await;
@@ -1462,6 +1518,7 @@ async fn test_max_values_per_facet_query_override_higher() {
     );
 }
 
+/// Verify that requesting `maxValuesPerFacet` above 1000 is capped and returns only the available values.
 #[tokio::test]
 async fn test_max_values_per_facet_capped_at_1000() {
     let (_tmp, mgr) = setup_many_brands(50).await;
@@ -1487,6 +1544,7 @@ async fn test_max_values_per_facet_capped_at_1000() {
     );
 }
 
+/// Verify that the default `maxValuesPerFacet` is 100 when the setting is not explicitly configured.
 #[tokio::test]
 async fn test_max_values_default_100_when_no_settings() {
     let temp_dir = TempDir::new().unwrap();
@@ -1543,6 +1601,7 @@ async fn test_max_values_per_facet_missing_from_json_defaults_100() {
 mod response_fields {
     use super::*;
 
+    /// Create a temporary index with 5 documents across 3 brands and 5 categories, configured with `searchable(brand)` and `searchable(category)` faceting attributes.
     async fn rf_setup() -> (TempDir, std::sync::Arc<IndexManager>) {
         let temp_dir = TempDir::new().unwrap();
         let manager = IndexManager::new(temp_dir.path());
@@ -1606,6 +1665,7 @@ mod response_fields {
         (temp_dir, manager)
     }
 
+    /// Verify that `limit=0` returns zero documents while still populating facet counts.
     #[tokio::test]
     async fn test_limit_zero_returns_no_docs_but_facets() {
         let (_tmp, mgr) = rf_setup().await;
@@ -1635,6 +1695,7 @@ mod response_fields {
         );
     }
 
+    /// Verify that `limit=0` combined with a text query returns zero documents while still returning facet counts scoped to the query.
     #[tokio::test]
     async fn test_limit_zero_with_query_returns_no_docs_but_facets() {
         let (_tmp, mgr) = rf_setup().await;

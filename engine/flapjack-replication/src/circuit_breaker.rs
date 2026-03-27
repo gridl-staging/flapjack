@@ -224,6 +224,7 @@ mod tests {
         assert_eq!(cb.state(), CircuitState::Closed);
     }
 
+    /// Verify the complete circuit breaker lifecycle: Closed → Open (via threshold failures) → HalfOpen (via simulated timeout) → Closed (via successful probe).
     #[test]
     fn full_cycle_closed_open_halfopen_closed() {
         let cb = CircuitBreaker::new(2, 999);
@@ -244,6 +245,7 @@ mod tests {
         assert_eq!(cb.consecutive_failures(), 0);
     }
 
+    /// Verify the circuit breaker lifecycle where the first half-open probe fails (returning to Open) and a second probe succeeds, completing the Closed → Open → HalfOpen → Open → HalfOpen → Closed cycle.
     #[test]
     fn full_cycle_with_half_open_failure() {
         let cb = CircuitBreaker::new(2, 999);

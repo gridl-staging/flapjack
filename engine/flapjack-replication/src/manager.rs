@@ -1,10 +1,14 @@
 use super::circuit_breaker::CircuitState;
 use super::config::NodeConfig;
 use super::peer::PeerClient;
-use super::types::{GetOpsQuery, PeerHealthStatus, ReplicateOpsRequest};
+use super::types::{
+    GetOpsQuery, GetOpsResponse, ListTenantsResponse, PeerHealthStatus, ReplicateOpsRequest,
+};
 use dashmap::DashMap;
 use flapjack::index::oplog::OpLogEntry;
+use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 
@@ -17,12 +21,20 @@ pub struct ReplicationManager {
     /// Inner map: peer_id -> last_acked_seq
     peer_cursors: Arc<DashMap<String, DashMap<String, u64>>>,
     /// Handle to the background health probe task (if running)
-    #[allow(dead_code)]
-    health_probe_handle: Option<JoinHandle<()>>,
+    health_probe_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl ReplicationManager {
-    pub fn new(node_config: NodeConfig) -> Arc<Self> {
+    /// Initialize a ReplicationManager from the given configuration, creating PeerClient instances for each configured peer. Peer acknowledgment cursors start empty, and the background health probe is not running until explicitly started via `start_health_probe`.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_config` - Configuration containing this node's identity and the list of peer addresses to replicate to.
+    ///
+    /// # Returns
+    ///
+    /// An Arc-wrapped ReplicationManager ready for use in multi-threaded contexts.
+    pub fn new(node_config: NodeConfig, admin_key: Option<String>) -> Arc<Self> {
         let peers: Vec<Arc<PeerClient>> = node_config
             .peers
             .iter()
@@ -30,6 +42,7 @@ impl ReplicationManager {
                 Arc::new(PeerClient::new(
                     peer_config.node_id.clone(),
                     peer_config.addr.clone(),
+                    admin_key.clone(),
                 ))
             })
             .collect();
@@ -38,7 +51,7 @@ impl ReplicationManager {
             node_config,
             peers,
             peer_cursors: Arc::new(DashMap::new()),
-            health_probe_handle: None,
+            health_probe_handle: Mutex::new(None),
         })
     }
 
@@ -146,6 +159,17 @@ impl ReplicationManager {
         tenant_id: &str,
         local_seq: u64,
     ) -> Result<Vec<OpLogEntry>, String> {
+        self.catch_up_from_peer_with_metadata(tenant_id, local_seq)
+            .await
+            .map(|resp| resp.ops)
+    }
+
+    /// Catch up from peers and return full wire metadata from the selected peer.
+    pub async fn catch_up_from_peer_with_metadata(
+        &self,
+        tenant_id: &str,
+        local_seq: u64,
+    ) -> Result<GetOpsResponse, String> {
         if self.peers.is_empty() {
             return Err("No peers available for catch-up".to_string());
         }
@@ -168,7 +192,7 @@ impl ReplicationManager {
                         local_seq,
                         resp.current_seq
                     );
-                    return Ok(resp.ops);
+                    return Ok(resp);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -178,6 +202,90 @@ impl ReplicationManager {
                         e
                     );
                     last_error = e;
+                }
+            }
+        }
+
+        Err(last_error)
+    }
+
+    /// Discover visible tenant IDs from currently available peers.
+    pub async fn discover_tenants_from_peers(&self) -> Vec<String> {
+        self.discover_tenants_from_peers_internal(false)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Discover visible tenant IDs from peers, requiring at least one peer to
+    /// answer successfully when peers are configured.
+    pub async fn discover_tenants_from_peers_strict(&self) -> Result<Vec<String>, String> {
+        self.discover_tenants_from_peers_internal(true).await
+    }
+
+    /// TODO: Document ReplicationManager.discover_tenants_from_peers_internal.
+    async fn discover_tenants_from_peers_internal(
+        &self,
+        require_success: bool,
+    ) -> Result<Vec<String>, String> {
+        if self.peers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut tenants = BTreeSet::new();
+        let mut any_success = false;
+        let mut last_error = String::from("All peers have tripped circuit breakers");
+        for peer in self.peers.iter().filter(|p| p.is_available()) {
+            match peer.list_tenants().await {
+                Ok(ListTenantsResponse {
+                    tenants: peer_tenants,
+                }) => {
+                    any_success = true;
+                    tenants.extend(peer_tenants);
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        "[REPL] tenant discovery from peer {} failed: {}",
+                        peer.peer_id(),
+                        error
+                    );
+                    last_error = error;
+                }
+            }
+        }
+
+        if require_success && !any_success {
+            return Err(last_error);
+        }
+
+        Ok(tenants.into_iter().collect())
+    }
+
+    /// Download a full tenant snapshot from peers, trying available peers in order.
+    pub async fn download_snapshot_from_peer(&self, tenant_id: &str) -> Result<Vec<u8>, String> {
+        if self.peers.is_empty() {
+            return Err("No peers available for snapshot restore".to_string());
+        }
+
+        let mut last_error = String::from("All peers have tripped circuit breakers");
+        for peer in self.peers.iter().filter(|p| p.is_available()) {
+            match peer.get_snapshot(tenant_id).await {
+                Ok(bytes) => {
+                    tracing::info!(
+                        "[REPL {}] downloaded snapshot from peer {} ({} bytes)",
+                        tenant_id,
+                        peer.peer_id(),
+                        bytes.len()
+                    );
+                    return Ok(bytes);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "[REPL {}] snapshot download from peer {} failed, trying next: {}",
+                        tenant_id,
+                        peer.peer_id(),
+                        error
+                    );
+                    last_error = error;
                 }
             }
         }
@@ -229,10 +337,11 @@ impl ReplicationManager {
     }
 
     /// Start background health probing of all peers at the given interval.
-    /// Returns a JoinHandle that can be used to cancel the task.
-    pub fn start_health_probe(self: &Arc<Self>, interval_secs: u64) -> JoinHandle<()> {
+    /// Replaces any previously running probe loop so there is at most one active task.
+    pub fn start_health_probe(self: &Arc<Self>, interval_secs: u64) {
+        self.stop_health_probe();
         let manager = Arc::clone(self);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
             // Skip the first immediate tick
@@ -252,7 +361,20 @@ impl ReplicationManager {
                     }
                 }
             }
-        })
+        });
+        let mut slot = self.health_probe_handle.lock().unwrap();
+        *slot = Some(handle);
+    }
+
+    /// Stop a running background health probe task, if any.
+    pub fn stop_health_probe(&self) -> bool {
+        match self.health_probe_handle.lock().unwrap().take() {
+            Some(handle) => {
+                handle.abort();
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -272,7 +394,7 @@ mod tests {
             }],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
 
         assert_eq!(manager.node_id(), "node-a");
         assert_eq!(manager.peer_count(), 1);
@@ -286,12 +408,13 @@ mod tests {
             peers: vec![],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
 
         assert_eq!(manager.node_id(), "standalone");
         assert_eq!(manager.peer_count(), 0);
     }
 
+    /// Verify that all configured peers are initially available and `is_peer_available()` returns false for unknown peers.
     #[test]
     fn test_all_peers_available_initially() {
         let config = NodeConfig {
@@ -309,13 +432,14 @@ mod tests {
             ],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
         assert!(manager.is_peer_available("node-b"));
         assert!(manager.is_peer_available("node-c"));
         assert!(!manager.is_peer_available("node-d")); // unknown peer
         assert_eq!(manager.available_peers().len(), 2);
     }
 
+    /// Verify that peer health statuses report 'never_contacted' with no timestamp before any peer has been successfully contacted.
     #[test]
     fn test_peer_statuses_initially_never_contacted() {
         let config = NodeConfig {
@@ -327,7 +451,7 @@ mod tests {
             }],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
         let statuses = manager.peer_statuses();
 
         assert_eq!(statuses.len(), 1);
@@ -345,10 +469,33 @@ mod tests {
             peers: vec![],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
         assert!(manager.peer_statuses().is_empty());
     }
 
+    /// TODO: Document test_health_probe_handle_starts_and_stops.
+    #[tokio::test]
+    async fn test_health_probe_handle_starts_and_stops() {
+        let config = NodeConfig {
+            node_id: "node-a".to_string(),
+            bind_addr: "0.0.0.0:7700".to_string(),
+            peers: vec![PeerConfig {
+                node_id: "node-b".to_string(),
+                addr: "http://node-b:7700".to_string(),
+            }],
+        };
+        let manager = ReplicationManager::new(config, None);
+
+        assert!(manager.health_probe_handle.lock().unwrap().is_none());
+        manager.start_health_probe(1);
+        assert!(manager.health_probe_handle.lock().unwrap().is_some());
+
+        assert!(manager.stop_health_probe());
+        assert!(!manager.stop_health_probe());
+        assert!(manager.health_probe_handle.lock().unwrap().is_none());
+    }
+
+    /// Verify that `available_peers()` returns a list containing all configured peer node IDs.
     #[test]
     fn test_available_peers_returns_names() {
         let config = NodeConfig {
@@ -366,7 +513,7 @@ mod tests {
             ],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
         let available = manager.available_peers();
         assert!(available.contains(&"node-b".to_string()));
         assert!(available.contains(&"node-c".to_string()));
@@ -383,7 +530,7 @@ mod tests {
             }],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
         assert!(manager.get_peer_cursors("some-tenant").is_none());
     }
 
@@ -398,7 +545,7 @@ mod tests {
             }],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
         // Empty ops should return immediately without spawning tasks
         manager.replicate_ops("test-tenant", vec![]).await;
         // No panic = success
@@ -412,7 +559,7 @@ mod tests {
             peers: vec![],
         };
 
-        let manager = ReplicationManager::new(config);
+        let manager = ReplicationManager::new(config, None);
         let result = manager.catch_up_from_peer("test-tenant", 0).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("No peers available"));

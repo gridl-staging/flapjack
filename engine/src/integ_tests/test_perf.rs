@@ -1,3 +1,5 @@
+//! Inline performance tests providing manual latency measurement and P99 regression guards for core search operations.
+use crate::integ_tests::search_compat::SearchCompat;
 /// Performance tests moved inline from engine/tests/test_perf.rs.
 ///
 /// Contains both:
@@ -14,6 +16,16 @@ use crate::{Document, FacetRequest, FieldValue, Filter, IndexManager, Sort, Sort
 use std::collections::HashMap;
 use tempfile::TempDir;
 
+/// Populate a "bench" tenant with `num_docs` synthetic product documents for latency measurement.
+///
+/// Creates documents with title, description, brand, category (facet), and price fields.
+/// Brand cycles through five vendors; category uses 50 buckets; price increases linearly.
+///
+/// # Arguments
+///
+/// * `manager` - Index manager to populate.
+/// * `rt` - Tokio runtime used to block on async document ingestion.
+/// * `num_docs` - Number of documents to generate and index.
 fn setup_quick(manager: &IndexManager, rt: &tokio::runtime::Runtime, num_docs: usize) {
     manager.create_tenant("bench").unwrap();
     let mut docs = Vec::new();
@@ -54,6 +66,16 @@ fn setup_quick(manager: &IndexManager, rt: &tokio::runtime::Runtime, num_docs: u
         .unwrap();
 }
 
+/// Run a micro-benchmark and print avg/p50/p99 latency to stdout.
+///
+/// Executes 3 warmup iterations, then `iterations` timed runs of `f`, collecting
+/// per-invocation wall-clock microseconds.
+///
+/// # Arguments
+///
+/// * `label` - Human-readable name printed alongside the results.
+/// * `iterations` - Number of timed iterations after warmup.
+/// * `f` - Closure to benchmark (called `iterations + 3` times total).
 fn measure(label: &str, iterations: usize, f: impl Fn()) {
     // Warmup
     for _ in 0..3 {
@@ -75,6 +97,13 @@ fn measure(label: &str, iterations: usize, f: impl Fn()) {
     );
 }
 
+/// Manual latency measurement across ten search scenarios on a 10 K document corpus.
+///
+/// Covers text-only, short, multi-word, long queries, filter, sort, facets,
+/// full-stack combinations, and empty-query facet browsing. Results are printed
+/// to stdout—run with `--nocapture` to see them.
+///
+/// Suffixed `_slow` so it is excluded from default `cargo test` runs.
 #[test]
 fn test_search_latency_slow() {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -184,6 +213,15 @@ const P99_SHORT_QUERY_US: u64 = 15_000;
 #[cfg(not(debug_assertions))]
 const P99_TYPEAHEAD_TOTAL_US: u64 = 60_000;
 
+/// Populate a "regr" tenant with 1 000 synthetic documents for regression testing.
+///
+/// Uses 8 brands, 5 adjectives, 20 facet categories, and linearly spaced prices.
+/// Designed to be deterministic so P99 thresholds remain stable across runs.
+///
+/// # Arguments
+///
+/// * `manager` - Index manager to populate.
+/// * `rt` - Tokio runtime used to block on async document ingestion.
 #[cfg(not(debug_assertions))]
 fn build_corpus(manager: &IndexManager, rt: &tokio::runtime::Runtime) {
     manager.create_tenant("regr").unwrap();
@@ -286,6 +324,10 @@ fn regression_multi_word_slow() {
     });
 }
 
+/// Assert that a five-term query stays below the `P99_LONG_QUERY_US` threshold.
+///
+/// Release-only. Searches "samsung premium laptop display screen" over the 1 K
+/// regression corpus and fails if P99 exceeds the budget.
 #[cfg(not(debug_assertions))]
 #[test]
 fn regression_long_query_slow() {
@@ -307,6 +349,10 @@ fn regression_long_query_slow() {
     });
 }
 
+/// Assert that text search combined with a price-range filter stays below the `P99_FILTER_US` threshold.
+///
+/// Release-only. Applies a `Filter::Range` on the price field alongside a
+/// "laptop" text query over the 1 K regression corpus.
 #[cfg(not(debug_assertions))]
 #[test]
 fn regression_filter_slow() {
@@ -327,6 +373,10 @@ fn regression_filter_slow() {
     });
 }
 
+/// Assert that text search with field-based sorting stays below the `P99_SORT_US` threshold.
+///
+/// Release-only. Sorts by price ascending alongside a "laptop" text query
+/// over the 1 K regression corpus.
 #[cfg(not(debug_assertions))]
 #[test]
 fn regression_sort_slow() {
@@ -346,6 +396,10 @@ fn regression_sort_slow() {
     });
 }
 
+/// Assert that text search with a facet request stays below the `P99_FACET_US` threshold.
+///
+/// Release-only. Requests `/electronics` category facets alongside a "laptop"
+/// text query over the 1 K regression corpus.
 #[cfg(not(debug_assertions))]
 #[test]
 fn regression_facets_slow() {
@@ -373,6 +427,10 @@ fn regression_facets_slow() {
     });
 }
 
+/// Assert that a combined text + filter + sort + facets query stays below the `P99_FULL_STACK_US` threshold.
+///
+/// Release-only. Exercises the most expensive realistic query path over the 1 K
+/// regression corpus.
 #[cfg(not(debug_assertions))]
 #[test]
 fn regression_full_stack_slow() {
@@ -409,6 +467,10 @@ fn regression_full_stack_slow() {
     });
 }
 
+/// Assert that single-character and two-character prefix queries stay below the `P99_SHORT_QUERY_US` threshold.
+///
+/// Release-only. Tests both "s" and "sa" queries independently, each against
+/// the 1 K regression corpus.
 #[cfg(not(debug_assertions))]
 #[test]
 fn regression_short_query_slow() {
@@ -433,6 +495,11 @@ fn regression_short_query_slow() {
     });
 }
 
+/// Assert that a six-keystroke typeahead sequence with facets stays below the `P99_TYPEAHEAD_TOTAL_US` threshold.
+///
+/// Release-only. Simulates progressive prefix queries ("s" → "samsun") each
+/// including a category facet request over the 1 K regression corpus. The budget
+/// applies to the aggregate wall time of all six queries per iteration.
 #[cfg(not(debug_assertions))]
 #[test]
 fn regression_typeahead_sequence_slow() {

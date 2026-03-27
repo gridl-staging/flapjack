@@ -1,4 +1,5 @@
 use serde_json::json;
+use tower::ServiceExt;
 
 mod common;
 
@@ -173,5 +174,119 @@ async fn algolia_prefixed_routes_still_work_in_open_mode() {
         body["nbHits"].as_u64().unwrap_or(0),
         1,
         "Expected one query hit from /1 endpoint"
+    );
+}
+
+#[tokio::test]
+async fn insights_events_route_is_wired_in_test_router() {
+    let (app, _temp) = common::build_test_app_for_local_requests(None);
+    let request = axum::http::Request::builder()
+        .method(axum::http::Method::POST)
+        .uri("/1/events")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "events": [{
+                    "eventType": "view",
+                    "eventName": "Product Viewed",
+                    "index": "products",
+                    "userToken": "user_123",
+                    "objectIDs": ["obj1"]
+                }]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::OK,
+        "POST /1/events should be wired in tests/common router"
+    );
+}
+
+#[tokio::test]
+async fn insights_usertoken_delete_route_is_wired_in_test_router() {
+    let (app, _temp) = common::build_test_app_for_local_requests(None);
+    let request = axum::http::Request::builder()
+        .method(axum::http::Method::DELETE)
+        .uri("/1/usertokens/user_123")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::OK,
+        "DELETE /1/usertokens/:userToken should be wired in tests/common router"
+    );
+}
+
+#[tokio::test]
+async fn analytics_add_to_cart_rate_route_is_wired_in_test_router() {
+    let (app, _temp) = common::build_test_app_for_local_requests(None);
+    let request = axum::http::Request::builder()
+        .method(axum::http::Method::GET)
+        .uri("/2/conversions/addToCartRate?index=products&startDate=2026-02-20&endDate=2026-02-20")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_ne!(
+        response.status(),
+        axum::http::StatusCode::NOT_FOUND,
+        "GET /2/conversions/addToCartRate should be wired in tests/common router"
+    );
+}
+
+#[tokio::test]
+async fn analytics_purchase_rate_route_is_wired_in_test_router() {
+    let (app, _temp) = common::build_test_app_for_local_requests(None);
+    let request = axum::http::Request::builder()
+        .method(axum::http::Method::GET)
+        .uri("/2/conversions/purchaseRate?index=products&startDate=2026-02-20&endDate=2026-02-20")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_ne!(
+        response.status(),
+        axum::http::StatusCode::NOT_FOUND,
+        "GET /2/conversions/purchaseRate should be wired in tests/common router"
+    );
+}
+
+#[tokio::test]
+async fn analytics_revenue_route_is_wired_in_test_router() {
+    let (app, _temp) = common::build_test_app_for_local_requests(None);
+    let request = axum::http::Request::builder()
+        .method(axum::http::Method::GET)
+        .uri("/2/conversions/revenue?index=products&startDate=2026-02-20&endDate=2026-02-20")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_ne!(
+        response.status(),
+        axum::http::StatusCode::NOT_FOUND,
+        "GET /2/conversions/revenue should be wired in tests/common router"
+    );
+}
+
+#[tokio::test]
+async fn analytics_countries_route_is_wired_in_test_router() {
+    let (app, _temp) = common::build_test_app_for_local_requests(None);
+    let request = axum::http::Request::builder()
+        .method(axum::http::Method::GET)
+        .uri("/2/countries?index=products&startDate=2026-02-20&endDate=2026-02-20")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_ne!(
+        response.status(),
+        axum::http::StatusCode::NOT_FOUND,
+        "GET /2/countries should be wired in tests/common router"
     );
 }

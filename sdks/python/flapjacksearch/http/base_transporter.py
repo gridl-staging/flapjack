@@ -1,3 +1,5 @@
+"""
+"""
 from typing import Any, Dict, List
 
 from flapjacksearch.http.base_config import BaseConfig
@@ -7,6 +9,7 @@ from flapjacksearch.http.retry import RetryStrategy
 
 
 class BaseTransporter:
+    """TODO: Document BaseTransporter."""
     def __init__(self, config: BaseConfig) -> None:
         self._config = config
         self._retry_strategy = RetryStrategy()
@@ -22,6 +25,7 @@ class BaseTransporter:
         request_options: RequestOptions,
         use_read_transporter: bool,
     ) -> Dict[str, Any]:
+        """TODO: Document BaseTransporter.prepare."""
         query_parameters = dict(request_options.query_parameters)
 
         if use_read_transporter:

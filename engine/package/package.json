@@ -26,7 +26,7 @@
 	"files": [
 		"index.js",
 		"index.d.ts",
-		"irregular-plurals.json"
+		"lang/plurals/irregular-plurals-en.json"
 	],
 	"keywords": [
 		"word",

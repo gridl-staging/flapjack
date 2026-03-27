@@ -74,27 +74,26 @@ else
 fi
 
 # ── Configuration Defaults ───────────────────────────────────────────────────
-
 section "Configuration Defaults"
 
 # Test 5: REPO default matches the environment (staging vs prod)
-# In staging CI: expect gridlhq-staging/flapjack
-# In prod CI: expect gridlhq/flapjack
+# In staging CI: expect gridl-staging/flapjack
+# In prod CI: expect gridl-hq/flapjack
 # Locally: accept either (dev repo has prod default, but staging sync rewrites it)
 if [ -n "${GITHUB_REPOSITORY:-}" ]; then
   case "$GITHUB_REPOSITORY" in
-    gridlhq-staging/flapjack)
-      if grep -q 'REPO=.*gridlhq-staging/flapjack' "$INSTALL_SCRIPT"; then
-        pass "Default REPO is gridlhq-staging/flapjack (staging environment)"
+    gridl-staging/flapjack)
+      if grep -q 'REPO=.*gridl-staging/flapjack' "$INSTALL_SCRIPT"; then
+        pass "Default REPO is gridl-staging/flapjack (staging environment)"
       else
-        fail "Default REPO should be gridlhq-staging/flapjack in staging environment"
+        fail "Default REPO should be gridl-staging/flapjack in staging environment"
       fi
       ;;
-    gridlhq/flapjack)
-      if grep -q 'REPO=.*gridlhq/flapjack' "$INSTALL_SCRIPT" && ! grep -q 'gridlhq-staging' "$INSTALL_SCRIPT"; then
-        pass "Default REPO is gridlhq/flapjack (production environment)"
+    gridl-hq/flapjack)
+      if grep -q 'REPO=.*gridl-hq/flapjack' "$INSTALL_SCRIPT" && ! grep -q 'gridl-staging' "$INSTALL_SCRIPT"; then
+        pass "Default REPO is gridl-hq/flapjack (production environment)"
       else
-        fail "Default REPO should be gridlhq/flapjack in production environment"
+        fail "Default REPO should be gridl-hq/flapjack in production environment"
       fi
       ;;
     *)
@@ -103,10 +102,10 @@ if [ -n "${GITHUB_REPOSITORY:-}" ]; then
   esac
 else
   # Local dev: accept either repo (dev has prod default, staging sync rewrites it)
-  if grep -q 'REPO=.*gridlhq/flapjack\|gridlhq-staging/flapjack' "$INSTALL_SCRIPT"; then
+  if grep -q 'REPO=.*gridl-hq/flapjack\|gridl-staging/flapjack' "$INSTALL_SCRIPT"; then
     pass "Default REPO is set (local dev environment)"
   else
-    fail "Default REPO should be gridlhq/flapjack or gridlhq-staging/flapjack"
+    fail "Default REPO should be gridl-hq/flapjack or gridl-staging/flapjack"
   fi
 fi
 
@@ -125,7 +124,6 @@ else
 fi
 
 # ── Platform Detection ───────────────────────────────────────────────────────
-
 section "Platform Detection"
 
 # Test 8: All four Rust target triples are present
@@ -152,7 +150,6 @@ else
 fi
 
 # ── Download Tool Detection ──────────────────────────────────────────────────
-
 section "Download Tool Detection"
 
 # Test 11: curl support
@@ -195,7 +192,6 @@ else
 fi
 
 # ── Security Features ────────────────────────────────────────────────────────
-
 section "Security Features"
 
 # Test 16: SHA256 checksum verification (with -c flag for actual file verification)
@@ -443,7 +439,7 @@ fi
 
 # Test: install.flapjack.foo redirect target matches expected path
 install_redirect=$(curl -sI https://install.flapjack.foo 2>/dev/null | grep -i '^location:' | tr -d '\r')
-if echo "$install_redirect" | grep -q 'raw.githubusercontent.com/gridlhq/flapjack/main/engine/install.sh'; then
+if echo "$install_redirect" | grep -q 'raw.githubusercontent.com/gridl-hq/flapjack/main/engine/install.sh'; then
   pass "install.flapjack.foo redirects to correct GitHub path"
 else
   fail "install.flapjack.foo redirect target unexpected: $install_redirect"

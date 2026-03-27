@@ -1,9 +1,4 @@
-//! Consolidated analytics I/O tests — collector, writer, and cleanup.
-//!
-//! Covers:
-//!   - AnalyticsCollector (collector.rs): buffering, flushing, queryID cache
-//!   - writer.rs: Parquet write + read roundtrip via AnalyticsQueryEngine
-//!   - cleanup logic: orphaned analytics directories
+//! Integration tests for the analytics I/O stack covering the collector's buffering and flushing behavior, Parquet writer roundtrips through the query engine, and orphaned analytics directory cleanup.
 
 use crate::analytics::collector::AnalyticsCollector;
 use crate::analytics::config::AnalyticsConfig;
@@ -47,6 +42,13 @@ fn cleanup_config(dir: &std::path::Path) -> AnalyticsConfig {
 
 // ─── Event builders ───────────────────────────────────────────────────────────
 
+/// Build a `SearchEvent` with sensible defaults for collector tests.
+///
+/// # Arguments
+///
+/// * `query` - The search query string.
+/// * `index` - The index name to associate the event with.
+/// * `query_id` - Optional query ID; when `Some`, the collector caches a lookup entry.
 fn make_search(query: &str, index: &str, query_id: Option<&str>) -> SearchEvent {
     SearchEvent {
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
@@ -71,6 +73,17 @@ fn make_search(query: &str, index: &str, query_id: Option<&str>) -> SearchEvent 
     }
 }
 
+/// Build a `SearchEvent` with a fixed 32-character query ID and configurable hit count.
+///
+/// Unlike `make_search`, this builder always populates `query_id` and derives
+/// `has_results` from `nb_hits > 0`, making it suited for writer and query-engine
+/// tests.
+///
+/// # Arguments
+///
+/// * `query` - The search query string.
+/// * `index` - The index name.
+/// * `nb_hits` - Number of hits; also determines `has_results`.
 fn make_search_ev(query: &str, index: &str, nb_hits: u32) -> SearchEvent {
     SearchEvent {
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
@@ -95,6 +108,12 @@ fn make_search_ev(query: &str, index: &str, nb_hits: u32) -> SearchEvent {
     }
 }
 
+/// Build a minimal `InsightEvent` with defaults suitable for collector buffer tests.
+///
+/// # Arguments
+///
+/// * `event_type` - The event type (e.g. `"click"`, `"conversion"`).
+/// * `index` - The index name to associate the event with.
 fn make_insight(event_type: &str, index: &str) -> InsightEvent {
     InsightEvent {
         event_type: event_type.to_string(),
@@ -114,6 +133,16 @@ fn make_insight(event_type: &str, index: &str) -> InsightEvent {
     }
 }
 
+/// Build an `InsightEvent` with configurable event type, index, and query ID.
+///
+/// Automatically sets `positions` to `[3]` for click events that have a query ID,
+/// mimicking a realistic click-after-search scenario.
+///
+/// # Arguments
+///
+/// * `event_type` - The event type (e.g. `"click"`, `"conversion"`, `"view"`).
+/// * `index` - The index name to associate the event with.
+/// * `query_id` - Optional query ID linking the insight to a prior search.
 fn make_insight_ev(event_type: &str, index: &str, query_id: Option<&str>) -> InsightEvent {
     InsightEvent {
         event_type: event_type.to_string(),
@@ -139,6 +168,15 @@ fn make_insight_ev(event_type: &str, index: &str, query_id: Option<&str>) -> Ins
 
 // ─── Cleanup helper ───────────────────────────────────────────────────────────
 
+/// Identify orphaned analytics directories and remove them.
+///
+/// Compares the set of analytics indices reported by the query engine against
+/// subdirectories present in `active_index_dir`. Any analytics index without a
+/// corresponding active directory is deleted from disk.
+///
+/// # Returns
+///
+/// A list of index names that were identified as orphaned and removed.
 fn run_cleanup(engine: &AnalyticsQueryEngine, active_index_dir: &std::path::Path) -> Vec<String> {
     let analytics_indices = engine.list_analytics_indices().unwrap();
     let mut active_indices: HashSet<String> = HashSet::new();
@@ -189,6 +227,7 @@ fn auto_flush_at_threshold() {
     assert!(tmp.path().join("products").join("searches").exists());
 }
 
+/// Verify that an `AnalyticsCollector` with `enabled: false` silently discards all recorded events and writes nothing to disk.
 #[test]
 fn disabled_collector_does_not_write() {
     let tmp = TempDir::new().unwrap();
@@ -261,6 +300,7 @@ fn flush_all_empties_both_buffers() {
 
 // ─── Writer / AnalyticsQueryEngine tests ──────────────────────────────────────
 
+/// Verify that `flush_search_events` produces exactly one Parquet file inside a date-partitioned directory.
 #[test]
 fn write_search_events_creates_parquet_file() {
     let tmp = TempDir::new().unwrap();
@@ -308,6 +348,7 @@ fn empty_events_is_noop() {
     assert!(!dir.exists());
 }
 
+/// Flush search events to Parquet, then read them back through `AnalyticsQueryEngine::top_searches` and verify aggregation results.
 #[tokio::test]
 async fn search_events_roundtrip_via_query_engine() {
     let tmp = TempDir::new().unwrap();
@@ -323,7 +364,17 @@ async fn search_events_roundtrip_via_query_engine() {
     let engine = AnalyticsQueryEngine::new(config);
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let result = engine
-        .top_searches("products", &today, &today, 10, false, None, None)
+        .top_searches(
+            &crate::analytics::AnalyticsQueryParams {
+                index_name: "products",
+                start_date: &today,
+                end_date: &today,
+                limit: 10,
+                tags: None,
+            },
+            false,
+            None,
+        )
         .await
         .unwrap();
     let searches = result["searches"].as_array().unwrap();
@@ -332,6 +383,7 @@ async fn search_events_roundtrip_via_query_engine() {
     assert_eq!(searches[0]["count"], 2);
 }
 
+/// Verify that `search_count` returns the total count and a per-day breakdown array.
 #[tokio::test]
 async fn search_count_with_daily_breakdown() {
     let tmp = TempDir::new().unwrap();
@@ -355,6 +407,7 @@ async fn search_count_with_daily_breakdown() {
     assert_eq!(dates[0]["count"], 3);
 }
 
+/// Verify that `no_results_rate` correctly computes the ratio of zero-hit searches to total searches.
 #[tokio::test]
 async fn no_results_rate_calculation() {
     let tmp = TempDir::new().unwrap();
@@ -378,6 +431,7 @@ async fn no_results_rate_calculation() {
     assert_eq!(result["noResults"], 2);
 }
 
+/// Verify that `no_results_searches` returns only queries with zero hits, aggregated and ranked by frequency.
 #[tokio::test]
 async fn no_results_searches_returns_zero_hit_queries() {
     let tmp = TempDir::new().unwrap();
@@ -402,6 +456,7 @@ async fn no_results_searches_returns_zero_hit_queries() {
     assert_eq!(searches[0]["count"], 2);
 }
 
+/// Verify that `users_count` deduplicates user tokens, counting each unique user exactly once.
 #[tokio::test]
 async fn users_count_deduplicates() {
     let tmp = TempDir::new().unwrap();
@@ -430,7 +485,17 @@ async fn query_empty_index_returns_empty() {
     let engine = AnalyticsQueryEngine::new(config);
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let result = engine
-        .top_searches("nonexistent", &today, &today, 10, false, None, None)
+        .top_searches(
+            &crate::analytics::AnalyticsQueryParams {
+                index_name: "nonexistent",
+                start_date: &today,
+                end_date: &today,
+                limit: 10,
+                tags: None,
+            },
+            false,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(result["searches"].as_array().unwrap().len(), 0);
@@ -447,6 +512,7 @@ async fn status_reflects_config() {
     assert_eq!(result["retentionDays"], 7);
 }
 
+/// Verify that `top_filters` aggregates filter strings and returns them ranked by frequency.
 #[tokio::test]
 async fn filters_query_returns_filter_data() {
     let tmp = TempDir::new().unwrap();
@@ -471,6 +537,7 @@ async fn filters_query_returns_filter_data() {
     assert_eq!(filters[0]["count"], 2);
 }
 
+/// Verify that `filter_values` splits `attribute:value` filter strings and aggregates values for a given attribute.
 #[tokio::test]
 async fn filter_values_extracts_attribute_values() {
     let tmp = TempDir::new().unwrap();
@@ -498,6 +565,7 @@ async fn filter_values_extracts_attribute_values() {
 
 // ─── Experiment fields writer roundtrip tests ──────────────────────────────────
 
+/// Verify that experiment metadata (`experiment_id`, `variant_id`, `assignment_method`) survives a Parquet write-read roundtrip with non-null values.
 #[test]
 fn writer_roundtrip_with_experiment_fields() {
     use crate::analytics::schema::search_event_schema;
@@ -578,6 +646,7 @@ fn writer_roundtrip_with_experiment_fields() {
     assert_eq!(method_col.value(0), "user_token");
 }
 
+/// Verify that null experiment metadata columns are preserved as Parquet nulls through a write-read roundtrip.
 #[test]
 fn writer_roundtrip_with_null_experiment_fields() {
     use crate::analytics::schema::search_event_schema;
@@ -660,6 +729,12 @@ fn writer_roundtrip_with_null_experiment_fields() {
 
 // ─── Cleanup tests ─────────────────────────────────────────────────────────────
 
+/// Build a `SearchEvent` with a fixed user token and IP, used by cleanup tests.
+///
+/// # Arguments
+///
+/// * `query` - The search query string.
+/// * `index` - The index name to associate the event with.
 fn cleanup_search_event(query: &str, index: &str) -> SearchEvent {
     SearchEvent {
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
@@ -716,6 +791,7 @@ async fn cleanup_all_orphaned() {
     assert!(!analytics_dir.path().join("movies").exists());
 }
 
+/// Verify that cleanup removes only the orphaned analytics directory while preserving directories that match active indices.
 #[tokio::test]
 async fn cleanup_mixed() {
     let analytics_dir = TempDir::new().unwrap();
@@ -747,6 +823,7 @@ async fn cleanup_no_analytics_data() {
     assert!(removed.is_empty());
 }
 
+/// Verify that a non-null `interleaving_team` value on an `InsightEvent` survives a Parquet write-read roundtrip.
 #[test]
 fn insight_event_interleaving_team_roundtrip() {
     use crate::analytics::schema::insight_event_schema;
@@ -791,6 +868,7 @@ fn insight_event_interleaving_team_roundtrip() {
     assert_eq!(team_col.value(0), "control");
 }
 
+/// Verify that a `None` interleaving_team serializes as a Parquet null and survives a write-read roundtrip.
 #[test]
 fn insight_event_null_interleaving_team_roundtrip() {
     use crate::analytics::schema::insight_event_schema;

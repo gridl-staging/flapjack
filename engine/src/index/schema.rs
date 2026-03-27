@@ -1,3 +1,4 @@
+//! Defines the Flapjack Schema and SchemaBuilder types that describe index field layouts and convert them into the hardcoded dual-JSON-field tantivy schema used at index time.
 use crate::error::{FlapjackError, Result};
 use std::collections::HashMap;
 use tantivy::schema::{Field, Schema as TantivySchema};
@@ -62,6 +63,13 @@ impl Schema {
         &self.fields
     }
 
+    /// Convert to a tantivy Schema with the hardcoded dual-JSON-field layout.
+    ///
+    /// Creates fields for _id (text, stored, fast), _json_search (edge n-gram tokenized), _json_filter (raw tokenized), _json_exact (simple tokenized), _facets, and geospatial (_geo_lat, _geo_lng), each with specific tokenizers and index options.
+    ///
+    /// # Returns
+    ///
+    /// A tantivy Schema ready for indexing.
     pub fn to_tantivy(&self) -> TantivySchema {
         let mut builder = TantivySchema::builder();
 
@@ -163,6 +171,17 @@ impl SchemaBuilder {
     // These methods are no longer used - schema is now hardcoded to dual JSON fields
     // Keeping temporarily to avoid breaking tests during migration
 
+    /// Add a text field with a companion n-gram field for dual-field text search.
+    ///
+    /// Creates two fields: the original with default indexing and a `{name}_ngram` field with edge n-gram indexing (not stored). Deprecated during Phase 1 migration; use schemaless JSON fields instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The base field name
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
     #[deprecated(note = "Phase 1: Use schemaless JSON fields instead")]
     pub fn add_text_field(self, name: impl Into<String>) -> Self {
         let name_str = name.into();
@@ -251,6 +270,13 @@ impl SchemaBuilder {
         )
     }
 
+    /// Consume the builder and construct a Schema.
+    ///
+    /// Prepends the _id field at position 0 and builds a lookup map for O(1) field name resolution.
+    ///
+    /// # Returns
+    ///
+    /// A Schema with all added fields plus the mandatory _id field.
     pub fn build(mut self) -> Schema {
         self.fields.insert(
             0,

@@ -1,8 +1,4 @@
-//! Per-tenant disk usage calculator.
-//!
-//! Provides `dir_size_bytes` — a recursive, symlink-safe utility that sums the
-//! sizes of all regular files under a directory tree. Used by the `/metrics`
-//! and `/internal/storage` endpoints to report per-tenant storage.
+//! Per-tenant disk usage calculator providing a recursive, symlink-safe directory size function used by metrics and internal storage endpoints.
 
 use std::io;
 use std::path::Path;
@@ -101,6 +97,7 @@ mod tests {
         assert_eq!(manager.tenant_storage_bytes("no_such_tenant"), 0);
     }
 
+    /// Verify that `all_tenant_storage` returns an entry with non-zero byte count for every loaded tenant.
     #[tokio::test]
     async fn all_tenant_storage_returns_entries_for_loaded_tenants() {
         let tmp = TempDir::new().unwrap();

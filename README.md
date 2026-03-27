@@ -1,7 +1,10 @@
-# 🥞 Flapjack ![Beta](https://img.shields.io/badge/status-beta-orange)
+# 🥞 Flapjack
 
-[![CI](https://github.com/gridlhq-staging/flapjack/actions/workflows/ci.yml/badge.svg)](https://github.com/gridlhq-staging/flapjack/actions/workflows/ci.yml)
-[![Release](https://github.com/gridlhq-staging/flapjack/actions/workflows/release.yml/badge.svg)](https://github.com/gridlhq-staging/flapjack/releases)
+**→ [Project Roadmap](ROADMAP.md)**
+
+
+[![CI](https://github.com/gridl-staging/flapjack/actions/workflows/ci.yml/badge.svg)](https://github.com/gridl-staging/flapjack/actions/workflows/ci.yml)
+[![Release](https://github.com/gridl-staging/flapjack/actions/workflows/release.yml/badge.svg)](https://github.com/gridl-staging/flapjack/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Drop-in replacement for [Algolia](https://algolia.com) — works with [InstantSearch.js](https://github.com/algolia/instantsearch) and the [algoliasearch](https://github.com/algolia/algoliasearch-client-javascript) client. Typo-tolerant full-text search with faceting, geo search, and custom ranking. Single static binary, runs anywhere, data stays on disk.
@@ -17,17 +20,28 @@ curl -fsSL https://staging.flapjack.foo | sh    # install
 flapjack                                        # run the server
 ```
 
-On first boot Flapjack generates an admin API key and prints it in the terminal.
-Copy the key — you'll use it in the `X-Algolia-API-Key` header for all API requests.
-The key is also saved to `data/.admin_key`.
+On first boot Flapjack generates an admin API key and saves it to `data/.admin_key`.
+Use that key in the `X-Algolia-API-Key` header for all API requests.
 
 Open the dashboard at **http://localhost:7700/dashboard** or use the API directly:
 
 ```bash
-API_KEY="your-admin-key"   # printed on first boot
+# Public status + docs routes
+curl -s http://localhost:7700/health | jq '.status'
+curl -i http://localhost:7700/health/ready
+#   empty or healthy: HTTP 200 {"ready":true}
+#   data dir unreadable or tenant search fails: HTTP 503 {"message":"Service unavailable","status":503}
+curl -s http://localhost:7700/api-docs/openapi.json | jq '.openapi'
+# Browser routes
+#   http://localhost:7700/dashboard
+#   http://localhost:7700/swagger-ui
+```
+
+```bash
+API_KEY="$(cat ./data/.admin_key)"   # default data dir; use your custom --data-dir if needed
 
 # Add documents
-curl -X POST http://localhost:7700/1/indexes/movies/batch \
+curl -s -X POST http://localhost:7700/1/indexes/movies/batch \
   -H "X-Algolia-API-Key: $API_KEY" \
   -H "X-Algolia-Application-Id: flapjack" \
   -H "Content-Type: application/json" \
@@ -35,6 +49,16 @@ curl -X POST http://localhost:7700/1/indexes/movies/batch \
     {"action":"addObject","body":{"objectID":"1","title":"The Matrix","year":1999}},
     {"action":"addObject","body":{"objectID":"2","title":"Inception","year":2010}}
   ]}'
+
+# Copy the returned taskID before polling:
+TASK_ID=<paste-taskID-from-response>
+
+# Wait for the write task to finish indexing
+until [ "$(curl -s http://localhost:7700/1/tasks/$TASK_ID \
+  -H "X-Algolia-API-Key: $API_KEY" \
+  -H "X-Algolia-Application-Id: flapjack" | jq -r '.status')" = "published" ]; do
+  sleep 0.1
+done
 
 # Search (typo-tolerant — "matrxi" finds "The Matrix")
 curl -X POST http://localhost:7700/1/indexes/movies/query \
@@ -46,10 +70,16 @@ curl -X POST http://localhost:7700/1/indexes/movies/query \
 
 These are the same Algolia-compatible `/1/` endpoints your frontend SDK will use — no separate "toy" API.
 
+To rotate the admin key for an existing data directory:
+
+```bash
+flapjack --data-dir ./data reset-admin-key
+```
+
 <details>
 <summary>Note:</summary>
 
-Binaries: [Releases](https://github.com/gridlhq-staging/flapjack/releases/latest).
+Binaries: [Releases](https://github.com/gridl-staging/flapjack/releases/latest).
 
 ```bash
 # Install specific version
@@ -66,40 +96,9 @@ NO_MODIFY_PATH=1 curl -fsSL https://staging.flapjack.foo | sh
 
 ---
 
-## Run Multiple Local Instances
+## Running Multiple Instances
 
-For parallel local development, run each process with an isolated `data_dir`.
-Flapjack now enforces this with a startup lock (`{data_dir}/.process.lock`).
-
-```bash
-# Derived isolated data dir + deterministic port:
-flapjack --instance branch_a --no-auth
-
-# Derived isolated data dir + OS-assigned port:
-flapjack --instance branch_b --auto-port --no-auth
-
-# Fully explicit:
-flapjack --data-dir /tmp/fj/agent_a --bind-addr 127.0.0.1:18110 --no-auth
-flapjack --data-dir /tmp/fj/agent_b --bind-addr 127.0.0.1:18111 --no-auth
-
-# Agent helper scripts (tracked PID/log + explicit instance identity):
-engine/_dev/s/start-multi-instance.sh agent_a --auto-port --no-auth
-engine/_dev/s/start-multi-instance.sh agent_b --auto-port --no-auth
-engine/_dev/s/stop-multi-instance.sh agent_a
-engine/_dev/s/stop-multi-instance.sh agent_b
-```
-
-Never share the same `--data-dir` across concurrent processes.
-`--auto-port` overrides env bind settings (`FLAPJACK_BIND_ADDR` / `FLAPJACK_PORT`) and only conflicts with explicit `--bind-addr` or `--port`.
-
-For parallel local branch development, set per-clone test ports in repo root:
-
-```bash
-cp flapjack.local.conf.example flapjack.local.conf
-# then edit FJ_BACKEND_PORT / FJ_DASHBOARD_PORT per clone
-```
-
-Dashboard Playwright/Vite config and `_dev` test runners read this file, so each clone can run its own isolated backend + dashboard test stack.
+Use `--instance <name>` to run isolated instances with separate data directories and ports. See [`engine/README.md`](engine/README.md#multi-instance-development) for full multi-instance setup instructions.
 
 ---
 
@@ -152,13 +151,21 @@ InstantSearch.js widgets work as-is — `SearchBox`, `Hits`, `RefinementList`, `
 | Highlighting | Typo-aware, supports nested objects and arrays |
 | Custom ranking | Multi-field, `asc`/`desc` |
 | Synonyms | One-way, multi-way, alternative corrections |
-| Query rules | Rewrite queries, pin/hide results |
+| Query rules | Conditions + consequences: pin, hide, boost, redirect, userData |
 | Pagination | `page`/`hitsPerPage` and `offset`/`length` |
 | Distinct | Deduplication by attribute |
-| Stop words & plurals | English built-in |
+| Stop words & plurals | Per-language, 30 languages |
 | Batch operations | Add, update, delete, clear, browse |
 | API keys | ACL, index patterns, TTL, secured keys (HMAC) |
 | S3 backup/restore | Scheduled snapshots, auto-restore on startup |
+| Vector / semantic search | OpenAI, REST, FastEmbed, user-provided embedders, HNSW |
+| Hybrid search | Keyword + vector with Reciprocal Rank Fusion (RRF) |
+| A/B testing | Mode A (query overrides), Mode B (index rerouting), interleaving, statistics |
+| Personalization | Event scoring, user profile building, query-time `personalizationImpact` |
+| Recommendations | Related products, bought-together, trending, looking-similar |
+| AI search / RAG | Chat-style query with LLM reranking (BYO provider) |
+| Analytics | Search events, click tracking, query suggestions, HA fan-out |
+| Federated search | Weighted multi-index queries with RRF merge |
 
 Algolia-compatible REST API under `/1/` — works with InstantSearch.js v5, the algoliasearch client, and [Laravel Scout](integrations/laravel-scout/).
 
@@ -169,28 +176,31 @@ Algolia-compatible REST API under `/1/` — works with InstantSearch.js v5, the 
 |  | Flapjack | Algolia | Meilisearch | Typesense | Elasticsearch | OpenSearch |
 |--|----------|---------|-------------|-----------|---------------|-----------|
 | Self-hosted | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| License | MIT | Proprietary | MIT | GPL-3 | ELv2 / SSPL / AGPL | Apache 2.0 |
+| License | MIT | Proprietary | MIT + BUSL-1.1 | GPL-3 | ELv2 / SSPL / AGPL | Apache 2.0 |
 | Algolia-compatible API | ✅ | — | ❌ | ❌ | ❌ | ❌ |
 | InstantSearch.js | Native | Native | Adapter | Adapter | Community | Community |
-| One-click Algolia migration | ✅ | — | ❌ | ❌ | ❌ | ❌ |
+| Built-in Algolia migration | ✅ | — | ❌ | ❌ | ❌ | ❌ |
 | Typo tolerance | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Faceting (hierarchical) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Filters (numeric, string, bool, date) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geo search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Synonyms | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Query rules (pin/hide) | Basic | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Query rules (pin/hide/boost/redirect) | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Custom ranking | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Analytics | Basic | ✅ | Cloud only | ✅ | ✅ | ✅ |
+| Analytics | ✅ | ✅ | Cloud only | ✅ | ✅ | ✅ |
 | Scoped API keys (HMAC) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | S3 backup/restore | ✅ | N/A | ❌ | ❌ | Snapshots | Snapshots |
 | Dashboard UI | ✅ | ✅ | ✅ | Cloud only | Kibana | Dashboards |
 | Embeddable as library | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| HA / clustering | Partial ✅ | ✅ | Cloud only | ✅ | ✅ | ✅ |
-| Multi-language | English only | 60+ | Many | Many | Many | Many |
-| Vector / semantic search | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| AI search (RAG) | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Hybrid search (keyword + vector) | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| A/B testing | ❌ | ✅ | ❌ | ❌ | ❌ | Partial |
+| HA / clustering | Partial (example-verified) ✅ | ✅ | Cloud only | ✅ | ✅ | ✅ |
+| Multi-language | 30 languages + CJK tokenization | 60+ | Many | Many | Many | Many |
+| Vector / semantic search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| AI search (RAG) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Hybrid search (keyword + vector) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Personalization | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Recommendations | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Federated multi-index search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| A/B testing | ✅ | ✅ | ❌ | ❌ | ❌ | Partial |
 
 ---
 
@@ -201,51 +211,33 @@ cargo build --release
 ./target/release/flapjack
 ```
 
-Requires Rust 1.70+. Pre-built binaries for Linux x86_64 (static musl), Linux ARM64, macOS Intel, and macOS Apple Silicon on the [releases page](https://github.com/gridlhq-staging/flapjack/releases/latest).
+Requires stable Rust. Pre-built binaries for Linux x86_64 (static musl), Linux ARM64, macOS Intel, and macOS Apple Silicon on the [releases page](https://github.com/gridl-staging/flapjack/releases/latest).
 
-<details>
-<summary>Docker</summary>
+### Single Node
 
-```yaml
-# docker-compose.yml
-services:
-  flapjack:
-    image: flapjack/flapjack:latest
-    ports:
-      - "7700:7700"
-    volumes:
-      - ./data:/data
-    environment:
-      FLAPJACK_DATA_DIR: /data
-      FLAPJACK_ADMIN_KEY: ${ADMIN_KEY}
-    restart: unless-stopped
+Listens on `127.0.0.1:7700` by default. Override with `--bind-addr` or `FLAPJACK_BIND_ADDR`.
+
+### Docker
+
+```bash
+docker build -t flapjack -f engine/Dockerfile .
+docker run -d --name flapjack \
+  -p 7700:7700 \
+  -v /tmp/fj-data:/data \
+  flapjack
 ```
 
-</details>
+The Dockerfile sets `FLAPJACK_BIND_ADDR=0.0.0.0:7700` so the container is host-reachable by default.
 
-<details>
-<summary>Systemd</summary>
+#### Docker Compose Quickstart
 
-```ini
-# /etc/systemd/system/flapjack.service
-[Unit]
-Description=Flapjack Search Server
-After=network.target
+A single-node Docker Compose setup (builds from source, auth disabled) is available at [`engine/examples/quickstart/`](engine/examples/quickstart/). Use it only on a trusted local machine: it publishes port `7700` and is intended for loopback-only development, not shared networks or internet-reachable hosts. For any non-local deployment, keep auth enabled and follow the standard quickstart or deployment docs instead. Run `docker compose up -d --build` and hit `http://localhost:7700/health`.
 
-[Service]
-Type=simple
-User=flapjack
-WorkingDirectory=/var/lib/flapjack
-Environment=FLAPJACK_DATA_DIR=/var/lib/flapjack/data
-Environment=FLAPJACK_ADMIN_KEY=your-key
-ExecStart=/usr/local/bin/flapjack
-Restart=always
+### Multi-Node Examples
 
-[Install]
-WantedBy=multi-user.target
-```
-
-</details>
+- HA topology (nginx-routed): [`engine/examples/ha-cluster/`](engine/examples/ha-cluster/)
+- 2-node replication + analytics fan-out: [`engine/examples/replication/`](engine/examples/replication/)
+- S3 snapshot backup/restore with MinIO: [`engine/examples/s3-snapshot/`](engine/examples/s3-snapshot/)
 
 ---
 
@@ -258,39 +250,25 @@ WantedBy=multi-user.target
 | `FLAPJACK_ADMIN_KEY` | — | Admin API key (enables auth) |
 | `FLAPJACK_ENV` | `development` | `production` requires auth on all endpoints |
 | `FLAPJACK_S3_BUCKET` | — | S3 bucket for snapshots |
-| `FLAPJACK_S3_REGION` | `us-west-1` | S3 region |
-| `FLAPJACK_SNAPSHOT_INTERVAL` | — | Auto-snapshot interval (e.g. `6h`) |
-| `FLAPJACK_SNAPSHOT_RETENTION` | — | Retention period (e.g. `30d`) |
+| `FLAPJACK_S3_REGION` | `us-east-1` | S3 region |
+| `FLAPJACK_SNAPSHOT_INTERVAL` | `0` (disabled) | Auto-snapshot interval in integer seconds |
+| `FLAPJACK_SNAPSHOT_RETENTION` | `24` | Retention count (snapshots per index) |
 
 Data stored in `FLAPJACK_DATA_DIR`. Mount as a volume in Docker.
+Full operator defaults and env-var types are canonical in [`engine/docs2/3_IMPLEMENTATION/OPS_CONFIGURATION.md`](engine/docs2/3_IMPLEMENTATION/OPS_CONFIGURATION.md).
 
 ---
 
-## HA Analytics (Multi-node)
+## Analytics Cluster Mode (Multi-node)
 
-When multiple Flapjack nodes share the same network, analytics queries fan out to all peers and return unified results. No separate analytics service is needed.
+When peers are configured, `/2/*` analytics routes merge local + peer analytics results at query time and return cluster metadata.
+This is fan-out/merge behavior, not leader election or automatic node promotion.
 
-**Setup:** Create `$FLAPJACK_DATA_DIR/node.json` on each node:
+**Behavior summary:**
 
-```json
-{
-  "node_id": "node-a",
-  "bind_addr": "0.0.0.0:7700",
-  "peers": [
-    {"node_id": "node-b", "addr": "http://10.0.1.2:7700"},
-    {"node_id": "node-c", "addr": "http://10.0.1.3:7700"}
-  ]
-}
-```
-
-Or use environment variables (e.g. via Docker):
-
-```bash
-FLAPJACK_NODE_ID=node-a
-FLAPJACK_PEERS=node-b=http://10.0.1.2:7700,node-c=http://10.0.1.3:7700
-```
-
-**Behaviour:** Any node's `/2/*` analytics endpoints return data merged from all nodes. Search analytics are independent per node (each node records its own traffic) — fan-out is query-time only.
+- Each node keeps its own local analytics writes.
+- Query fan-out/merge is handled in `maybe_fan_out` for `/2/*` endpoints.
+- `X-Flapjack-Local-Only: true` disables fan-out and returns local-only analytics.
 
 **Response shape** — every analytics response in cluster mode includes a `cluster` field:
 
@@ -314,9 +292,10 @@ FLAPJACK_PEERS=node-b=http://10.0.1.2:7700,node-c=http://10.0.1.3:7700
 
 **Users count** uses HyperLogLog (p=14, ~0.8% error) so shared users across nodes are not double-counted. All other metrics (search counts, rates, click positions, etc.) are exact sums.
 
-**Single-node deployments** are unaffected — fan-out only activates when `peers` are configured.
+Verified examples:
 
-See [`engine/examples/replication/`](engine/examples/replication/) for a working 2-node Docker Compose example.
+- [`engine/examples/replication/`](engine/examples/replication/) (`test_replication.sh`) proves 2-node fan-out with merged count and `cluster` metadata checks.
+- [`engine/examples/ha-cluster/`](engine/examples/ha-cluster/) (`test_ha.sh`) proves 3-node nginx-routed fan-out in that compose topology.
 
 ---
 
@@ -336,20 +315,20 @@ Flapjack's core can be embedded directly:
 flapjack = { version = "0.1", default-features = false }
 ```
 
-See [LIB.md](LIB.md) for the embedding guide.
+See [LIB.md](engine/LIB.md) for the embedding guide.
 
 ---
 
 ## Architecture
 
-Built on [Tantivy](https://github.com/stuartcrobinson/tantivy) (forked for edge-ngram prefix search). Axum + Tokio HTTP server. Supports 600+ indexes per 4GB node.
+Built on [Tantivy](https://github.com/stuartcrobinson/tantivy) (forked for edge-ngram prefix search). Axum + Tokio HTTP server.
 
 ```
 flapjack/              # Core library (search, indexing, query execution)
 flapjack-http/         # HTTP server (Axum handlers, routing)
 flapjack-replication/  # Cluster coordination
 flapjack-ssl/          # TLS (Let's Encrypt, ACME)
-flapjack/       # Binary entrypoint
+flapjack-server/  # Binary entrypoint
 ```
 
 ---
@@ -360,29 +339,6 @@ flapjack/       # Binary entrypoint
 cargo install cargo-nextest
 cargo nextest run
 ```
-
----
-
-## Roadmap
-
-**Security**
-- [x] Hash API keys at rest (salted SHA-256) ✅
-- [x] Admin key on first boot only ✅
-- [x] Key type prefixes (`fj_admin_`, `fj_search_`) ✅
-
-**Infrastructure**
-- [ ] High availability — multi-node replication
-- [ ] Managed cloud (SaaS)
-
-**Search**
-- [ ] Vector / hybrid search
-- [ ] AI search (RAG)
-- [ ] A/B testing
-- [ ] Multi-language support
-
-**Platform**
-- [ ] Webhooks
-- [ ] Role-based access control
 
 ---
 

@@ -89,40 +89,19 @@ impl SslManager {
 
     /// Check certificate expiry and renew if needed
     async fn check_and_renew(&self) -> Result<()> {
-        // Update last check time
-        *self.last_check.write().await = Some(Utc::now());
+        self.record_last_check().await;
 
-        // Check if certificate exists and get expiry
         let cert_path = self.get_cert_path();
-
         if !cert_path.exists() {
-            tracing::warn!(
-                "[SSL] Certificate not found at {:?}, requesting new certificate",
-                cert_path
-            );
-            return self.renew_certificate().await;
+            return self.renew_missing_certificate(&cert_path).await;
         }
 
-        // Parse certificate and check expiry
         let days_remaining = self.get_cert_expiry_days(&cert_path)?;
-
-        // Update status
-        {
-            let mut status = self.renewal_status.write().await;
-            status.cert_expires_in_days = Some(days_remaining);
-            status.status = "ok".to_string();
-            status.error = None;
-        }
-
+        self.record_certificate_expiry_status(days_remaining).await;
         tracing::info!("[SSL] Certificate expires in {} days", days_remaining);
 
-        if days_remaining < self.config.renew_days_threshold as i64 {
-            tracing::warn!(
-                "[SSL] Certificate expires in {} days (threshold: {}), renewing...",
-                days_remaining,
-                self.config.renew_days_threshold
-            );
-            return self.renew_certificate().await;
+        if self.certificate_needs_renewal(days_remaining) {
+            return self.renew_expiring_certificate(days_remaining).await;
         }
 
         Ok(())
@@ -253,5 +232,81 @@ impl SslManager {
     /// Get current renewal status (for /internal/status endpoint)
     pub async fn get_status(&self) -> RenewalStatus {
         self.renewal_status.read().await.clone()
+    }
+
+    async fn record_last_check(&self) {
+        *self.last_check.write().await = Some(Utc::now());
+    }
+
+    async fn renew_missing_certificate(&self, cert_path: &PathBuf) -> Result<()> {
+        tracing::warn!(
+            "[SSL] Certificate not found at {:?}, requesting new certificate",
+            cert_path
+        );
+        self.renew_certificate().await
+    }
+
+    async fn record_certificate_expiry_status(&self, days_remaining: i64) {
+        let mut status = self.renewal_status.write().await;
+        status.cert_expires_in_days = Some(days_remaining);
+        status.status = "ok".to_string();
+        status.error = None;
+    }
+
+    fn certificate_needs_renewal(&self, days_remaining: i64) -> bool {
+        days_remaining < self.config.renew_days_threshold as i64
+    }
+
+    async fn renew_expiring_certificate(&self, days_remaining: i64) -> Result<()> {
+        tracing::warn!(
+            "[SSL] Certificate expires in {} days (threshold: {}), renewing...",
+            days_remaining,
+            self.config.renew_days_threshold
+        );
+        self.renew_certificate().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    /// TODO: Document test_manager.
+    fn test_manager(renew_days_threshold: u64) -> SslManager {
+        SslManager {
+            config: SslConfig {
+                public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                email: "test@example.com".to_string(),
+                acme_directory: "https://acme-staging-v02.api.letsencrypt.org/directory"
+                    .to_string(),
+                check_interval_secs: 60,
+                renew_days_threshold,
+            },
+            acme_client: None,
+            last_check: Arc::new(RwLock::new(None)),
+            last_renewal: Arc::new(RwLock::new(None)),
+            renewal_status: Arc::new(RwLock::new(RenewalStatus::default())),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_certificate_expiry_status_marks_ok() {
+        let manager = test_manager(3);
+
+        manager.record_certificate_expiry_status(5).await;
+
+        let status = manager.get_status().await;
+        assert_eq!(status.status, "ok");
+        assert_eq!(status.error, None);
+        assert_eq!(status.cert_expires_in_days, Some(5));
+    }
+
+    #[test]
+    fn certificate_needs_renewal_uses_threshold() {
+        let manager = test_manager(3);
+
+        assert!(manager.certificate_needs_renewal(2));
+        assert!(!manager.certificate_needs_renewal(3));
     }
 }

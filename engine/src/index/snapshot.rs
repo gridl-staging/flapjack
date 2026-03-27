@@ -1,3 +1,4 @@
+//! Gzipped-tar snapshot helpers for exporting and importing index directories, supporting both file-based and in-memory byte-buffer round-trips.
 use crate::error::Result;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -60,6 +61,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// Verify that exporting a directory tree to a gzipped tarball and re-importing it preserves both flat files and nested subdirectory contents.
     #[test]
     fn test_tarball_roundtrip() {
         let src = TempDir::new().unwrap();

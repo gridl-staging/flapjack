@@ -1,3 +1,4 @@
+//! Embedder configuration and document templating with fingerprinting to detect incompatible embedder changes.
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -306,6 +307,7 @@ mod tests {
         ));
     }
 
+    /// Verify that Rest embedder validation fails when missing url, request, or response fields.
     #[test]
     fn test_rest_config_requires_url_and_templates() {
         // Missing all three
@@ -342,6 +344,7 @@ mod tests {
         assert!(config.validate().is_err());
     }
 
+    /// Verify that correctly configured embedders pass validation for each source type.
     #[test]
     fn test_valid_configs_pass_validation() {
         let openai = EmbedderConfig {
@@ -368,6 +371,7 @@ mod tests {
         assert!(user_provided.validate().is_ok());
     }
 
+    /// Verify that EmbedderConfig serializes to camelCase JSON and deserializes back without data loss.
     #[test]
     fn test_config_serde_roundtrip() {
         let config = EmbedderConfig {
@@ -427,6 +431,7 @@ mod tests {
         assert!(!result.contains("42"));
     }
 
+    /// Verify that the default template rendering skips _id and objectID metadata fields.
     #[test]
     fn test_template_default_excludes_id_fields() {
         let tmpl = DocumentTemplate::new(None, None);
@@ -480,6 +485,7 @@ mod tests {
 
     // ── EmbedderConfig::document_template tests (7.4) ──
 
+    /// Verify that DocumentTemplate applies the template string and max_bytes from EmbedderConfig.
     #[test]
     fn test_document_template_from_embedder_config() {
         let config = EmbedderConfig {
@@ -500,6 +506,7 @@ mod tests {
         assert_eq!(tmpl.max_bytes, 200);
     }
 
+    /// Verify that DocumentTemplate uses default settings (no template, 400 bytes max) when EmbedderConfig omits these fields.
     #[test]
     fn test_document_template_from_embedder_config_defaults() {
         let config = EmbedderConfig {
@@ -535,6 +542,7 @@ mod tests {
         );
     }
 
+    /// Verify that the default template rendering excludes vector objects and only concatenates string values.
     #[test]
     fn test_template_default_excludes_vectors_object() {
         // _vectors as an object should not be rendered (as_str returns None for objects)
@@ -555,6 +563,7 @@ mod tests {
         );
     }
 
+    /// Verify that template rendering truncates at UTF-8 character boundaries without breaking multi-byte characters.
     #[test]
     fn test_template_utf8_truncation_boundary() {
         // Multi-byte UTF-8: each emoji is 4 bytes
@@ -575,6 +584,7 @@ mod tests {
 
     // ── EmbedderFingerprint tests (8.13) ──
 
+    /// Verify that fingerprints are built correctly from configs and embedders are sorted by name.
     #[test]
     fn test_fingerprint_from_configs() {
         let configs = vec![
@@ -624,6 +634,7 @@ mod tests {
         assert!(fp.matches_configs(&configs));
     }
 
+    /// Verify that changing an embedder's model name between fingerprints causes mismatch detection.
     #[test]
     fn test_fingerprint_mismatch_different_model() {
         let configs_v1 = vec![(
@@ -649,6 +660,7 @@ mod tests {
         assert!(!fp.matches_configs(&configs_v2));
     }
 
+    /// Verify that changing an embedder's source type causes fingerprint mismatch detection.
     #[test]
     fn test_fingerprint_mismatch_different_source() {
         let configs_v1 = vec![(
@@ -674,6 +686,7 @@ mod tests {
         assert!(!fp.matches_configs(&configs_v2));
     }
 
+    /// Verify that a config specifying different dimensions causes fingerprint mismatch.
     #[test]
     fn test_fingerprint_mismatch_different_dimensions() {
         let configs_v1 = vec![(
@@ -699,6 +712,7 @@ mod tests {
         assert!(!fp.matches_configs(&configs_v2));
     }
 
+    /// Verify that a config with dimensions=None skips dimension validation and matches any stored dimensions.
     #[test]
     fn test_fingerprint_dimensions_none_in_config_matches_any() {
         let configs_v1 = vec![(
@@ -725,6 +739,7 @@ mod tests {
         assert!(fp.matches_configs(&configs_v2));
     }
 
+    /// Verify that adding a new embedder to the config list causes fingerprint mismatch.
     #[test]
     fn test_fingerprint_mismatch_embedder_added() {
         let configs_v1 = vec![(
@@ -761,6 +776,7 @@ mod tests {
         assert!(!fp.matches_configs(&configs_v2));
     }
 
+    /// Verify that removing an embedder from the config list causes fingerprint mismatch.
     #[test]
     fn test_fingerprint_mismatch_embedder_removed() {
         let configs_v1 = vec![
@@ -797,6 +813,7 @@ mod tests {
         assert!(!fp.matches_configs(&configs_v2));
     }
 
+    /// Verify that changing the document template causes fingerprint mismatch.
     #[test]
     fn test_fingerprint_mismatch_template_changed() {
         let configs_v1 = vec![(
@@ -861,6 +878,7 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
+    /// Verify that EmbedderFingerprint persists to disk and deserializes back with full fidelity.
     #[test]
     fn test_fingerprint_save_and_load_roundtrip() {
         let configs = vec![(
@@ -886,6 +904,7 @@ mod tests {
 
     // ── FastEmbed fingerprint tests (9.13) ──
 
+    /// Verify that FastEmbed source type is correctly preserved when fingerprints are saved and loaded.
     #[test]
     fn test_fingerprint_fastembed_source() {
         let configs = vec![(
@@ -908,6 +927,7 @@ mod tests {
         assert_eq!(loaded.embedders[0].source, EmbedderSource::FastEmbed);
     }
 
+    /// Verify that changing the FastEmbed model name between fingerprints causes mismatch detection.
     #[test]
     fn test_fingerprint_fastembed_model_change_mismatch() {
         let configs_v1 = vec![(

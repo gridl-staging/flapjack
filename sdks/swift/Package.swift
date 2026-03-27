@@ -88,6 +88,17 @@ products.append(
     )
 }
 
+targets.append(
+    .testTarget(
+        name: "SearchE2ETests",
+        dependencies: [
+            .target(name: "Core"),
+            .target(name: "Search"),
+        ],
+        path: "Tests/SearchE2ETests"
+    )
+)
+
 let package = Package(
     name: "FlapjackSearchClient",
     platforms: [

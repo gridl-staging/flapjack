@@ -1,7 +1,4 @@
-//! Request counting middleware for per-index usage metrics.
-//!
-//! Tracks search, write, and read request counts plus bytes ingested,
-//! per index name. Counters are exposed via the `/metrics` endpoint.
+//! Request counting middleware for per-index usage metrics, tracking search, write, and read counts plus bytes ingested per index name.
 
 use axum::{extract::Request, http::Method, middleware::Next, response::Response};
 use dashmap::DashMap;
@@ -293,6 +290,7 @@ mod tests {
 
     // ── middleware unit tests ──
 
+    /// Verify that a POST to `/query` increments `search_count` for the target index and leaves other counters at zero.
     #[tokio::test]
     async fn middleware_increments_search_count() {
         let counters = Arc::new(DashMap::new());
@@ -322,6 +320,7 @@ mod tests {
         assert_eq!(entry.write_count.load(Ordering::Relaxed), 0);
     }
 
+    /// Verify that a POST to `/batch` increments `write_count` for the target index.
     #[tokio::test]
     async fn middleware_increments_write_count() {
         let counters = Arc::new(DashMap::new());
@@ -350,6 +349,7 @@ mod tests {
         assert_eq!(entry.write_count.load(Ordering::Relaxed), 1);
     }
 
+    /// Verify that the middleware reads the `Content-Length` header and adds its value to `bytes_in` for the target index.
     #[tokio::test]
     async fn middleware_tracks_bytes_in() {
         let counters = Arc::new(DashMap::new());
@@ -380,6 +380,7 @@ mod tests {
         assert_eq!(entry.bytes_in.load(Ordering::Relaxed), body.len() as u64);
     }
 
+    /// Verify that a GET object request increments `read_count` while `search_count` and `write_count` remain zero.
     #[tokio::test]
     async fn middleware_increments_read_count() {
         let counters = Arc::new(DashMap::new());
@@ -409,6 +410,7 @@ mod tests {
         assert_eq!(entry.write_count.load(Ordering::Relaxed), 0);
     }
 
+    /// Verify that requests to non-index routes (e.g. `/health`) produce no counter entries.
     #[tokio::test]
     async fn middleware_ignores_non_index_routes() {
         let counters = Arc::new(DashMap::new());
@@ -437,6 +439,11 @@ mod tests {
 
     // ── handler-level counter integration tests ──
 
+    /// Build a minimal `AppState` backed by the given temp directory for use in handler-level integration tests.
+    ///
+    /// # Arguments
+    ///
+    /// * `tmp` — Temporary directory used as the base path for `IndexManager` and `DictionaryManager`.
     fn make_app_state(tmp: &tempfile::TempDir) -> std::sync::Arc<crate::handlers::AppState> {
         std::sync::Arc::new(crate::handlers::AppState {
             manager: flapjack::IndexManager::new(tmp.path()),
@@ -444,16 +451,24 @@ mod tests {
             replication_manager: None,
             ssl_manager: None,
             analytics_engine: None,
+            recommend_config: flapjack::recommend::RecommendConfig::default(),
             experiment_store: None,
+            dictionary_manager: std::sync::Arc::new(
+                flapjack::dictionaries::manager::DictionaryManager::new(tmp.path()),
+            ),
             metrics_state: None,
             usage_counters: Arc::new(DashMap::new()),
+            usage_persistence: None,
             paused_indexes: crate::pause_registry::PausedIndexes::new(),
+            geoip_reader: None,
+            notification_service: None,
             start_time: std::time::Instant::now(),
-            #[cfg(feature = "vector-search")]
+            conversation_store: crate::conversation_store::ConversationStore::default_shared(),
             embedder_store: std::sync::Arc::new(crate::embedder_store::EmbedderStore::new()),
         })
     }
 
+    /// Verify that `put_object` increments `documents_indexed_total` by one after successfully indexing a single document.
     #[tokio::test]
     async fn handler_documents_indexed_total_increments_on_put() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -488,6 +503,7 @@ mod tests {
         );
     }
 
+    /// Verify that a batch request containing multiple `addObject` actions increments `documents_indexed_total` by the number of documents in the batch.
     #[tokio::test]
     async fn handler_documents_indexed_total_increments_on_batch() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -531,6 +547,7 @@ mod tests {
         );
     }
 
+    /// Verify that the search handler increments `search_results_total` by the number of hits returned in the response.
     #[tokio::test]
     async fn handler_search_results_total_increments_on_search() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -611,6 +628,7 @@ mod tests {
 
     // ── concurrent correctness ──
 
+    /// Verify that 100 concurrent search requests produce exactly 100 `search_count` increments and the correct cumulative `bytes_in`, ensuring no updates are lost under contention.
     #[tokio::test]
     async fn concurrent_requests_no_lost_increments() {
         let counters = Arc::new(DashMap::new());

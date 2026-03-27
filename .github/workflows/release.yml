@@ -122,9 +122,11 @@ jobs:
           merge-multiple: true
 
       - name: Create tag
+        env:
+          VERSION: ${{ github.event.inputs.version }}
         run: |
-          git tag "v${{ github.event.inputs.version }}"
-          git push origin "v${{ github.event.inputs.version }}"
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -155,7 +157,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/gridlhq-staging/flapjack
+          images: ghcr.io/gridl-staging/flapjack
           tags: |
             type=raw,value=${{ github.event.inputs.version }}
             type=raw,value=latest

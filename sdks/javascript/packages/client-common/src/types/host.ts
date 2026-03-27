@@ -1,3 +1,8 @@
+/**
+ */
+/**
+ * TODO: Document Host.
+ */
 export type Host = {
   /**
    * The host URL.
@@ -20,6 +25,9 @@ export type Host = {
   port?: number | undefined;
 };
 
+/**
+ * TODO: Document StatefulHost.
+ */
 export type StatefulHost = Host & {
   /**
    * The status of the host.

@@ -41,6 +41,7 @@ func decodeGzipContent(in string) (string, error) {
 	return string(out), nil
 }
 
+// TODO: Document extractBody.
 func extractBody(body io.ReadCloser, c compression.Compression) (io.ReadCloser, string) {
 	if body == nil {
 		return nil, ""
@@ -72,6 +73,7 @@ func prettyPrintJSON(input string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+// TODO: Document debugRequest.
 func debugRequest(req *http.Request) string {
 	if req == nil {
 		return ""

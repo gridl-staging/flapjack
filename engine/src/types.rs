@@ -1,3 +1,4 @@
+//! Type definitions and conversions for documents, field values, filters, search queries, and results.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -72,6 +73,15 @@ impl Document {
     }
 }
 
+/// Convert a JSON value to a FieldValue, recursively processing nested structures while skipping JSON null and boolean values.
+///
+/// # Arguments
+///
+/// * `val` - The JSON value to convert
+///
+/// # Returns
+///
+/// `Some(field_value)` if the value can be converted (string, number, non-empty array, or non-empty object); `None` if the value is JSON null, a boolean, or becomes empty after recursive filtering. Numeric JSON values are converted to Integer if they fit in i64; otherwise Float.
 pub fn json_value_to_field_value(val: &serde_json::Value) -> Option<FieldValue> {
     match val {
         serde_json::Value::String(s) => Some(FieldValue::Text(s.clone())),
@@ -108,6 +118,15 @@ pub fn json_value_to_field_value(val: &serde_json::Value) -> Option<FieldValue> 
     }
 }
 
+/// Convert a FieldValue to its JSON representation, recursively processing arrays and nested objects.
+///
+/// # Arguments
+///
+/// * `field_value` - The field value to convert
+///
+/// # Returns
+///
+/// The equivalent serde_json::Value. Date and Facet values become JSON numbers and strings respectively.
 pub fn field_value_to_json_value(field_value: &FieldValue) -> serde_json::Value {
     match field_value {
         FieldValue::Text(s) => serde_json::Value::String(s.clone()),
@@ -232,10 +251,29 @@ pub struct SearchResult {
     pub total: usize,
     /// Facet counts keyed by field name.
     pub facets: HashMap<String, Vec<FacetCount>>,
+    /// Numeric facet statistics keyed by field name.
+    /// Only present for facets whose values are all numeric.
+    pub facets_stats: HashMap<String, FacetStats>,
     /// User data injected by query rules.
     pub user_data: Vec<serde_json::Value>,
     /// IDs of query rules that fired.
     pub applied_rules: Vec<String>,
+    /// Query text after preprocessing (stopword removal, rules rewrite, etc).
+    pub parsed_query: String,
+    /// Whether facet values are exhaustive (not truncated/incomplete).
+    pub exhaustive_facet_values: bool,
+    /// Whether rules evaluation completed exhaustively (no timeout).
+    pub exhaustive_rules_match: bool,
+    /// When `removeWordsIfNoResults` triggers a fallback, this field contains
+    /// the original query with removed words wrapped in `<em>` tags.
+    /// Absent when the original query returned results.
+    pub query_after_removal: Option<String>,
+    /// Rendering content injected by query rules (`consequence.params.renderingContent`).
+    pub rendering_content: Option<serde_json::Value>,
+    /// Effective `aroundLatLng` after applying rule consequences.
+    pub effective_around_lat_lng: Option<String>,
+    /// Effective `aroundRadius` after applying rule consequences.
+    pub effective_around_radius: Option<serde_json::Value>,
 }
 
 /// A single facet value and its document count.
@@ -243,6 +281,16 @@ pub struct SearchResult {
 pub struct FacetCount {
     pub path: String,
     pub count: u64,
+}
+
+/// Numeric statistics for a single faceted field.
+/// Only computed for facets whose values are all numeric.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FacetStats {
+    pub min: f64,
+    pub max: f64,
+    pub avg: f64,
+    pub sum: f64,
 }
 
 /// A document paired with its relevance score.
@@ -481,6 +529,49 @@ mod tests {
             FieldValue::Integer(1),
         ]);
         assert_eq!(field_value_to_json_value(&fv), serde_json::json!(["a", 1]));
+    }
+
+    #[test]
+    fn date_roundtrip() {
+        let fv = FieldValue::Date(1_000);
+        assert_eq!(field_value_to_json_value(&fv), serde_json::json!(1_000));
+    }
+
+    #[test]
+    fn object_roundtrip() {
+        let mut object = std::collections::HashMap::new();
+        object.insert("count".to_string(), FieldValue::Integer(2));
+        object.insert("label".to_string(), FieldValue::Text("nested".to_string()));
+
+        let fv = FieldValue::Object(object);
+        let json = field_value_to_json_value(&fv);
+
+        assert_eq!(json["count"], serde_json::json!(2));
+        assert_eq!(json["label"], serde_json::json!("nested"));
+    }
+
+    #[test]
+    fn float_nan_to_json_null() {
+        assert_eq!(
+            field_value_to_json_value(&FieldValue::Float(f64::NAN)),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn float_infinity_to_json_null() {
+        assert_eq!(
+            field_value_to_json_value(&FieldValue::Float(f64::INFINITY)),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn float_neg_infinity_to_json_null() {
+        assert_eq!(
+            field_value_to_json_value(&FieldValue::Float(f64::NEG_INFINITY)),
+            serde_json::Value::Null
+        );
     }
 
     // --- FieldValue accessors ---

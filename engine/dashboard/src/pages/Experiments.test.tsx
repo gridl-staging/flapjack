@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { TEST_ROUTER_FUTURE } from '@/test/routerFuture'
 import { Experiments } from './Experiments';
 
 vi.mock('@/hooks/useExperiments', () => ({
@@ -77,7 +78,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -93,7 +94,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -110,7 +111,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -128,7 +129,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -145,7 +146,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -162,7 +163,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -179,7 +180,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -200,13 +201,13 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
 
     const row = screen.getByTestId('experiment-row-exp-1');
-    expect(within(row).getByText('Conversion')).toBeInTheDocument();
+    expect(within(row).getByText('Conversion Rate')).toBeInTheDocument();
   });
 
   it('shows dash for started date when experiment has no startedAt', () => {
@@ -216,7 +217,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -233,7 +234,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -258,7 +259,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -282,7 +283,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );
@@ -297,7 +298,7 @@ describe('Experiments', () => {
     } as any);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={TEST_ROUTER_FUTURE}>
         <Experiments />
       </MemoryRouter>
     );

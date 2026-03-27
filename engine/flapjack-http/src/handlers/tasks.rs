@@ -1,3 +1,4 @@
+//! Axum handlers for querying indexing-task status with an Algolia-compatible response shape.
 use axum::{
     extract::{Path, State},
     Json,
@@ -10,34 +11,23 @@ use super::AppState;
 use flapjack::error::FlapjackError;
 use flapjack::types::TaskStatus;
 
-#[derive(Debug, Serialize, ToSchema)]
-pub struct TaskResponse {
-    pub task_uid: String,
+#[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlgoliaTaskResponse {
     pub status: String,
-    pub received_documents: usize,
-    pub indexed_documents: usize,
-    pub rejected_documents: Vec<DocFailureDto>,
-    pub rejected_count: usize,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct DocFailureDto {
-    pub doc_id: String,
-    pub error: String,
-    pub message: String,
+    pub pending_task: bool,
 }
 
 /// Get task status by ID
 #[utoipa::path(
     get,
-    path = "/1/tasks/{task_id}",
+    path = "/1/task/{task_id}",
     tag = "tasks",
     params(
         ("task_id" = String, Path, description = "Task ID")
     ),
     responses(
-        (status = 200, description = "Task status and results", body = TaskResponse),
+        (status = 200, description = "Task status and results", body = AlgoliaTaskResponse),
         (status = 404, description = "Task not found")
     ),
     security(
@@ -47,39 +37,9 @@ pub struct DocFailureDto {
 pub async fn get_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
-) -> Result<Json<TaskResponse>, FlapjackError> {
+) -> Result<Json<AlgoliaTaskResponse>, FlapjackError> {
     let task = state.manager.get_task(&task_id)?;
-
-    let status_str = match &task.status {
-        TaskStatus::Enqueued | TaskStatus::Processing => "notPublished",
-        TaskStatus::Succeeded => "published",
-        TaskStatus::Failed(_) => "error",
-    };
-
-    let error = match &task.status {
-        TaskStatus::Failed(e) => Some(e.clone()),
-        _ => None,
-    };
-
-    let rejected_docs = task
-        .rejected_documents
-        .iter()
-        .map(|df| DocFailureDto {
-            doc_id: df.doc_id.clone(),
-            error: df.error.clone(),
-            message: df.message.clone(),
-        })
-        .collect();
-
-    Ok(Json(TaskResponse {
-        task_uid: task.id,
-        status: status_str.to_string(),
-        received_documents: task.received_documents,
-        indexed_documents: task.indexed_documents,
-        rejected_documents: rejected_docs,
-        rejected_count: task.rejected_count,
-        error,
-    }))
+    Ok(Json(map_task_status_to_algolia(&task.status)))
 }
 
 /// Get task status for a specific index
@@ -92,7 +52,7 @@ pub async fn get_task(
         ("task_id" = String, Path, description = "Task ID")
     ),
     responses(
-        (status = 200, description = "Task status and results", body = TaskResponse),
+        (status = 200, description = "Task status and results", body = AlgoliaTaskResponse),
         (status = 404, description = "Task not found")
     ),
     security(
@@ -102,7 +62,7 @@ pub async fn get_task(
 pub async fn get_task_for_index(
     State(state): State<Arc<AppState>>,
     Path((index_name, task_id)): Path<(String, String)>,
-) -> Result<Json<TaskResponse>, FlapjackError> {
+) -> Result<Json<AlgoliaTaskResponse>, FlapjackError> {
     let full_task_id = if task_id.starts_with("task_") {
         task_id.clone()
     } else {
@@ -123,34 +83,46 @@ pub async fn get_task_for_index(
         return Err(FlapjackError::TaskNotFound(task_id));
     }
 
-    let status_str = match &task.status {
-        TaskStatus::Enqueued | TaskStatus::Processing => "notPublished",
-        TaskStatus::Succeeded => "published",
-        TaskStatus::Failed(_) => "error",
-    };
+    Ok(Json(map_task_status_to_algolia(&task.status)))
+}
 
-    let error = match &task.status {
-        TaskStatus::Failed(e) => Some(e.clone()),
-        _ => None,
-    };
+fn map_task_status_to_algolia(task_status: &TaskStatus) -> AlgoliaTaskResponse {
+    match task_status {
+        TaskStatus::Enqueued | TaskStatus::Processing => AlgoliaTaskResponse {
+            status: "notPublished".to_string(),
+            pending_task: true,
+        },
+        // Failed tasks are terminal and should not keep waitTask() polling forever.
+        TaskStatus::Succeeded | TaskStatus::Failed(_) => AlgoliaTaskResponse {
+            status: "published".to_string(),
+            pending_task: false,
+        },
+    }
+}
 
-    let rejected_docs = task
-        .rejected_documents
-        .iter()
-        .map(|df| DocFailureDto {
-            doc_id: df.doc_id.clone(),
-            error: df.error.clone(),
-            message: df.message.clone(),
-        })
-        .collect();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    Ok(Json(TaskResponse {
-        task_uid: task.id,
-        status: status_str.to_string(),
-        received_documents: task.received_documents,
-        indexed_documents: task.indexed_documents,
-        rejected_documents: rejected_docs,
-        rejected_count: task.rejected_count,
-        error,
-    }))
+    #[test]
+    fn maps_enqueued_and_processing_to_pending_not_published() {
+        let enqueued = map_task_status_to_algolia(&TaskStatus::Enqueued);
+        assert_eq!(enqueued.status, "notPublished");
+        assert!(enqueued.pending_task);
+
+        let processing = map_task_status_to_algolia(&TaskStatus::Processing);
+        assert_eq!(processing.status, "notPublished");
+        assert!(processing.pending_task);
+    }
+
+    #[test]
+    fn maps_terminal_states_to_published_and_not_pending() {
+        let succeeded = map_task_status_to_algolia(&TaskStatus::Succeeded);
+        assert_eq!(succeeded.status, "published");
+        assert!(!succeeded.pending_task);
+
+        let failed = map_task_status_to_algolia(&TaskStatus::Failed("boom".to_string()));
+        assert_eq!(failed.status, "published");
+        assert!(!failed.pending_task);
+    }
 }

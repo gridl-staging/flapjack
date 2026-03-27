@@ -1,6 +1,9 @@
 mod common;
 
+use flapjack::index::settings::IndexSettings;
+use flapjack::index::SearchOptions;
 use flapjack::types::Document;
+use flapjack::FacetRequest;
 use flapjack::IndexManager;
 use serde_json::json;
 use std::collections::HashMap;
@@ -9,6 +12,98 @@ use tempfile::TempDir;
 
 fn make_doc(id: &str, name: &str) -> Document {
     Document::from_json(&json!({"_id": id, "name": name})).unwrap()
+}
+
+mod query_executor_regressions {
+    use super::*;
+
+    #[tokio::test]
+    async fn search_with_synonym_expansion_and_custom_ranking_does_not_panic_on_position_seek() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = IndexManager::new(tmp.path());
+        let tenant = "seek_regression";
+        mgr.create_tenant(tenant).unwrap();
+
+        // Custom ranking forces the tier-2 position pass that previously panicked
+        // when postings.seek() was called with a target smaller than postings.doc().
+        let settings_path = tmp.path().join(tenant).join("settings.json");
+        IndexSettings {
+            searchable_attributes: Some(vec!["name".to_string(), "description".to_string()]),
+            custom_ranking: Some(vec!["desc(rating)".to_string()]),
+            attributes_for_faceting: vec!["category".to_string()],
+            ..Default::default()
+        }
+        .save(&settings_path)
+        .unwrap();
+        mgr.invalidate_settings_cache(tenant);
+
+        let synonyms_path = tmp.path().join(tenant).join("synonyms.json");
+        std::fs::write(
+            &synonyms_path,
+            serde_json::to_string_pretty(&serde_json::json!([
+                {
+                    "objectID": "syn-monitor-display",
+                    "type": "synonym",
+                    "synonyms": ["monitor", "display", "screen"]
+                }
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        mgr.invalidate_synonyms_cache(tenant);
+
+        // "monitor" expands to "display", so both docs are candidates. The lower doc id
+        // does not contain "monitor", which previously triggered a seek panic.
+        mgr.add_documents_sync(
+            tenant,
+            vec![
+                Document::from_json(&serde_json::json!({
+                    "objectID": "doc-display",
+                    "name": "Studio Display",
+                    "description": "High-fidelity display panel",
+                    "category": "Monitors",
+                    "rating": 1
+                }))
+                .unwrap(),
+                Document::from_json(&serde_json::json!({
+                    "objectID": "doc-monitor",
+                    "name": "Reference Monitor",
+                    "description": "Color-accurate monitor for editing",
+                    "category": "Monitors",
+                    "rating": 5
+                }))
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            mgr.search(tenant, "monitor", None, None, 10)
+        }));
+
+        assert!(
+            result.is_ok(),
+            "search should not panic when synonym-expanded results include docs below the first posting doc id"
+        );
+        let search = result
+            .unwrap()
+            .expect("search request should still return a valid result");
+        assert!(
+            search
+                .documents
+                .iter()
+                .any(|d| d.document.id == "doc-display"),
+            "synonym expansion should include the display-only document"
+        );
+        assert!(
+            search
+                .documents
+                .iter()
+                .any(|d| d.document.id == "doc-monitor"),
+            "direct term match should include the monitor document"
+        );
+    }
 }
 
 fn make_docs(ids: &[&str]) -> Vec<Document> {
@@ -1053,6 +1148,105 @@ mod oplog_replay {
         }
     }
 
+    #[tokio::test]
+    async fn replay_skips_unknown_ops_and_keeps_valid_ops() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().to_path_buf();
+
+        {
+            let mgr = IndexManager::new(&base);
+            mgr.create_tenant("replay_unknown").unwrap();
+            mgr.add_documents_sync("replay_unknown", vec![make_doc("1", "Known")])
+                .await
+                .unwrap();
+            mgr.append_oplog(
+                "replay_unknown",
+                "unknown_future_op",
+                serde_json::json!({"irrelevant": true}),
+            );
+            mgr.add_documents_sync("replay_unknown", vec![make_doc("2", "StillKnown")])
+                .await
+                .unwrap();
+            mgr.graceful_shutdown().await;
+        }
+
+        nuke_and_recreate_index(&base.join("replay_unknown"));
+        std::fs::write(base.join("replay_unknown").join("committed_seq"), "0").unwrap();
+
+        {
+            let mgr = IndexManager::new(&base);
+            let r = mgr.search("replay_unknown", "", None, None, 100).unwrap();
+            assert_eq!(
+                r.total, 2,
+                "unknown op should be skipped without blocking replay"
+            );
+
+            let mut ids: Vec<String> = r.documents.iter().map(|d| d.document.id.clone()).collect();
+            ids.sort();
+            assert_eq!(ids, vec!["1", "2"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn committed_seq_persists_across_replay_and_clean_restart() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().to_path_buf();
+
+        {
+            let mgr = IndexManager::new(&base);
+            mgr.create_tenant("replay_committed_seq").unwrap();
+            mgr.add_documents_sync(
+                "replay_committed_seq",
+                vec![make_doc("1", "Alpha"), make_doc("2", "Beta")],
+            )
+            .await
+            .unwrap();
+            mgr.graceful_shutdown().await;
+        }
+
+        nuke_and_recreate_index(&base.join("replay_committed_seq"));
+        let committed_seq_path = base.join("replay_committed_seq").join("committed_seq");
+        std::fs::write(&committed_seq_path, "0").unwrap();
+
+        {
+            let mgr = IndexManager::new(&base);
+            let r = mgr
+                .search("replay_committed_seq", "", None, None, 100)
+                .unwrap();
+            assert_eq!(r.total, 2);
+            mgr.graceful_shutdown().await;
+        }
+
+        let seq_after_replay: u64 = std::fs::read_to_string(&committed_seq_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            seq_after_replay >= 2,
+            "recovery should persist committed_seq after replay"
+        );
+
+        {
+            let mgr = IndexManager::new(&base);
+            let r = mgr
+                .search("replay_committed_seq", "", None, None, 100)
+                .unwrap();
+            assert_eq!(r.total, 2);
+            mgr.graceful_shutdown().await;
+        }
+
+        let seq_after_second_restart: u64 = std::fs::read_to_string(&committed_seq_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            seq_after_second_restart, seq_after_replay,
+            "clean restart should keep committed_seq stable when no replay is needed"
+        );
+    }
+
     // ─── Storage bytes tests (from test_storage_bytes.rs) ──────────────────
 
     mod storage_bytes {
@@ -1115,7 +1309,11 @@ mod oplog_replay {
                 "dataSize should be > 0 after indexing documents, got {}",
                 data_size
             );
-            assert_eq!(data_size, file_size, "dataSize and fileSize should match");
+            assert!(
+                data_size < file_size,
+                "dataSize (logical) should be strictly less than fileSize (on-disk), got dataSize={} fileSize={}",
+                data_size, file_size
+            );
         }
 
         #[tokio::test]
@@ -1198,6 +1396,129 @@ mod oplog_replay {
                 "settings op should be replayed"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn replay_config_only_ops_keeps_search_and_facets_healthy() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().to_path_buf();
+        let facets = vec![FacetRequest {
+            path: "/category".to_string(),
+            field: "category".to_string(),
+        }];
+
+        {
+            let mgr = IndexManager::new(&base);
+            mgr.create_tenant("replay_config_only").unwrap();
+            let settings_path = base.join("replay_config_only").join("settings.json");
+            let seeded_settings = IndexSettings {
+                searchable_attributes: Some(vec![
+                    "name".to_string(),
+                    "description".to_string(),
+                    "category".to_string(),
+                ]),
+                attributes_for_faceting: vec!["category".to_string()],
+                ..Default::default()
+            };
+            seeded_settings.save(&settings_path).unwrap();
+            mgr.invalidate_settings_cache("replay_config_only");
+            mgr.add_documents_sync(
+                "replay_config_only",
+                vec![
+                    Document::from_json(&serde_json::json!({
+                        "objectID": "doc-monitor",
+                        "name": "Studio Monitor",
+                        "description": "Reference monitor for editing",
+                        "category": "Audio"
+                    }))
+                    .unwrap(),
+                    Document::from_json(&serde_json::json!({
+                        "objectID": "doc-headphones",
+                        "name": "Wireless Headphones",
+                        "description": "Closed-back headphones",
+                        "category": "Audio"
+                    }))
+                    .unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+            mgr.append_oplog(
+                "replay_config_only",
+                "settings",
+                serde_json::json!({
+                    "searchableAttributes": ["name", "description", "category"],
+                    "attributesForFaceting": ["category"]
+                }),
+            );
+            mgr.append_oplog(
+                "replay_config_only",
+                "save_synonyms",
+                serde_json::json!({
+                    "synonyms": [{
+                        "objectID": "syn-monitor-display",
+                        "type": "synonym",
+                        "synonyms": ["monitor", "display"]
+                    }],
+                    "replace": false
+                }),
+            );
+            mgr.append_oplog(
+                "replay_config_only",
+                "save_rules",
+                serde_json::json!({
+                    "rules": [],
+                    "clearExisting": true
+                }),
+            );
+            mgr.graceful_shutdown().await;
+        }
+
+        let committed_seq_path = base.join("replay_config_only").join("committed_seq");
+        assert_eq!(
+            std::fs::read_to_string(&committed_seq_path).unwrap().trim(),
+            "2",
+            "document commits should not eagerly advance over config-only oplog entries"
+        );
+
+        {
+            let mgr = IndexManager::new(&base);
+            let search = mgr
+                .search("replay_config_only", "monitor", None, None, 10)
+                .unwrap();
+            assert_eq!(
+                search.total, 1,
+                "direct term search should survive config replay"
+            );
+
+            let facet_result = mgr
+                .search_with_options(
+                    "replay_config_only",
+                    "",
+                    &SearchOptions {
+                        limit: 0,
+                        facets: Some(&facets),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                facet_result.facets.get("category").and_then(|values| {
+                    values
+                        .iter()
+                        .find(|facet| facet.path == "Audio")
+                        .map(|facet| facet.count)
+                }),
+                Some(2),
+                "facet counts should remain available after config-only recovery"
+            );
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(&committed_seq_path).unwrap().trim(),
+            "5",
+            "config-only recovery should advance committed_seq without a document rewrite"
+        );
     }
 
     #[tokio::test]

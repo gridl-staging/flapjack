@@ -1,3 +1,5 @@
+/**
+ */
 import type { EndRequest, Request, Requester, Response } from '@flapjack-search/client-common';
 
 export type EchoResponse = Omit<EndRequest, 'data'> &
@@ -18,6 +20,9 @@ export type EchoRequesterParams = {
   status?: number | undefined;
 };
 
+/**
+ * TODO: Document getUrlParams.
+ */
 function getUrlParams({
   host,
   search,
@@ -57,7 +62,13 @@ function getUrlParams({
   };
 }
 
+/**
+ * TODO: Document createEchoRequester.
+ */
 export function createEchoRequester({ getURL, status = 200 }: EchoRequesterParams): Requester {
+  /**
+   * TODO: Document send.
+   */
   function send(request: EndRequest): Promise<Response> {
     const { host, searchParams, algoliaAgent, path } = getUrlParams(getURL(request.url));
 

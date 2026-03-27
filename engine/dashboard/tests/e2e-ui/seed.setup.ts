@@ -5,12 +5,11 @@
  * Requires: Flapjack server running on the repo-local configured backend port.
  */
 import { test as setup, expect } from '@playwright/test';
-import { PRODUCTS, SYNONYMS, RULES, SETTINGS } from '../fixtures/test-data';
+import { TEST_INDEX, PRODUCTS, SYNONYMS, RULES, SETTINGS } from '../fixtures/test-data';
 import { API_BASE as API, API_HEADERS as H } from '../fixtures/local-instance';
-import { deleteExperimentsByName } from '../fixtures/api-helpers';
+import { deletePersonalizationStrategy } from '../fixtures/api-helpers';
 
-const INDEX = 'e2e-products';
-const EXPERIMENT_INDEX = 'e2e-experiments';
+const INDEX = TEST_INDEX;
 
 setup('seed test data', async ({ request }) => {
   // 1. Backend must be running
@@ -20,9 +19,11 @@ setup('seed test data', async ({ request }) => {
     `Flapjack server must be running at ${API}`,
   ).toBeTruthy();
 
+  // Reset the global strategy through the backend so test state does not depend on a local data-dir guess.
+  await deletePersonalizationStrategy(request);
+
   // 2. Clean slate — delete test index if it exists (ignore 404)
   await request.delete(`${API}/1/indexes/${INDEX}`, { headers: H }).catch(() => {});
-  await request.delete(`${API}/1/indexes/${EXPERIMENT_INDEX}`, { headers: H }).catch(() => {});
 
   // 3. Add documents (creates index implicitly)
   const batchRes = await request.post(`${API}/1/indexes/${INDEX}/batch`, {
@@ -55,10 +56,11 @@ setup('seed test data', async ({ request }) => {
   expect(rulesRes.ok(), 'Failed to batch-add rules').toBeTruthy();
 
   // 7. Seed analytics data (7 days of realistic search/click/geo data)
-  await request.post(`${API}/2/analytics/seed`, {
+  const analyticsSeedRes = await request.post(`${API}/2/analytics/seed`, {
     headers: H,
     data: { index: INDEX, days: 7 },
   });
+  expect(analyticsSeedRes.ok(), 'Failed to seed analytics data').toBeTruthy();
 
   // 8. Wait for indexing to complete — poll until all documents are searchable
   await expect(async () => {
@@ -70,44 +72,4 @@ setup('seed test data', async ({ request }) => {
     const body = await res.json();
     expect(body.nbHits).toBeGreaterThanOrEqual(PRODUCTS.length);
   }).toPass({ timeout: 15_000 });
-
-  // 9. Seed a baseline experiment for experiment browser-unmocked tests.
-  await deleteExperimentsByName(request, 'e2e-seeded-experiment');
-
-  // Create a dedicated index for experiment UI tests so they don't mutate
-  // the shared search index used by search/browse tests.
-  const expIndexRes = await request.post(`${API}/1/indexes/${EXPERIMENT_INDEX}/batch`, {
-    headers: H,
-    data: {
-      requests: [
-        {
-          action: 'addObject',
-          body: {
-            objectID: 'exp-doc-1',
-            title: 'Experiment Seed Document',
-            category: 'Testing',
-          },
-        },
-      ],
-    },
-  });
-  expect(expIndexRes.ok(), 'Failed to seed experiment test index').toBeTruthy();
-
-  const expRes = await request.post(`${API}/2/abtests`, {
-    headers: H,
-    data: {
-      name: 'e2e-seeded-experiment',
-      indexName: EXPERIMENT_INDEX,
-      trafficSplit: 0.5,
-      control: { name: 'control' },
-      variant: {
-        name: 'variant',
-        queryOverrides: { filters: 'brand:Apple' },
-      },
-      primaryMetric: 'ctr',
-      minimumDays: 14,
-    },
-  });
-  expect(expRes.ok(), 'Failed to create seeded experiment').toBeTruthy();
-  await expRes.json();
 });

@@ -45,6 +45,7 @@ import type { DeletedAtResponse } from '../model/deletedAtResponse';
 import type { DictionarySettingsParams } from '../model/dictionarySettingsParams';
 import type { DictionaryType } from '../model/dictionaryType';
 import type { ErrorBase } from '../model/errorBase';
+import type { FederatedResponse } from '../model/federatedResponse';
 import type { GetApiKeyResponse } from '../model/getApiKeyResponse';
 import type { GetDictionarySettingsResponse } from '../model/getDictionarySettingsResponse';
 import type { GetLogsResponse } from '../model/getLogsResponse';
@@ -778,8 +779,8 @@ export function createSearchClient({
     searchForHits<T>(
       searchMethodParams: LegacySearchMethodProps | SearchMethodParams,
       requestOptions?: RequestOptions | undefined
-    ): Promise<{results: Array<SearchResponse<T>>}> {
-      return this.search(searchMethodParams, requestOptions) as Promise<{results: Array<SearchResponse<T>>}>;
+    ): Promise<{results: Array<SearchResponse<T>>} | FederatedResponse<T>> {
+      return this.search(searchMethodParams, requestOptions) as Promise<{results: Array<SearchResponse<T>>} | FederatedResponse<T>>;
     },
     
     /**

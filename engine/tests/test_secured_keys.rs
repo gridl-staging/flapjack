@@ -377,6 +377,7 @@ fn test_parent_index_restriction_enforced() {
         max_queries_per_ip_per_hour: 0,
         query_parameters: String::new(),
         referers: vec![],
+        restrict_sources: None,
         validity: 0,
     });
 
@@ -835,6 +836,7 @@ mod e2e {
             max_queries_per_ip_per_hour: 0,
             query_parameters: String::new(),
             referers: vec![],
+            restrict_sources: None,
             validity: 0,
         });
 

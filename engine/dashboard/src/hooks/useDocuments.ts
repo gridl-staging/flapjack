@@ -1,3 +1,6 @@
+/**
+ * @module React Query mutation hooks for deleting a single document and batch-adding documents to a Flapjack search index, with toast notifications and background task polling.
+ */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
@@ -13,6 +16,12 @@ interface BatchResponse {
   objectIDs: string[];
 }
 
+/**
+ * React Query mutation hook that deletes a single document from an index by objectID.
+ * Invalidates search and indexes queries on success and shows a toast notification.
+ * @param indexName - Name of the index to delete from.
+ * @returns A mutation whose `mutate` accepts the objectID string to delete.
+ */
 export function useDeleteDocument(indexName: string) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -39,6 +48,12 @@ export function useDeleteDocument(indexName: string) {
   });
 }
 
+/**
+ * React Query mutation hook that batch-adds documents to an index via the batch API.
+ * On success, registers the returned taskID as an active indexing task, displays a persistent toast, and polls the task endpoint every 500 ms until the status is `published` or `error` (with a 30 s safety timeout). Query caches for search, indexes, and index-stats are invalidated once indexing completes.
+ * @param indexName - Name of the target index.
+ * @returns A mutation whose `mutate` accepts an array of document objects to index.
+ */
 export function useAddDocuments(indexName: string) {
   const queryClient = useQueryClient();
   const { toast } = useToast();

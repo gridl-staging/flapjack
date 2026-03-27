@@ -1,88 +1,79 @@
-import { algoliasearch } from 'algoliasearch';
-import * as dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-dotenv.config({ path: join(__dirname, '..', '.secret', '.env.secret') });
-
-const ALGOLIA_APP_ID = process.env.ALGOLIA_APP_ID;
-const ALGOLIA_API_KEY = process.env.ALGOLIA_ADMIN_KEY;
-
-const algoliaClient = algoliasearch(ALGOLIA_APP_ID, ALGOLIA_API_KEY);
 import { createFlapjackClient } from './lib/flapjack-client.js';
-const flapjackClient = createFlapjackClient();
+import { assert, bindClientHelpers } from './lib/test-helpers.js';
 
-async function testExhaustiveFields() {
-  const testIndex = 'test_exhaustive_debug';
-  const docs = [
-    { objectID: '1', name: 'Product A', category: 'electronics' },
-    { objectID: '2', name: 'Product B', category: 'books' }
-  ];
-  
-  // Setup
-  await flapjackClient.setSettings({
-    indexName: testIndex,
-    indexSettings: { attributesForFaceting: ['category'] }
-  });
-  
-  const [[algoliaTask]] = await Promise.all([
-    algoliaClient.saveObjects({ indexName: testIndex, objects: docs }),
-    flapjackClient.saveObjects({ indexName: testIndex, objects: docs })
-  ]);
-  
-  await algoliaClient.waitForTask({ indexName: testIndex, taskID: algoliaTask.taskID });
-  await new Promise(r => setTimeout(r, 3000));
-  
-  // Test 1: Query without facets
-  console.log('\n=== TEST 1: Query without facets ===');
-  const [a1, f1] = await Promise.all([
-    algoliaClient.search({ requests: [{ indexName: testIndex, query: '' }] }),
-    flapjackClient.search({ requests: [{ indexName: testIndex, query: '' }] })
-  ]);
-  
-  console.log('Algolia exhaustive keys:', Object.keys(a1.results[0].exhaustive));
-  console.log('Flapjack exhaustive keys:', Object.keys(f1.results[0].exhaustive));
-  console.log('Algolia has exhaustiveFacetsCount?', 'exhaustiveFacetsCount' in a1.results[0]);
-  console.log('Flapjack has exhaustiveFacetsCount?', 'exhaustiveFacetsCount' in f1.results[0]);
-  console.log('Algolia has facets?', 'facets' in a1.results[0]);
-  console.log('Flapjack has facets?', 'facets' in f1.results[0]);
-  
-  // Test 2: Query with facets
-  console.log('\n=== TEST 2: Query with facets ===');
-  const [a2, f2] = await Promise.all([
-    algoliaClient.search({ requests: [{ indexName: testIndex, query: '', facets: ['category'] }] }),
-    flapjackClient.search({ requests: [{ indexName: testIndex, query: '', facets: ['category'] }] })
-  ]);
-  
-  console.log('Algolia exhaustive keys:', Object.keys(a2.results[0].exhaustive));
-  console.log('Flapjack exhaustive keys:', Object.keys(f2.results[0].exhaustive));
-  console.log('Algolia has exhaustiveFacetsCount?', 'exhaustiveFacetsCount' in a2.results[0]);
-  console.log('Flapjack has exhaustiveFacetsCount?', 'exhaustiveFacetsCount' in f2.results[0]);
-  console.log('Algolia facets:', JSON.stringify(a2.results[0].facets));
-  console.log('Flapjack facets:', JSON.stringify(f2.results[0].facets));
-  
-  // Test 3: Query with facets but 0 results
-  console.log('\n=== TEST 3: Query with facets, 0 results ===');
-  const [a3, f3] = await Promise.all([
-    algoliaClient.search({ requests: [{ indexName: testIndex, query: 'nonexistent', facets: ['category'] }] }),
-    flapjackClient.search({ requests: [{ indexName: testIndex, query: 'nonexistent', facets: ['category'] }] })
-  ]);
-  
-  console.log('Algolia nbHits:', a3.results[0].nbHits);
-  console.log('Flapjack nbHits:', f3.results[0].nbHits);
-  console.log('Algolia facets:', JSON.stringify(a3.results[0].facets));
-  console.log('Flapjack facets:', JSON.stringify(f3.results[0].facets));
-  console.log('Algolia has exhaustiveFacetsCount?', 'exhaustiveFacetsCount' in a3.results[0]);
-  console.log('Flapjack has exhaustiveFacetsCount?', 'exhaustiveFacetsCount' in f3.results[0]);
-  
-  // Cleanup
-  await Promise.all([
-    algoliaClient.deleteIndex({ indexName: testIndex }),
-    flapjackClient.deleteIndex({ indexName: testIndex })
-  ]);
+const client = createFlapjackClient();
+const { waitForMinHits, cleanupIndexes } = bindClientHelpers(client);
+
+async function run() {
+  const testIndex = `test_exhaustive_${Date.now()}`;
+
+  await cleanupIndexes([testIndex]);
+
+  try {
+    const settingsResponse = await client.setSettings({
+      indexName: testIndex,
+      indexSettings: { attributesForFaceting: ['category'] }
+    });
+    assert(
+      settingsResponse && typeof settingsResponse.taskID === 'number',
+      `Expected numeric taskID from setSettings, got ${JSON.stringify(settingsResponse)}`
+    );
+    await client.waitForTask({ indexName: testIndex, taskID: settingsResponse.taskID });
+
+    const saveResponse = await client.saveObjects({
+      indexName: testIndex,
+      objects: [
+        { objectID: '1', name: 'Product A', category: 'electronics' },
+        { objectID: '2', name: 'Product B', category: 'books' }
+      ]
+    });
+    const firstTask = Array.isArray(saveResponse) ? saveResponse[0] : saveResponse;
+    assert(firstTask && typeof firstTask.taskID === 'number', `Expected numeric taskID from saveObjects, got ${JSON.stringify(saveResponse)}`);
+    await client.waitForTask({ indexName: testIndex, taskID: firstTask.taskID });
+
+    await waitForMinHits(testIndex, 2, 5000);
+
+    const withoutFacetsResponse = await client.search({
+      requests: [{ indexName: testIndex, query: '' }]
+    });
+    const withoutFacets = withoutFacetsResponse.results[0];
+
+    assert(withoutFacets.exhaustive && typeof withoutFacets.exhaustive === 'object', 'Expected exhaustive object without facets');
+    assert(typeof withoutFacets.exhaustive.nbHits === 'boolean', 'Expected exhaustive.nbHits boolean without facets');
+    assert(typeof withoutFacets.exhaustive.typo === 'boolean', 'Expected exhaustive.typo boolean without facets');
+    assert(typeof withoutFacets.exhaustive.facetValues === 'boolean', 'Expected exhaustive.facetValues boolean without facets');
+    assert(typeof withoutFacets.exhaustive.rulesMatch === 'boolean', 'Expected exhaustive.rulesMatch boolean without facets');
+    assert(!('exhaustiveFacetsCount' in withoutFacets), 'Did not expect exhaustiveFacetsCount without facets request');
+    assert(!('facets' in withoutFacets), 'Did not expect facets field without facets request');
+
+    const withFacetsResponse = await client.search({
+      requests: [{ indexName: testIndex, query: '', facets: ['category'] }]
+    });
+    const withFacets = withFacetsResponse.results[0];
+
+    assert(typeof withFacets.exhaustiveFacetsCount === 'boolean', 'Expected exhaustiveFacetsCount boolean with facets request');
+    assert(withFacets.exhaustive && typeof withFacets.exhaustive === 'object', 'Expected exhaustive object with facets');
+    assert(typeof withFacets.exhaustive.facetsCount === 'boolean', 'Expected exhaustive.facetsCount boolean with facets');
+    assert(withFacets.facets && withFacets.facets.category, 'Expected facets.category with facets request');
+    assert(withFacets.facets.category.electronics === 1, `Expected electronics facet count=1, got ${JSON.stringify(withFacets.facets.category)}`);
+    assert(withFacets.facets.category.books === 1, `Expected books facet count=1, got ${JSON.stringify(withFacets.facets.category)}`);
+
+    const noHitFacetsResponse = await client.search({
+      requests: [{ indexName: testIndex, query: 'nonexistent', facets: ['category'] }]
+    });
+    const noHitFacets = noHitFacetsResponse.results[0];
+
+    assert(noHitFacets.nbHits === 0, `Expected nbHits=0 for no-hit query, got ${noHitFacets.nbHits}`);
+    assert(typeof noHitFacets.exhaustiveFacetsCount === 'boolean', 'Expected exhaustiveFacetsCount on no-hit facets request');
+    assert(noHitFacets.facets && Object.keys(noHitFacets.facets).length === 0, `Expected empty facets object for no-hit query, got ${JSON.stringify(noHitFacets.facets)}`);
+
+    console.log('Exhaustive field assertions passed');
+  } finally {
+    await cleanupIndexes([testIndex]);
+  }
 }
 
-testExhaustiveFields().catch(console.error);
+run().catch((error) => {
+  console.error(error?.message || error);
+  process.exit(1);
+});

@@ -4,6 +4,7 @@
 //! sharing). Running them in-process via `cargo test --lib` takes <1s instead
 //! of minutes under nextest.
 
+mod search_compat;
 #[cfg(feature = "analytics")]
 mod test_analytics;
 #[cfg(feature = "analytics")]

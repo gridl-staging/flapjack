@@ -1,3 +1,6 @@
+/**
+ * @module Provides an ErrorBoundary component that catches render-time errors in its subtree and displays either a custom fallback or a default error panel with a retry option.
+ */
 import { Component, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle } from 'lucide-react';
@@ -12,6 +15,9 @@ interface State {
   error: Error | null;
 }
 
+/**
+ * React class component that catches JavaScript errors in its child component tree and displays a fallback UI instead of crashing the entire app. Supports an optional custom fallback; otherwise renders a default error message with a retry button that resets the error state.
+ */
 export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
@@ -22,6 +28,10 @@ export class ErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
+  /**
+   * Renders the fallback UI when an error has been caught, or the children when no error is present. If a custom `fallback` prop is provided it takes precedence over the default error display. The default UI shows the error message and a "Try again" button that clears the error state, re-attempting to render the children.
+   * @returns The fallback UI or the wrapped children.
+   */
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;

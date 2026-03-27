@@ -19,14 +19,44 @@ import { test, expect } from '../../fixtures/auth.fixture';
 import type { Page } from '@playwright/test';
 
 const QS_SOURCE = 'e2e-products';
+const QS_PAGE_HEADING = { name: 'Query Suggestions', exact: true, level: 2 } as const;
+
+async function waitForQuerySuggestionsPageReady(page: Page, timeout: number = 30_000) {
+  await page.waitForURL('**/query-suggestions', { timeout });
+  // The loaded UI renders either the configs list or the empty-state heading in the same commit
+  // where the skeleton disappears. Waiting for either avoids acting during the loading phase.
+  await expect(
+    page
+      .getByTestId('qs-configs-list')
+      .or(page.getByRole('heading', { name: 'No Query Suggestions configs' })),
+  ).toBeVisible({ timeout });
+  // Keep the heading assertion as an explicit route-level sanity check.
+  await expect(page.getByRole('heading', QS_PAGE_HEADING)).toBeVisible({ timeout });
+}
 
 // ── Shared UI helpers (pure UI interactions — no API calls) ──────────────────
 
 async function goToQsPage(page: Page) {
-  await page.goto('/query-suggestions');
-  // Use the <h2> page heading (exact match), not the empty-state <h3>
+  await page.goto('/query-suggestions', { waitUntil: 'domcontentloaded' });
+  await waitForQuerySuggestionsPageReady(page);
+}
+
+async function goToOverviewPage(page: Page) {
+  await page.goto('/overview');
+  await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible({ timeout: 10000 });
+}
+
+async function ensureNoConfigsViaUi(page: Page) {
+  while (await page.getByTestId('qs-config-card').count()) {
+    const card = page.getByTestId('qs-config-card').first();
+    const configName = (await card.getByTestId('qs-config-name').innerText()).trim();
+    await deleteConfigViaUi(page, configName);
+  }
+}
+
+async function assertConfigNameVisible(page: Page, configName: string) {
   await expect(
-    page.getByRole('heading', { name: 'Query Suggestions', exact: true, level: 2 })
+    page.getByTestId('qs-config-name').filter({ hasText: configName }),
   ).toBeVisible({ timeout: 10000 });
 }
 
@@ -37,7 +67,30 @@ async function createConfigViaUi(page: Page, configName: string) {
   await dialog.getByLabel(/suggestions index name/i).fill(configName);
   await dialog.getByLabel(/source index name/i).fill(QS_SOURCE);
   await dialog.getByRole('button', { name: /create config/i }).click();
-  await expect(dialog).not.toBeVisible({ timeout: 10000 });
+  await expect(async () => {
+    await expect(dialog).not.toBeVisible({ timeout: 10_000 });
+  }).toPass({ timeout: 20_000, intervals: [1_000, 2_000, 4_000] });
+  await expect(page.getByText('Config created', { exact: true })).toBeVisible({ timeout: 5000 });
+}
+
+async function waitForConfigNotVisible(
+  page: Page,
+  configName: string,
+  timeoutMs: number = 30_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  const targetConfig = page.getByTestId('qs-config-name').filter({ hasText: configName });
+
+  while (Date.now() < deadline) {
+    if ((await targetConfig.count()) === 0) {
+      return;
+    }
+
+    await page.reload();
+    await goToQsPage(page);
+  }
+
+  await expect(targetConfig).toHaveCount(0);
 }
 
 async function deleteConfigViaUi(page: Page, configName: string) {
@@ -46,13 +99,54 @@ async function deleteConfigViaUi(page: Page, configName: string) {
   });
   const card = page.getByTestId('qs-config-card').filter({ hasText: configName });
   await card.getByRole('button', { name: /delete config/i }).click();
-  // Scope to config name elements only (config name also appears in the API log widget)
-  await expect(page.getByTestId('qs-config-name').filter({ hasText: configName })).not.toBeVisible({ timeout: 10000 });
+  await waitForConfigNotVisible(page, configName);
+}
+
+async function deleteConfigViaUiIfPresent(page: Page, configName: string) {
+  try {
+    await goToQsPage(page);
+    const card = page.getByTestId('qs-config-card').filter({ hasText: configName });
+    if ((await card.count()) === 0) {
+      return;
+    }
+    await deleteConfigViaUi(page, configName);
+  } catch {
+    // Best-effort cleanup only. If the main assertion already failed, keep that failure visible.
+  }
+}
+
+async function waitForConfigVisibleAfterNavigation(
+  page: Page,
+  configName: string,
+  timeoutMs: number = 45_000,
+) {
+  const targetConfig = page
+    .getByTestId('qs-configs-list')
+    .getByTestId('qs-config-name')
+    .filter({ hasText: configName });
+  if ((await targetConfig.count()) > 0 && await targetConfig.first().isVisible()) {
+    return;
+  }
+
+  // toPass retries thrown async assertion failures, including readiness waits and visibility checks.
+  await expect(async () => {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForQuerySuggestionsPageReady(page, 10_000);
+    await expect(
+      page
+        .getByTestId('qs-configs-list')
+        .getByTestId('qs-config-name')
+        .filter({ hasText: configName }),
+    ).toBeVisible({ timeout: 10_000 });
+  }).toPass({ timeout: timeoutMs, intervals: [2_000, 4_000, 6_000] });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 test.describe('Query Suggestions Page', () => {
+  // This suite mutates shared Query Suggestions state (create/delete/all-config cleanup),
+  // so tests must run serially to avoid cross-test interference under fullyParallel mode.
+  test.describe.configure({ mode: 'serial' });
 
   // ── Load-and-verify (first spec per BROWSER_TESTING_STANDARDS_2.md) ─────────
   //
@@ -60,26 +154,57 @@ test.describe('Query Suggestions Page', () => {
   // navigate back, and assert the config renders correctly in the list body.
 
   test('seeded config renders in the list after navigation', async ({ page }) => {
+    // This flow intentionally waits for eventual consistency after route changes.
+    // Marking slow avoids false timeouts in full-suite CI contention.
+    test.slow();
+
     const configName = `qs-seed-${Date.now()}`;
 
     // ARRANGE: create config via UI (precondition for list-render test)
     await goToQsPage(page);
     await createConfigViaUi(page, configName);
     // Scope to card name element (configName also appears in the API log widget)
-    await expect(page.getByTestId('qs-config-name').filter({ hasText: configName })).toBeVisible({ timeout: 10000 });
+    await assertConfigNameVisible(page, configName);
 
     // Navigate away then back — forces a fresh data fetch
-    await page.goto('/overview');
-    await expect(page.getByRole('heading', { name: 'Indexes', exact: true })).toBeVisible({ timeout: 10000 });
+    await goToOverviewPage(page);
     await goToQsPage(page);
 
     // ASSERT: config appears in the list body
-    await expect(
-      page.getByTestId('qs-configs-list').getByText(configName)
-    ).toBeVisible({ timeout: 10000 });
+    await waitForConfigVisibleAfterNavigation(page, configName);
 
     // CLEANUP
     await deleteConfigViaUi(page, configName);
+  });
+
+  test('config visibility poll survives delayed config response after navigation', async ({ page }) => {
+    test.slow();
+
+    const configName = `qs-delayed-nav-${Date.now()}`;
+    const configListDelayMs = 1800;
+
+    await goToQsPage(page);
+    await createConfigViaUi(page, configName);
+    await assertConfigNameVisible(page, configName);
+
+    await page.route('**/1/configs', async (route) => {
+      await new Promise<void>((resolve) => setTimeout(resolve, configListDelayMs));
+      await route.continue();
+    });
+
+    await goToOverviewPage(page);
+
+    // Use the shared readiness helper instead of bare goto+waitForURL to avoid
+    // skeleton-phase races — the route interceptor delays configs by ~1800ms,
+    // well within goToQsPage()'s 30s default heading-wait timeout.
+    await goToQsPage(page);
+
+    try {
+      await waitForConfigVisibleAfterNavigation(page, configName, 8000);
+    } finally {
+      await page.unroute('**/1/configs');
+      await deleteConfigViaUiIfPresent(page, configName);
+    }
   });
 
   // ── Page basics ──────────────────────────────────────────────────────────────
@@ -91,18 +216,9 @@ test.describe('Query Suggestions Page', () => {
 
   test('empty state shows Create Your First Config when no configs exist', async ({ page }) => {
     await goToQsPage(page);
-
-    const configList = page.getByTestId('qs-configs-list');
-    const hasConfigs = await configList.isVisible({ timeout: 2000 }).catch(() => false);
-
-    if (!hasConfigs) {
-      await expect(
-        page.getByRole('button', { name: /create.*first config/i })
-      ).toBeVisible();
-    } else {
-      // List exists — load-and-verify test covers this state
-      expect(hasConfigs).toBe(true);
-    }
+    await ensureNoConfigsViaUi(page);
+    await expect(page.getByRole('heading', { name: 'No Query Suggestions configs' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create Your First Config' })).toBeVisible();
   });
 
   // ── Create config dialog ─────────────────────────────────────────────────────
@@ -127,6 +243,35 @@ test.describe('Query Suggestions Page', () => {
 
     await dialog.getByRole('button', { name: /cancel/i }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
+  });
+
+  test('exclude word chips can be added and removed before submit', async ({ page }) => {
+    const configName = `qs-exclude-${Date.now()}`;
+
+    await goToQsPage(page);
+    await page.getByRole('button', { name: /create config/i }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel(/suggestions index name/i).fill(configName);
+    await dialog.getByLabel(/source index name/i).fill(QS_SOURCE);
+
+    const excludeInput = dialog.getByLabel(/exclude word/i);
+    await excludeInput.fill('noise');
+    await dialog.getByRole('button', { name: /^add$/i }).click();
+
+    const excludeList = dialog.getByTestId('exclude-list');
+    await expect(excludeList).toBeVisible();
+    await expect(excludeList.getByText('noise')).toBeVisible();
+
+    await excludeList.getByRole('button', { name: 'Remove noise from exclude list' }).click();
+    await expect(dialog.getByTestId('exclude-list')).toHaveCount(0);
+
+    await dialog.getByRole('button', { name: /create config/i }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
+    await assertConfigNameVisible(page, configName);
+
+    await deleteConfigViaUi(page, configName);
   });
 
   test('cancel closes dialog without creating a config', async ({ page }) => {
@@ -194,6 +339,46 @@ test.describe('Query Suggestions Page', () => {
     await deleteConfigViaUi(page, configName);
   });
 
+  test('build logs can be expanded and collapsed after rebuild', async ({ page }) => {
+    const configName = `qs-logs-${Date.now()}`;
+
+    await goToQsPage(page);
+    await createConfigViaUi(page, configName);
+
+    let card = page.getByTestId('qs-config-card').filter({ hasText: configName });
+    await expect(card).toBeVisible({ timeout: 10000 });
+
+    const rebuildBtn = card.getByRole('button', { name: 'Rebuild suggestions index', exact: true });
+    await expect(rebuildBtn).toBeEnabled({ timeout: 30000 });
+    await rebuildBtn.click();
+    await expect(page.getByText('Build triggered', { exact: true })).toBeVisible({ timeout: 5000 });
+
+    // Wait for rebuild lifecycle to settle before refetching logs.
+    await expect(rebuildBtn).toBeEnabled({ timeout: 30000 });
+    await page.reload();
+    await goToQsPage(page);
+
+    card = page.getByTestId('qs-config-card').filter({ hasText: configName });
+    await expect(card).toBeVisible({ timeout: 10000 });
+
+    const buildLogsToggle = card.getByRole('button', { name: /build logs/i });
+    await expect(buildLogsToggle).toBeVisible({ timeout: 30000 });
+    await expect(buildLogsToggle).toHaveAttribute('aria-expanded', 'false');
+
+    await buildLogsToggle.click();
+    await expect(buildLogsToggle).toHaveAttribute('aria-expanded', 'true');
+
+    const buildLogsPanel = card.getByTestId('build-logs');
+    await expect(buildLogsPanel).toBeVisible();
+    await expect(buildLogsPanel).toContainText(/\[(INFO|WARN|ERROR)\]/);
+
+    await buildLogsToggle.click();
+    await expect(buildLogsToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(card.getByTestId('build-logs')).toHaveCount(0);
+
+    await deleteConfigViaUi(page, configName);
+  });
+
   // ── Delete config ────────────────────────────────────────────────────────────
 
   test('delete config removes it from the list', async ({ page }) => {
@@ -213,13 +398,12 @@ test.describe('Query Suggestions Page', () => {
   // ── Sidebar navigation ───────────────────────────────────────────────────────
 
   test('sidebar Query Suggestions link navigates to the page', async ({ page }) => {
-    await page.goto('/overview');
-    await expect(page.getByRole('heading', { name: 'Indexes', exact: true })).toBeVisible({ timeout: 10000 });
+    await goToOverviewPage(page);
 
     await page.getByRole('link', { name: /query suggestions/i }).click();
 
     await expect(
-      page.getByRole('heading', { name: 'Query Suggestions', exact: true, level: 2 })
+      page.getByRole('heading', QS_PAGE_HEADING)
     ).toBeVisible({ timeout: 10000 });
     await expect(page).toHaveURL(/query-suggestions/);
   });

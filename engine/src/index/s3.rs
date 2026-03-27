@@ -22,23 +22,40 @@ impl S3Config {
         })
     }
 
+    /// TODO: Document S3Config.bucket_internal.
     pub fn bucket_internal(&self) -> Result<Box<Bucket>> {
-        let region = match &self.endpoint {
-            Some(ep) => Region::Custom {
+        let bucket = Bucket::new(
+            &self.bucket_name,
+            self.region()?,
+            Credentials::default().map_err(|error| s3_error("S3 credentials", error))?,
+        )
+        .map_err(|error| s3_error("S3 bucket", error))?;
+        Ok(if self.endpoint.is_some() {
+            // MinIO and most S3-compatible stores require path-style addressing
+            // (http://host:port/bucket/key) instead of virtual-hosted-style
+            // (http://bucket.host:port/key). Enable path-style when a custom endpoint is set.
+            bucket.with_path_style()
+        } else {
+            bucket
+        })
+    }
+
+    fn region(&self) -> Result<Region> {
+        match &self.endpoint {
+            Some(ep) => Ok(Region::Custom {
                 region: self.region.clone(),
                 endpoint: ep.clone(),
-            },
+            }),
             None => self
                 .region
                 .parse()
-                .map_err(|e| crate::error::FlapjackError::S3(format!("Invalid region: {}", e)))?,
-        };
-        let creds = Credentials::default()
-            .map_err(|e| crate::error::FlapjackError::S3(format!("S3 credentials: {}", e)))?;
-        let bucket = Bucket::new(&self.bucket_name, region, creds)
-            .map_err(|e| crate::error::FlapjackError::S3(format!("S3 bucket: {}", e)))?;
-        Ok(bucket)
+                .map_err(|error| s3_error("Invalid region", error)),
+        }
     }
+}
+
+fn s3_error(context: &str, error: impl std::fmt::Display) -> crate::error::FlapjackError {
+    crate::error::FlapjackError::S3(format!("{context}: {error}"))
 }
 
 pub async fn upload_snapshot(config: &S3Config, index_name: &str, data: &[u8]) -> Result<String> {
@@ -118,4 +135,47 @@ pub async fn enforce_retention(config: &S3Config, index_name: &str, keep: usize)
         tracing::info!("Deleted old snapshot: {}", key);
     }
     Ok(to_delete.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set_dummy_aws_creds() {
+        std::env::set_var("AWS_ACCESS_KEY_ID", "test");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
+    }
+
+    fn test_config(endpoint: Option<&str>) -> S3Config {
+        S3Config {
+            bucket_name: "test-bucket".into(),
+            region: "us-east-1".into(),
+            endpoint: endpoint.map(str::to_owned),
+        }
+    }
+
+    /// TODO: Document bucket_internal_uses_path_style_when_endpoint_set.
+    #[test]
+    fn bucket_internal_uses_path_style_when_endpoint_set() {
+        set_dummy_aws_creds();
+
+        let config = test_config(Some("http://localhost:9000"));
+        let bucket = config.bucket_internal().expect("bucket_internal failed");
+        assert!(
+            bucket.is_path_style(),
+            "bucket should use path-style when endpoint is set"
+        );
+    }
+
+    #[test]
+    fn bucket_internal_uses_virtual_hosted_style_when_no_endpoint() {
+        set_dummy_aws_creds();
+
+        let config = test_config(None);
+        let bucket = config.bucket_internal().expect("bucket_internal failed");
+        assert!(
+            !bucket.is_path_style(),
+            "bucket should use virtual-hosted-style when no endpoint"
+        );
+    }
 }

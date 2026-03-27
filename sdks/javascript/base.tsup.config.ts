@@ -1,3 +1,5 @@
+/**
+ */
 import path from 'path';
 import type { Options } from 'tsup';
 
@@ -24,6 +26,9 @@ export function getBaseConfig(cwd: string): Options {
   };
 }
 
+/**
+ * TODO: Document getDependencies.
+ */
 export function getDependencies(pkg: PKG, requester: Requester): string[] {
   const deps = Object.keys(pkg.dependencies || {}) || [];
 

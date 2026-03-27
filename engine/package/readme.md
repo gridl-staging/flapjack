@@ -7,7 +7,7 @@
 > - If the noun ends in a "y" and is preceded by a consonant, drop the "y" and add "ies"
 > - If the noun ends in a "y" and is preceded by a vowel, add "s"
 
-The list is just a [JSON file](irregular-plurals.json) and can be used anywhere.
+The list is just a [JSON file](lang/plurals/irregular-plurals-en.json) and can be used anywhere.
 
 ## Install
 

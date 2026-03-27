@@ -1,3 +1,6 @@
+/**
+ * @module Developer-mode debug panel that displays categorized, timestamped log entries with copy-to-clipboard and clear functionality.
+ */
 import { useState } from 'react';
 import { useDevMode, DevLogEntry } from '@/hooks/useDevMode';
 import { Button } from '@/components/ui/button';
@@ -15,6 +18,11 @@ const categoryColors: Record<string, string> = {
   error: 'text-red-600 dark:text-red-400',
 };
 
+/**
+ * Renders a single developer log entry with timestamp, category badge, and message.
+ * Displays an expand/collapse toggle when the entry carries attached data,
+ * revealing a formatted JSON preview on expansion.
+ */
 function LogLine({ entry }: { entry: DevLogEntry }) {
   const [expanded, setExpanded] = useState(false);
   const colorClass = categoryColors[entry.category] || 'text-muted-foreground';
@@ -43,6 +51,11 @@ function LogLine({ entry }: { entry: DevLogEntry }) {
   );
 }
 
+/**
+ * Collapsible panel that surfaces real-time debug logs when dev mode is enabled.
+ * Provides controls to copy all logs to the clipboard, clear the log buffer,
+ * and collapse/expand the log list. Renders nothing when dev mode is off.
+ */
 export function DevModePanel() {
   const { enabled, logs, clear } = useDevMode();
   const [collapsed, setCollapsed] = useState(false);

@@ -1,6 +1,6 @@
 use crate::types::{Document, FieldValue};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +31,7 @@ pub enum HighlightValue {
 pub struct Highlighter {
     pre_tag: String,
     post_tag: String,
+    snippet_ellipsis_text: String,
 }
 
 impl Default for Highlighter {
@@ -38,20 +39,212 @@ impl Default for Highlighter {
         Self {
             pre_tag: "<em>".to_string(),
             post_tag: "</em>".to_string(),
+            snippet_ellipsis_text: "\u{2026}".to_string(),
+        }
+    }
+}
+
+fn lowercased_query_words(query_words: &[String]) -> Vec<String> {
+    query_words.iter().map(|word| word.to_lowercase()).collect()
+}
+
+fn all_query_words_found(query_words: &[String], matched_words: &[String]) -> bool {
+    let unique_matched: HashSet<&str> = matched_words.iter().map(|word| word.as_str()).collect();
+    query_words
+        .iter()
+        .all(|query_word| unique_matched.contains(query_word.as_str()))
+}
+
+/// TODO: Document collect_exact_matches.
+fn collect_exact_matches(
+    text_lower: &str,
+    query_words: &[String],
+    query_words_lower: &[String],
+    matched_words: &mut Vec<String>,
+    match_positions: &mut Vec<(usize, usize)>,
+) {
+    for (query_index, word_lower) in query_words_lower.iter().enumerate() {
+        let mut search_start = 0;
+        while let Some(relative_pos) = text_lower[search_start..].find(word_lower.as_str()) {
+            let absolute_pos = search_start + relative_pos;
+            matched_words.push(query_words[query_index].clone());
+            match_positions.push((absolute_pos, absolute_pos + word_lower.len()));
+            search_start = absolute_pos + word_lower.len();
+        }
+    }
+}
+
+/// TODO: Document collect_split_matches.
+fn collect_split_matches(
+    text_lower: &str,
+    query_words: &[String],
+    query_words_lower: &[String],
+    matched_words: &mut Vec<String>,
+    match_positions: &mut Vec<(usize, usize)>,
+) {
+    for (query_index, word_lower) in query_words_lower.iter().enumerate() {
+        let chars: Vec<char> = word_lower.chars().collect();
+        if chars.len() < 4 {
+            continue;
+        }
+
+        for split_pos in 2..chars.len().saturating_sub(1) {
+            let first_part: String = chars[..split_pos].iter().collect();
+            let second_part: String = chars[split_pos..].iter().collect();
+            if second_part.len() < 2 {
+                continue;
+            }
+
+            let split_form = format!("{} {}", first_part, second_part);
+            let mut search_start = 0;
+            while let Some(relative_pos) = text_lower[search_start..].find(&split_form) {
+                let absolute_pos = search_start + relative_pos;
+                matched_words.push(query_words[query_index].clone());
+                match_positions.push((absolute_pos, absolute_pos + split_form.len()));
+                search_start = absolute_pos + split_form.len();
+            }
+        }
+    }
+}
+
+/// TODO: Document collect_concat_matches.
+fn collect_concat_matches(
+    text_lower: &str,
+    query_words: &[String],
+    query_words_lower: &[String],
+    matched_words: &mut Vec<String>,
+    match_positions: &mut Vec<(usize, usize)>,
+) {
+    if query_words_lower.len() < 2 {
+        return;
+    }
+
+    for index in 0..query_words_lower.len() - 1 {
+        let concat = format!(
+            "{}{}",
+            query_words_lower[index],
+            query_words_lower[index + 1]
+        );
+        let mut search_start = 0;
+        while let Some(relative_pos) = text_lower[search_start..].find(&concat) {
+            let absolute_pos = search_start + relative_pos;
+            matched_words.push(query_words[index].clone());
+            matched_words.push(query_words[index + 1].clone());
+            match_positions.push((absolute_pos, absolute_pos + concat.len()));
+            search_start = absolute_pos + concat.len();
+        }
+    }
+}
+
+/// TODO: Document split_text_words.
+fn split_text_words(text: &str) -> Vec<(usize, &str)> {
+    let mut words = Vec::new();
+    let mut current_start = 0;
+    for (index, ch) in text.char_indices() {
+        if !ch.is_alphanumeric() {
+            if current_start < index {
+                words.push((current_start, &text[current_start..index]));
+            }
+            current_start = index + ch.len_utf8();
+        }
+    }
+    if current_start < text.len() {
+        words.push((current_start, &text[current_start..]));
+    }
+    words
+}
+
+fn max_fuzzy_distance(query_len: usize) -> usize {
+    if query_len >= 8 {
+        2
+    } else {
+        1
+    }
+}
+
+fn highlight_end_for_char_count(text_word: &str, word_start: usize, char_count: usize) -> usize {
+    text_word
+        .char_indices()
+        .nth(char_count)
+        .map(|(offset, _)| word_start + offset)
+        .unwrap_or(word_start + text_word.len())
+}
+
+/// TODO: Document collect_fuzzy_matches.
+fn collect_fuzzy_matches(
+    text: &str,
+    query_words: &[String],
+    query_words_lower: &[String],
+    matched_words: &mut Vec<String>,
+    match_positions: &mut Vec<(usize, usize)>,
+) {
+    let text_words = split_text_words(text);
+    for (word_start, text_word) in text_words {
+        let text_word_lower = text_word.to_lowercase();
+        let text_word_chars = text_word_lower.chars().count();
+
+        for (query_index, query_lower) in query_words_lower.iter().enumerate() {
+            let query_chars = query_lower.chars().count();
+            if query_chars < 4 || text_word_chars < 4 {
+                continue;
+            }
+
+            let max_distance = max_fuzzy_distance(query_chars);
+            let whole_word_distance = strsim::damerau_levenshtein(query_lower, &text_word_lower);
+            if whole_word_distance <= max_distance && whole_word_distance > 0 {
+                matched_words.push(query_words[query_index].clone());
+                let highlight_len = query_chars.min(text_word.len());
+                match_positions.push((word_start, word_start + highlight_len));
+                continue;
+            }
+
+            if text_word_chars > query_chars {
+                let prefix: String = text_word_lower.chars().take(query_chars).collect();
+                let prefix_distance = strsim::damerau_levenshtein(query_lower, &prefix);
+                if prefix_distance <= max_distance {
+                    matched_words.push(query_words[query_index].clone());
+                    let highlight_end =
+                        highlight_end_for_char_count(text_word, word_start, query_chars);
+                    match_positions.push((word_start, highlight_end));
+                }
+            }
+
+            let query_suffix: String = query_lower.chars().skip(1).collect();
+            let suffix_len = query_suffix.chars().count();
+            if suffix_len < 3 || text_word_chars < suffix_len {
+                continue;
+            }
+
+            let text_prefix: String = text_word_lower.chars().take(suffix_len).collect();
+            let suffix_distance = strsim::damerau_levenshtein(&query_suffix, &text_prefix);
+            if suffix_distance <= 1 {
+                matched_words.push(query_words[query_index].clone());
+                let highlight_end = highlight_end_for_char_count(text_word, word_start, suffix_len);
+                match_positions.push((word_start, highlight_end));
+            }
         }
     }
 }
 
 impl Highlighter {
     pub fn new(pre_tag: String, post_tag: String) -> Self {
-        Self { pre_tag, post_tag }
+        Self {
+            pre_tag,
+            post_tag,
+            snippet_ellipsis_text: "\u{2026}".to_string(),
+        }
     }
 
+    pub fn with_snippet_ellipsis(mut self, text: String) -> Self {
+        self.snippet_ellipsis_text = text;
+        self
+    }
+
+    /// TODO: Document Highlighter.highlight_document.
     pub fn highlight_document(
         &self,
         doc: &Document,
         query_words: &[String],
-        searchable_paths: &[String],
     ) -> HashMap<String, HighlightValue> {
         let mut result = HashMap::new();
 
@@ -64,19 +257,19 @@ impl Highlighter {
             // which fields the *search* engine queries, not highlighting.
             result.insert(
                 field_name.clone(),
-                self.highlight_field_value(field_value, query_words, field_name, searchable_paths),
+                self.highlight_field_value(field_value, query_words, field_name),
             );
         }
 
         result
     }
 
+    /// TODO: Document Highlighter.highlight_field_value.
     fn highlight_field_value(
         &self,
         value: &FieldValue,
         query_words: &[String],
         field_path: &str,
-        searchable_paths: &[String],
     ) -> HighlightValue {
         match value {
             FieldValue::Text(s) => HighlightValue::Single(self.highlight_text(s, query_words)),
@@ -96,7 +289,7 @@ impl Highlighter {
                     let nested_path = format!("{}.{}", field_path, k);
                     obj_result.insert(
                         k.clone(),
-                        self.highlight_field_value(v, query_words, &nested_path, searchable_paths),
+                        self.highlight_field_value(v, query_words, &nested_path),
                     );
                 }
                 HighlightValue::Object(obj_result)
@@ -105,139 +298,43 @@ impl Highlighter {
         }
     }
 
+    /// TODO: Document Highlighter.highlight_text.
     pub fn highlight_text(&self, text: &str, query_words: &[String]) -> HighlightResult {
         let text_lower = text.to_lowercase();
         let mut matched_words = Vec::new();
         let mut match_positions = Vec::new();
 
-        // Pre-compute lowercased query words to avoid repeated allocation
-        let query_words_lower: Vec<String> = query_words.iter().map(|w| w.to_lowercase()).collect();
+        let query_words_lower = lowercased_query_words(query_words);
+        collect_exact_matches(
+            &text_lower,
+            query_words,
+            &query_words_lower,
+            &mut matched_words,
+            &mut match_positions,
+        );
 
-        // 1. Exact substring matching for each query word
-        for (qi, word_lower) in query_words_lower.iter().enumerate() {
-            let mut start = 0;
-            while let Some(pos) = text_lower[start..].find(word_lower.as_str()) {
-                let absolute_pos = start + pos;
-                matched_words.push(query_words[qi].clone());
-                match_positions.push((absolute_pos, absolute_pos + word_lower.len()));
-                start = absolute_pos + word_lower.len();
-            }
-        }
-
-        // Check if exact matching already found all query words — if so,
-        // skip the expensive split/concat/fuzzy matching.
-        let unique_matched: std::collections::HashSet<&str> =
-            matched_words.iter().map(|w| w.as_str()).collect();
-        let all_found_exact = query_words
-            .iter()
-            .all(|qw| unique_matched.contains(qw.as_str()));
-
-        if !all_found_exact {
-            // 2. Split matching: for each query word >= 4 chars, try inserting a space
-            //    at each position to match split forms (e.g., "hotdog" -> "hot dog")
-            for (qi, word_lower) in query_words_lower.iter().enumerate() {
-                let chars: Vec<char> = word_lower.chars().collect();
-                if chars.len() < 4 {
-                    continue;
-                }
-                for split_pos in 2..chars.len().saturating_sub(1) {
-                    let first: String = chars[..split_pos].iter().collect();
-                    let second: String = chars[split_pos..].iter().collect();
-                    if second.len() < 2 {
-                        continue;
-                    }
-                    let split_form = format!("{} {}", first, second);
-                    let mut start = 0;
-                    while let Some(pos) = text_lower[start..].find(&split_form) {
-                        let absolute_pos = start + pos;
-                        matched_words.push(query_words[qi].clone());
-                        match_positions.push((absolute_pos, absolute_pos + split_form.len()));
-                        start = absolute_pos + split_form.len();
-                    }
-                }
-            }
-
-            // 3. Concat matching: for adjacent query word pairs, try concatenated form
-            //    (e.g., "ear" + "buds" -> try matching "earbuds" in text)
-            if query_words_lower.len() >= 2 {
-                for i in 0..query_words_lower.len() - 1 {
-                    let concat = format!("{}{}", query_words_lower[i], query_words_lower[i + 1]);
-                    let mut start = 0;
-                    while let Some(pos) = text_lower[start..].find(&concat) {
-                        let absolute_pos = start + pos;
-                        matched_words.push(query_words[i].clone());
-                        matched_words.push(query_words[i + 1].clone());
-                        match_positions.push((absolute_pos, absolute_pos + concat.len()));
-                        start = absolute_pos + concat.len();
-                    }
-                }
-            }
-
-            // 4. Fuzzy matching per word boundary (most expensive — only when needed)
-            let text_words: Vec<(usize, &str)> = {
-                let mut words = Vec::new();
-                let mut current_start = 0;
-                for (idx, ch) in text.char_indices() {
-                    if !ch.is_alphanumeric() {
-                        if current_start < idx {
-                            words.push((current_start, &text[current_start..idx]));
-                        }
-                        current_start = idx + ch.len_utf8();
-                    }
-                }
-                if current_start < text.len() {
-                    words.push((current_start, &text[current_start..]));
-                }
-                words
-            };
-
-            for (word_start, text_word) in &text_words {
-                let text_word_lower = text_word.to_lowercase();
-                for (qi, query_lower) in query_words_lower.iter().enumerate() {
-                    let ql_chars = query_lower.chars().count();
-                    let twl_chars = text_word_lower.chars().count();
-                    if ql_chars >= 4 && twl_chars >= 4 {
-                        let distance = strsim::damerau_levenshtein(query_lower, &text_word_lower);
-                        let max_distance = if ql_chars >= 8 { 2 } else { 1 };
-                        if distance <= max_distance && distance > 0 {
-                            matched_words.push(query_words[qi].clone());
-                            let highlight_len = ql_chars.min(text_word.len());
-                            match_positions.push((*word_start, word_start + highlight_len));
-                        } else if twl_chars > ql_chars {
-                            let prefix: String = text_word_lower.chars().take(ql_chars).collect();
-                            let prefix_distance = strsim::damerau_levenshtein(query_lower, &prefix);
-                            if prefix_distance <= max_distance {
-                                matched_words.push(query_words[qi].clone());
-                                let highlight_end = text_word
-                                    .char_indices()
-                                    .nth(ql_chars)
-                                    .map(|(i, _)| word_start + i)
-                                    .unwrap_or(word_start + text_word.len());
-                                match_positions.push((*word_start, highlight_end));
-                            }
-                        }
-                        if ql_chars >= 4 {
-                            let query_suffix: String = query_lower.chars().skip(1).collect();
-                            let suffix_len = query_suffix.chars().count();
-                            if twl_chars >= suffix_len && suffix_len >= 3 {
-                                let text_prefix: String =
-                                    text_word_lower.chars().take(suffix_len).collect();
-                                let suffix_distance =
-                                    strsim::damerau_levenshtein(&query_suffix, &text_prefix);
-                                if suffix_distance <= 1 {
-                                    matched_words.push(query_words[qi].clone());
-                                    let highlight_end = text_word
-                                        .char_indices()
-                                        .nth(suffix_len)
-                                        .map(|(i, _)| word_start + i)
-                                        .unwrap_or(word_start + text_word.len());
-                                    match_positions.push((*word_start, highlight_end));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if !all_query_words_found(query_words, &matched_words) {
+            collect_split_matches(
+                &text_lower,
+                query_words,
+                &query_words_lower,
+                &mut matched_words,
+                &mut match_positions,
+            );
+            collect_concat_matches(
+                &text_lower,
+                query_words,
+                &query_words_lower,
+                &mut matched_words,
+                &mut match_positions,
+            );
+            collect_fuzzy_matches(
+                text,
+                query_words,
+                &query_words_lower,
+                &mut matched_words,
+                &mut match_positions,
+            );
         }
 
         if matched_words.is_empty() {
@@ -251,7 +348,7 @@ impl Highlighter {
 
         let highlighted = self.apply_highlights(text, &match_positions);
 
-        let unique_matched: std::collections::HashSet<_> = matched_words.iter().collect();
+        let unique_matched: HashSet<_> = matched_words.iter().collect();
         let match_level = if unique_matched.len() == query_words.len() {
             MatchLevel::Full
         } else {
@@ -291,6 +388,7 @@ impl Highlighter {
         merged
     }
 
+    /// TODO: Document Highlighter.apply_highlights.
     fn apply_highlights(&self, text: &str, positions: &[(usize, usize)]) -> String {
         if positions.is_empty() {
             return text.to_string();
@@ -345,6 +443,7 @@ impl Highlighter {
         result
     }
 
+    /// TODO: Document Highlighter.snippet_field_value.
     fn snippet_field_value(
         &self,
         value: &FieldValue,
@@ -385,6 +484,7 @@ impl Highlighter {
         }
     }
 
+    /// TODO: Document Highlighter.snippet_text.
     fn snippet_text(&self, text: &str, query_words: &[String], word_count: usize) -> SnippetResult {
         // First, get the full highlight result to find match positions
         let highlight = self.highlight_text(text, query_words);
@@ -402,7 +502,7 @@ impl Highlighter {
             // No match — take first N words and add ellipsis
             let truncated: String = words[..word_count.min(words.len())].join(" ");
             return SnippetResult {
-                value: format!("{}\u{2026}", truncated),
+                value: format!("{}{}", truncated, self.snippet_ellipsis_text),
                 match_level: MatchLevel::None,
             };
         }
@@ -448,11 +548,11 @@ impl Highlighter {
 
         let mut value = String::new();
         if start > 0 {
-            value.push('\u{2026}');
+            value.push_str(&self.snippet_ellipsis_text);
         }
         value.push_str(&snippet_highlight.value);
         if end < words.len() {
-            value.push('\u{2026}');
+            value.push_str(&self.snippet_ellipsis_text);
         }
 
         SnippetResult {
@@ -572,6 +672,20 @@ mod tests {
     #[test]
     fn snippet_spec_invalid_count_defaults_10() {
         assert_eq!(parse_snippet_spec("title:abc"), ("title", 10));
+    }
+
+    #[test]
+    fn all_query_words_found_requires_every_query_word() {
+        let query_words = vec!["hello".to_string(), "world".to_string()];
+        assert!(all_query_words_found(
+            &query_words,
+            &[
+                "hello".to_string(),
+                "world".to_string(),
+                "hello".to_string()
+            ],
+        ));
+        assert!(!all_query_words_found(&query_words, &["hello".to_string()],));
     }
 
     // --- merge_positions ---
@@ -766,6 +880,9 @@ mod tests {
 
     // --- highlight_document ---
 
+    /// Verify that highlight_document includes all non-objectID fields in output.
+    ///
+    /// Constructs a document with title and brand fields, calls highlight_document, and asserts both fields are present in results while objectID is excluded.
     #[test]
     fn hl_document_all_fields_included() {
         use crate::types::{Document, FieldValue};
@@ -780,12 +897,15 @@ mod tests {
             id: "1".to_string(),
             fields,
         };
-        let result = h().highlight_document(&doc, &["gaming".to_string()], &[]);
+        let result = h().highlight_document(&doc, &["gaming".to_string()]);
         assert!(result.contains_key("title"));
         assert!(result.contains_key("brand"));
         assert!(!result.contains_key("objectID"));
     }
 
+    /// Verify that highlight_document correctly handles array fields.
+    ///
+    /// Constructs a document with a tags array field, calls highlight_document, and asserts the result contains HighlightValue::Array for the tags field.
     #[test]
     fn hl_document_array_field() {
         use crate::types::{Document, FieldValue};
@@ -802,7 +922,7 @@ mod tests {
             id: "1".to_string(),
             fields,
         };
-        let result = h().highlight_document(&doc, &["laptop".to_string()], &[]);
+        let result = h().highlight_document(&doc, &["laptop".to_string()]);
         assert!(matches!(result.get("tags"), Some(HighlightValue::Array(_))));
     }
 }

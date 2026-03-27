@@ -156,6 +156,25 @@
 - Each document shows all fields
 - Click document to view full details
 
+### B-SRH-003: Configure Display Preferences
+**As a** search administrator
+**I want to** configure per-index display preferences for Browse cards
+**So that** records render as product-style cards with a title, subtitle, image, and tags instead of only raw field-value rows
+
+**Acceptance Criteria:**
+- Browse page exposes a Display Preferences trigger that opens a configuration modal for the current index
+- Modal saves `titleAttribute`, `subtitleAttribute`, `imageAttribute`, and `tagAttributes` per index
+- Title and subtitle use single-select controls; tags use multi-select chips
+- Auto-detect prefills likely candidates from common field names (e.g. `name`, `title`, `image_url`)
+- Clear action resets preferences so the index returns to default card rendering
+- Preferences persist in localStorage across page navigation and browser refresh
+- When preferences exist, configured fields render in the card header area and are excluded from the remaining field-value rows
+- Enabling preferences preserves existing Browse card chrome: objectID badge, JSON toggle, copy action, and delete action remain available while only the content layout changes
+- Configured header fields fail soft: missing fields are skipped, null values do not break the card, and unusable image values fall back without rendering a broken or unsafe image element
+- When no preferences exist, cards render the existing field-value preview unchanged
+- Preferences are scoped per index with no cross-index leakage
+- Scope exclusions are explicit: no backend API/storage changes, no merchandising/rules integration, no metrics overlay/CTR annotations, no load-time detected-preferences banner, and no image preview inside the modal
+
 ---
 
 ## Synonyms

@@ -18,8 +18,7 @@
  * - Export button visible
  * - Request count badge accuracy
  */
-import { test, expect } from '../../fixtures/auth.fixture';
-import { API_BASE } from '../../fixtures/local-instance';
+import { test, expect, TEST_INDEX, API_BASE, gotoOverviewPage } from '../helpers';
 
 test.describe('Search Logs', () => {
   /**
@@ -27,9 +26,8 @@ test.describe('Search Logs', () => {
    * wait for the page to fully load, then navigate to /logs.
    */
   async function generateLogsAndNavigate(page: import('@playwright/test').Page) {
-    await page.goto('/overview');
-    await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
-    await expect(page.getByText('e2e-products').first()).toBeVisible({ timeout: 15000 });
+    await gotoOverviewPage(page);
+    await expect(page.getByText(TEST_INDEX).first()).toBeVisible({ timeout: 15000 });
 
     await page.goto('/logs');
     await expect(page.getByRole('heading', { name: /api log/i })).toBeVisible();
@@ -106,22 +104,27 @@ test.describe('Search Logs', () => {
     const filterInput = page.getByPlaceholder(/filter by url/i);
     await expect(filterInput).toBeVisible();
 
-    // Filter by "health"
+    const healthEntry = logsList.getByText(/\/health\b/).first();
+    const indexesEntry = logsList.getByText(/\/1\/indexes\b/).first();
+
+    await expect(healthEntry).toBeVisible({ timeout: 10_000 });
+    await expect(indexesEntry).toBeVisible({ timeout: 10_000 });
+
+    // Phase 1: prove a matching URL remains while a known non-match disappears
     await filterInput.fill('health');
+    await expect(healthEntry).toBeVisible({ timeout: 5_000 });
+    await expect(indexesEntry).not.toBeVisible({ timeout: 5_000 });
 
-    // Wait for the filter to take effect — only health entries should remain
-    await expect(async () => {
-      const visibleEntries = page.getByTestId('logs-list').getByTestId('log-entry');
-      const count = await visibleEntries.count();
-      // If filtering works, either we see only health entries or fewer entries
-      if (count > 0) {
-        const firstText = await visibleEntries.first().textContent();
-        expect(firstText).toContain('health');
-      }
-    }).toPass({ timeout: 5000 });
+    // Phase 2: apply an impossible filter — empty state should appear
+    await filterInput.fill('zzz_no_match_zzz');
+    await expect(page.getByRole('heading', { name: /no api logs/i })).toBeVisible({ timeout: 5_000 });
+    await expect(logsList).not.toBeVisible();
 
-    // Clear filter
+    // Phase 3: clear the filter — the original entries should reappear
     await filterInput.fill('');
+    await expect(logsList).toBeVisible({ timeout: 5_000 });
+    await expect(healthEntry).toBeVisible({ timeout: 5_000 });
+    await expect(indexesEntry).toBeVisible({ timeout: 5_000 });
   });
 
   // ---------- View Mode Toggle ----------
@@ -135,13 +138,13 @@ test.describe('Search Logs', () => {
     await expect(page.getByText('Curl').first()).toBeVisible();
 
     // Click Curl view mode
-    await page.locator('button', { hasText: 'Curl' }).first().click();
+    await page.getByRole('button', { name: 'Curl' }).click();
 
     // Should show curl commands (pre-formatted text blocks)
-    await expect(page.locator('pre').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/^curl -X/i).first()).toBeVisible({ timeout: 5000 });
 
     // Switch back to Endpoint view
-    await page.locator('button', { hasText: 'Endpoint' }).first().click();
+    await page.getByRole('button', { name: 'Endpoint' }).click();
 
     // Table headers should be visible again
     await expect(page.getByText('Time').first()).toBeVisible({ timeout: 5000 });
@@ -156,10 +159,10 @@ test.describe('Search Logs', () => {
     await expect(page.getByTestId('logs-list')).toBeVisible({ timeout: 10000 });
 
     // Switch to Curl view
-    await page.locator('button', { hasText: 'Curl' }).first().click();
+    await page.getByRole('button', { name: 'Curl' }).click();
 
-    // Verify curl commands are shown in pre blocks
-    const firstPre = page.locator('pre').first();
+    // Verify curl commands are shown in visible text blocks
+    const firstPre = page.getByText(/^curl -X/i).first();
     await expect(firstPre).toBeVisible({ timeout: 5000 });
 
     // The curl command should start with "curl -X" and contain the URL
@@ -172,8 +175,8 @@ test.describe('Search Logs', () => {
 
   test('expanded log entry shows request body and response sections', async ({ page }) => {
     // Navigate to search page first to generate a POST /query log entry with body
-    await page.goto(`/index/e2e-products`);
-    await expect(page.getByText('e2e-products').first()).toBeVisible({ timeout: 15000 });
+    await page.goto(`/index/${TEST_INDEX}`);
+    await expect(page.getByText(TEST_INDEX).first()).toBeVisible({ timeout: 15000 });
 
     // Perform a search to ensure POST log entry exists
     const searchInput = page.getByPlaceholder(/search/i).first();
@@ -187,7 +190,7 @@ test.describe('Search Logs', () => {
     await expect(page.getByTestId('logs-list')).toBeVisible({ timeout: 10000 });
 
     // Find and expand a POST entry (search query) which should have a request body
-    const postEntry = page.locator('button').filter({ hasText: 'POST' }).first();
+    const postEntry = page.getByRole('button', { name: /\bPOST\b/ }).first();
     if (await postEntry.isVisible({ timeout: 5000 }).catch(() => false)) {
       await postEntry.click();
 

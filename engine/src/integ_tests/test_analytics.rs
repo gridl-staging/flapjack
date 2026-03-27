@@ -1,10 +1,4 @@
-//! Consolidated analytics integration tests — no file I/O beyond temp directories.
-//!
-//! Covers:
-//!   - cleanup_old_partitions (retention.rs): partition eviction
-//!   - InsightEvent::validate (schema.rs): event validation
-//!
-//! Note: QueryAggregator tests removed — fully covered by inline tests in aggregation.rs
+//! Integration tests for the analytics pipeline covering partition retention cleanup, InsightEvent validation, and end-to-end recording through query verification for searches, clicks, conversions, HLL user counting, revenue aggregation, and rate endpoint edge cases.
 
 // QueryAggregator tests removed — fully covered by inline tests in analytics/aggregation.rs
 
@@ -19,6 +13,7 @@ fn create_partition(base: &std::path::Path, index: &str, table: &str, date: &str
     std::fs::write(dir.join("test.parquet"), b"dummy").unwrap();
 }
 
+/// Verify that partitions older than the retention window are evicted while recent ones are preserved.
 #[test]
 fn removes_old_partitions() {
     let tmp = TempDir::new().unwrap();
@@ -93,6 +88,7 @@ fn ignores_non_date_directories() {
 
 use crate::analytics::schema::InsightEvent;
 
+/// Build a valid click `InsightEvent` with a correlated query ID, one object, and position 1.
 fn valid_click() -> InsightEvent {
     InsightEvent {
         event_type: "click".to_string(),
@@ -112,6 +108,7 @@ fn valid_click() -> InsightEvent {
     }
 }
 
+/// Build a valid conversion `InsightEvent` with a correlated query ID and a $99.99 USD value.
 fn valid_conversion() -> InsightEvent {
     InsightEvent {
         event_type: "conversion".to_string(),
@@ -131,6 +128,7 @@ fn valid_conversion() -> InsightEvent {
     }
 }
 
+/// Build a valid view `InsightEvent` with two object IDs and no query correlation.
 fn valid_view() -> InsightEvent {
     InsightEvent {
         event_type: "view".to_string(),
@@ -215,6 +213,29 @@ fn max_boundary_user_token_129_chars() {
 }
 
 #[test]
+fn user_token_with_spaces_rejected() {
+    let mut e = valid_click();
+    e.user_token = "user token".to_string();
+    assert!(e.validate().unwrap_err().contains("userToken"));
+}
+
+#[test]
+fn user_token_with_special_chars_rejected() {
+    for token in ["user@token", "user!token", "user.token"] {
+        let mut e = valid_click();
+        e.user_token = token.to_string();
+        assert!(e.validate().unwrap_err().contains("userToken"));
+    }
+}
+
+#[test]
+fn user_token_with_valid_charset_accepted() {
+    let mut e = valid_click();
+    e.user_token = "abc-123_XYZ".to_string();
+    assert!(e.validate().is_ok());
+}
+
+#[test]
 fn empty_object_ids() {
     let mut e = valid_click();
     e.object_ids = vec![];
@@ -252,11 +273,54 @@ fn click_after_search_positions_length_mismatch() {
 }
 
 #[test]
-fn click_without_query_id_no_positions_ok() {
+fn click_without_query_id_no_positions_rejected() {
     let mut e = valid_click();
     e.query_id = None;
     e.positions = None;
+    assert!(e.validate().unwrap_err().contains("positions required"));
+}
+
+#[test]
+fn click_without_query_id_with_positions_ok() {
+    let mut e = valid_click();
+    e.query_id = None;
+    e.positions = Some(vec![1]);
     assert!(e.validate().is_ok());
+}
+
+#[test]
+fn event_subtype_add_to_cart_on_conversion_accepted() {
+    let mut e = valid_conversion();
+    e.event_subtype = Some("addToCart".to_string());
+    assert!(e.validate().is_ok());
+}
+
+#[test]
+fn event_subtype_purchase_on_conversion_accepted() {
+    let mut e = valid_conversion();
+    e.event_subtype = Some("purchase".to_string());
+    assert!(e.validate().is_ok());
+}
+
+#[test]
+fn event_subtype_add_to_cart_on_click_rejected() {
+    let mut e = valid_click();
+    e.event_subtype = Some("addToCart".to_string());
+    assert!(e.validate().unwrap_err().contains("eventSubtype"));
+}
+
+#[test]
+fn event_subtype_purchase_on_view_rejected() {
+    let mut e = valid_view();
+    e.event_subtype = Some("purchase".to_string());
+    assert!(e.validate().unwrap_err().contains("eventSubtype"));
+}
+
+#[test]
+fn event_subtype_invalid_on_conversion_rejected() {
+    let mut e = valid_conversion();
+    e.event_subtype = Some("invalid".to_string());
+    assert!(e.validate().unwrap_err().contains("eventSubtype"));
 }
 
 #[test]
@@ -332,6 +396,16 @@ fn test_config(dir: &std::path::Path) -> AnalyticsConfig {
     }
 }
 
+/// Build a `SearchEvent` with sensible defaults for integration tests.
+///
+/// # Arguments
+///
+/// * `query` - Search query string.
+/// * `index` - Target index name.
+/// * `nb_hits` - Number of hits returned.
+/// * `query_id` - Optional hex query ID for click/conversion correlation.
+/// * `user_token` - User token for attribution.
+/// * `filters` - Optional filter string (e.g. `"brand:Apple"`).
 fn search_event(
     query: &str,
     index: &str,
@@ -363,6 +437,14 @@ fn search_event(
     }
 }
 
+/// Build a click `InsightEvent` correlated to a search via `query_id`.
+///
+/// # Arguments
+///
+/// * `query_id` - Hex query ID linking this click to a prior search.
+/// * `index` - Target index name.
+/// * `user` - User token for attribution.
+/// * `positions` - One-indexed click positions; also determines synthetic object IDs.
 fn click_event(query_id: &str, index: &str, user: &str, positions: Vec<u32>) -> InsightEvent {
     InsightEvent {
         event_type: "click".to_string(),
@@ -382,6 +464,13 @@ fn click_event(query_id: &str, index: &str, user: &str, positions: Vec<u32>) -> 
     }
 }
 
+/// Build a purchase-type conversion `InsightEvent` with a fixed $49.99 USD value.
+///
+/// # Arguments
+///
+/// * `query_id` - Hex query ID linking this conversion to a prior search.
+/// * `index` - Target index name.
+/// * `user` - User token for attribution.
 fn conversion_event(query_id: &str, index: &str, user: &str) -> InsightEvent {
     InsightEvent {
         event_type: "conversion".to_string(),
@@ -494,7 +583,17 @@ async fn full_analytics_pipeline() {
     // === Query and verify all analytics endpoints ===
 
     let result = engine
-        .top_searches("products", &today, &today, 10, false, None, None)
+        .top_searches(
+            &crate::analytics::AnalyticsQueryParams {
+                index_name: "products",
+                start_date: &today,
+                end_date: &today,
+                limit: 10,
+                tags: None,
+            },
+            false,
+            None,
+        )
         .await
         .unwrap();
     let searches = result["searches"].as_array().unwrap();
@@ -576,6 +675,34 @@ async fn full_analytics_pipeline() {
         conv_rate
     );
 
+    // Verify event_subtype is persisted and queryable.
+    let subtype_rows = engine
+        .query_events(
+            "products",
+            "SELECT COUNT(*) as count FROM events WHERE event_type = 'conversion' AND event_subtype = 'purchase'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(subtype_rows[0]["count"], 1);
+
+    // Stage 2 depends on subtype-specific conversion metrics.
+    let add_to_cart = engine
+        .conversion_rate_for_subtype("products", &today, &today, "addToCart")
+        .await
+        .unwrap();
+    assert_eq!(add_to_cart["addToCartCount"], 0);
+    assert!(add_to_cart.get("conversionCount").is_none());
+    assert_eq!(add_to_cart["rate"], 0.0);
+
+    let purchase = engine
+        .conversion_rate_for_subtype("products", &today, &today, "purchase")
+        .await
+        .unwrap();
+    assert_eq!(purchase["purchaseCount"], 1);
+    assert!(purchase.get("conversionCount").is_none());
+    assert_eq!(purchase["trackedSearchCount"], 4);
+    assert_eq!(purchase["rate"], 0.25);
+
     let result = engine
         .top_filters("products", &today, &today, 10)
         .await
@@ -611,6 +738,7 @@ async fn full_analytics_pipeline() {
     assert_eq!(result["hasData"], true);
 }
 
+/// Verify that `lookup_query_id` resolves a recorded search by its hex query ID and returns `None` for unknown IDs.
 #[tokio::test]
 async fn query_id_correlation() {
     let tmp = TempDir::new().unwrap();
@@ -636,6 +764,7 @@ async fn query_id_correlation() {
         .is_none());
 }
 
+/// Verify that setting `enabled: false` in `AnalyticsConfig` causes the collector to silently discard all recorded events, producing a zero search count after flush.
 #[tokio::test]
 async fn analytics_disabled_suppresses_recording() {
     let tmp = TempDir::new().unwrap();
@@ -663,6 +792,7 @@ async fn analytics_disabled_suppresses_recording() {
     );
 }
 
+/// Verify that click events without a `query_id` are persisted and appear in `top_hits`, but do not inflate `trackedSearchCount` used as the CTR denominator.
 #[tokio::test]
 async fn non_correlated_events_recorded_but_dont_inflate_ctr() {
     let tmp = TempDir::new().unwrap();
@@ -717,6 +847,7 @@ async fn non_correlated_events_recorded_but_dont_inflate_ctr() {
     assert!(!hits.is_empty());
 }
 
+/// Verify that `users_count_hll` returns a valid base64-encoded HLL sketch, deduplicates users across searches, and that merging independent sketches preserves approximate cardinality.
 #[tokio::test]
 async fn users_count_hll_returns_sketch_and_deduplicates() {
     use crate::analytics::hll::HllSketch;
@@ -758,6 +889,7 @@ async fn users_count_hll_returns_sketch_and_deduplicates() {
     );
 }
 
+/// Verify that `search_count` returns events only within the requested date range, excluding events written on other days.
 #[tokio::test]
 async fn date_range_filtering() {
     let tmp = TempDir::new().unwrap();
@@ -788,6 +920,7 @@ async fn date_range_filtering() {
     assert_eq!(result["count"], 0, "Yesterday should have no events");
 }
 
+/// Verify that internal fields (`hll_sketch`, `daily_sketches`) are present in the raw engine result but can be stripped before returning a public API response, leaving only `count` and `dates`.
 #[tokio::test]
 async fn users_count_hll_internal_fields_stripped_in_response() {
     use crate::analytics::hll::HllSketch;
@@ -833,4 +966,231 @@ async fn users_count_hll_internal_fields_stripped_in_response() {
     assert!(public_response["count"].is_number());
     assert!(public_response["dates"].is_array());
     assert_eq!(public_response["count"], 100);
+}
+
+/// Verify that all rate endpoints (`conversion_rate`, `click_through_rate`, `no_results_rate`, `no_click_rate`, and subtype variants) return `null` for the rate field when the denominator is zero, rather than dividing by zero or returning `0.0`.
+#[tokio::test]
+async fn rate_endpoints_return_null_when_denominator_is_zero() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(tmp.path());
+    let engine = AnalyticsQueryEngine::new(config);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let conversion = engine
+        .conversion_rate("products", &today, &today)
+        .await
+        .unwrap();
+    assert!(
+        conversion["rate"].is_null(),
+        "conversionRate should return null when trackedSearchCount=0"
+    );
+    assert_eq!(conversion["trackedSearchCount"], 0);
+
+    let add_to_cart = engine
+        .conversion_rate_for_subtype("products", &today, &today, "addToCart")
+        .await
+        .unwrap();
+    assert!(
+        add_to_cart["rate"].is_null(),
+        "addToCartRate should return null when trackedSearchCount=0"
+    );
+    assert_eq!(add_to_cart["trackedSearchCount"], 0);
+
+    let purchase = engine
+        .conversion_rate_for_subtype("products", &today, &today, "purchase")
+        .await
+        .unwrap();
+    assert!(
+        purchase["rate"].is_null(),
+        "purchaseRate should return null when trackedSearchCount=0"
+    );
+    assert_eq!(purchase["trackedSearchCount"], 0);
+
+    let ctr = engine
+        .click_through_rate("products", &today, &today)
+        .await
+        .unwrap();
+    assert!(
+        ctr["rate"].is_null(),
+        "clickThroughRate should return null when trackedSearchCount=0"
+    );
+    assert_eq!(ctr["trackedSearchCount"], 0);
+
+    let no_result = engine
+        .no_results_rate("products", &today, &today)
+        .await
+        .unwrap();
+    assert!(
+        no_result["rate"].is_null(),
+        "noResultRate should return null when count=0"
+    );
+    assert_eq!(no_result["count"], 0);
+
+    let no_click = engine
+        .no_click_rate("products", &today, &today)
+        .await
+        .unwrap();
+    assert!(
+        no_click["rate"].is_null(),
+        "noClickRate should return null when trackedSearchCount=0"
+    );
+    assert_eq!(no_click["trackedSearchCount"], 0);
+}
+
+/// Verify that the revenue endpoint correctly sums purchase values, returns a per-currency breakdown, and includes a daily time-series with matching totals.
+#[tokio::test]
+async fn revenue_positive_case() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(tmp.path());
+    let collector = AnalyticsCollector::new(config.clone());
+    let engine = AnalyticsQueryEngine::new(config);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let qid1 = "a".repeat(32);
+    let qid2 = "b".repeat(32);
+
+    collector.record_search(search_event(
+        "laptop",
+        "products",
+        42,
+        Some(&qid1),
+        "alice",
+        None,
+    ));
+    collector.record_search(search_event(
+        "laptop",
+        "products",
+        38,
+        Some(&qid2),
+        "bob",
+        None,
+    ));
+
+    // Two USD purchase events with known values
+    let mut conv1 = conversion_event(&qid1, "products", "alice");
+    conv1.value = Some(49.99);
+    conv1.currency = Some("USD".to_string());
+    collector.record_insight(conv1);
+
+    let mut conv2 = conversion_event(&qid2, "products", "bob");
+    conv2.value = Some(25.01);
+    conv2.currency = Some("USD".to_string());
+    collector.record_insight(conv2);
+
+    collector.flush_all();
+
+    let result = engine.revenue("products", &today, &today).await.unwrap();
+
+    // Top-level currencies map
+    let currencies = result["currencies"].as_object().unwrap();
+    assert!(currencies.contains_key("USD"));
+    let usd = &currencies["USD"];
+    assert_eq!(usd["currency"], "USD");
+    let rev = usd["revenue"].as_f64().unwrap();
+    assert!((rev - 75.0).abs() < 0.01, "Expected ~75.0, got {}", rev);
+
+    // Daily breakdown
+    let dates = result["dates"].as_array().unwrap();
+    assert_eq!(dates.len(), 1);
+    let day = &dates[0];
+    assert_eq!(day["date"], today);
+    let day_currencies = day["currencies"].as_object().unwrap();
+    let day_usd = &day_currencies["USD"];
+    assert_eq!(day_usd["currency"], "USD");
+    let day_rev = day_usd["revenue"].as_f64().unwrap();
+    assert!((day_rev - 75.0).abs() < 0.01);
+}
+
+/// Verify that the revenue endpoint returns empty `currencies` and `dates` when no purchase events exist.
+#[tokio::test]
+async fn revenue_zero_data() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(tmp.path());
+    let engine = AnalyticsQueryEngine::new(config);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let result = engine.revenue("products", &today, &today).await.unwrap();
+
+    let currencies = result["currencies"].as_object().unwrap();
+    assert!(
+        currencies.is_empty(),
+        "No purchase events → empty currencies map"
+    );
+    let dates = result["dates"].as_array().unwrap();
+    assert!(dates.is_empty(), "No purchase events → empty dates array");
+}
+
+/// Verify that the revenue endpoint aggregates purchase values separately per currency, returning independent totals for USD and EUR in both the top-level summary and daily breakdown.
+#[tokio::test]
+async fn revenue_multi_currency() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(tmp.path());
+    let collector = AnalyticsCollector::new(config.clone());
+    let engine = AnalyticsQueryEngine::new(config);
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let qid1 = "a".repeat(32);
+    let qid2 = "b".repeat(32);
+    let qid3 = "c".repeat(32);
+
+    collector.record_search(search_event(
+        "laptop",
+        "products",
+        42,
+        Some(&qid1),
+        "alice",
+        None,
+    ));
+    collector.record_search(search_event(
+        "laptop",
+        "products",
+        38,
+        Some(&qid2),
+        "bob",
+        None,
+    ));
+    collector.record_search(search_event(
+        "phone",
+        "products",
+        15,
+        Some(&qid3),
+        "charlie",
+        None,
+    ));
+
+    let mut conv_usd = conversion_event(&qid1, "products", "alice");
+    conv_usd.value = Some(99.99);
+    conv_usd.currency = Some("USD".to_string());
+    collector.record_insight(conv_usd);
+
+    let mut conv_eur = conversion_event(&qid2, "products", "bob");
+    conv_eur.value = Some(49.50);
+    conv_eur.currency = Some("EUR".to_string());
+    collector.record_insight(conv_eur);
+
+    let mut conv_eur2 = conversion_event(&qid3, "products", "charlie");
+    conv_eur2.value = Some(30.50);
+    conv_eur2.currency = Some("EUR".to_string());
+    collector.record_insight(conv_eur2);
+
+    collector.flush_all();
+
+    let result = engine.revenue("products", &today, &today).await.unwrap();
+
+    let currencies = result["currencies"].as_object().unwrap();
+    assert_eq!(currencies.len(), 2, "Should have USD and EUR");
+
+    let usd = &currencies["USD"];
+    assert_eq!(usd["currency"], "USD");
+    assert!((usd["revenue"].as_f64().unwrap() - 99.99).abs() < 0.01);
+
+    let eur = &currencies["EUR"];
+    assert_eq!(eur["currency"], "EUR");
+    assert!((eur["revenue"].as_f64().unwrap() - 80.0).abs() < 0.01);
+
+    // Daily breakdown should also have both currencies
+    let dates = result["dates"].as_array().unwrap();
+    assert_eq!(dates.len(), 1);
+    let day_currencies = dates[0]["currencies"].as_object().unwrap();
+    assert_eq!(day_currencies.len(), 2);
 }

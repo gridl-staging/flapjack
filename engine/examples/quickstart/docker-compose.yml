@@ -1,0 +1,31 @@
+# Single-node Flapjack quickstart.
+#
+# Builds from source (no published image required).
+# Auth is disabled for local experimentation.
+#
+# Usage:
+#   docker compose up -d --build
+#   curl http://localhost:7700/health
+#   docker compose down -v
+
+services:
+  flapjack:
+    build:
+      context: ../../..
+      dockerfile: engine/Dockerfile
+    ports:
+      - "7700:7700"
+    environment:
+      FLAPJACK_DATA_DIR: /data
+      FLAPJACK_BIND_ADDR: "0.0.0.0:7700"
+      FLAPJACK_NO_AUTH: "1"
+    volumes:
+      - fj-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  fj-data:

@@ -1,9 +1,17 @@
+/**
+ */
 import type { Cache, CacheEvents, MemoryCacheOptions } from '../types';
 
+/**
+ * TODO: Document createMemoryCache.
+ */
 export function createMemoryCache(options: MemoryCacheOptions = { serializable: true }): Cache {
   let cache: Record<string, any> = {};
 
   return {
+    /**
+     * TODO: Document get.
+     */
     get<TValue>(
       key: Record<string, any> | string,
       defaultValue: () => Promise<TValue>,

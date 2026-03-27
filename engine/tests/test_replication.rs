@@ -52,12 +52,19 @@ async fn test_internal_replicate_no_auth_required() {
         replication_manager: None,
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp_dir.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -111,12 +118,19 @@ async fn test_internal_get_ops_no_auth_required() {
         replication_manager: None,
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp_dir.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -145,6 +159,80 @@ async fn test_internal_get_ops_no_auth_required() {
 }
 
 #[tokio::test]
+async fn test_internal_tenants_no_auth_required() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        Router,
+    };
+    use tower::ServiceExt;
+
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+    manager.create_tenant("tenant-z").unwrap();
+    manager.create_tenant("tenant-a").unwrap();
+    std::fs::create_dir_all(temp_dir.path().join(".hidden-tenant")).unwrap();
+    std::fs::write(temp_dir.path().join("not-a-directory.txt"), "ignore-me").unwrap();
+
+    let state = Arc::new(flapjack_http::handlers::AppState {
+        manager,
+        key_store: None,
+        replication_manager: None,
+        ssl_manager: None,
+        analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp_dir.path(),
+        )),
+        metrics_state: None,
+        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
+        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
+        start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
+        experiment_store: None,
+        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
+    });
+
+    let internal = Router::new()
+        .route(
+            "/internal/tenants",
+            axum::routing::get(flapjack_http::handlers::internal::list_tenants),
+        )
+        .with_state(state);
+
+    let response = internal
+        .oneshot(
+            Request::builder()
+                .uri("/internal/tenants")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    let response: flapjack_replication::types::ListTenantsResponse =
+        serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "/internal/tenants should return 200 OK without authentication"
+    );
+    assert_eq!(
+        response.tenants,
+        vec!["tenant-a".to_string(), "tenant-z".to_string()],
+        "internal tenant listing should return sorted visible tenant directories only"
+    );
+}
+
+#[tokio::test]
 async fn test_internal_tenant_isolation() {
     use axum::{
         body::Body,
@@ -169,12 +257,19 @@ async fn test_internal_tenant_isolation() {
         replication_manager: None,
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp_dir.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -443,12 +538,19 @@ async fn test_replicate_ops_handler_applies_correctly() {
         replication_manager: None,
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp_dir.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -525,12 +627,19 @@ async fn test_apply_ops_to_manager_upsert() {
         replication_manager: None,
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -613,12 +722,19 @@ async fn test_cluster_status_no_replication() {
         replication_manager: None,
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -661,20 +777,23 @@ async fn test_cluster_status_with_peers() {
     let temp = TempDir::new().unwrap();
     let manager = IndexManager::new(temp.path());
 
-    let repl_mgr = ReplicationManager::new(NodeConfig {
-        node_id: "node-a".to_string(),
-        bind_addr: "0.0.0.0:7700".to_string(),
-        peers: vec![
-            PeerConfig {
-                node_id: "node-b".to_string(),
-                addr: "http://node-b:7700".to_string(),
-            },
-            PeerConfig {
-                node_id: "node-c".to_string(),
-                addr: "http://node-c:7700".to_string(),
-            },
-        ],
-    });
+    let repl_mgr = ReplicationManager::new(
+        NodeConfig {
+            node_id: "node-a".to_string(),
+            bind_addr: "0.0.0.0:7700".to_string(),
+            peers: vec![
+                PeerConfig {
+                    node_id: "node-b".to_string(),
+                    addr: "http://node-b:7700".to_string(),
+                },
+                PeerConfig {
+                    node_id: "node-c".to_string(),
+                    addr: "http://node-c:7700".to_string(),
+                },
+            ],
+        },
+        None,
+    );
 
     let state = Arc::new(flapjack_http::handlers::AppState {
         manager: manager.clone(),
@@ -682,12 +801,19 @@ async fn test_cluster_status_with_peers() {
         replication_manager: Some(repl_mgr),
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -750,16 +876,27 @@ async fn test_startup_catchup_noop_without_replication() {
         replication_manager: None, // No replication configured
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
-    // Should complete without error and not corrupt existing data
+    // Both the legacy and pre-serve paths should complete without error
+    // and not corrupt existing data when replication is not configured.
+    flapjack_http::startup_catchup::run_pre_serve_catchup(&state)
+        .await
+        .unwrap();
     flapjack_http::startup_catchup::run_startup_catchup(state).await;
 
     // Verify existing data is untouched
@@ -791,12 +928,19 @@ async fn test_apply_ops_upsert_then_delete_ordering() {
         replication_manager: None,
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            temp.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -861,6 +1005,611 @@ async fn test_apply_ops_upsert_then_delete_ordering() {
 // any node reach all other nodes, which is what write forwarding would achieve
 // at the proxy layer. Explicit write forwarding is therefore unnecessary.
 // ============================================================
+
+async fn query_index(
+    client: &reqwest::Client,
+    addr: &str,
+    index_name: &str,
+    query: &str,
+) -> (reqwest::StatusCode, u64, serde_json::Value) {
+    let resp = client
+        .post(format!("http://{}/1/indexes/{}/query", addr, index_name))
+        .json(&serde_json::json!({ "query": query }))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = resp.json::<serde_json::Value>().await.unwrap();
+    let hits = body.get("nbHits").and_then(|v| v.as_u64()).unwrap_or(0);
+    (status, hits, body)
+}
+
+async fn get_json(client: &reqwest::Client, url: &str) -> (reqwest::StatusCode, serde_json::Value) {
+    let resp = client.get(url).send().await.unwrap();
+    let status = resp.status();
+    let raw_body = resp.text().await.unwrap_or_default();
+    let body = serde_json::from_str::<serde_json::Value>(&raw_body)
+        .unwrap_or_else(|_| serde_json::json!({ "raw": raw_body }));
+    (status, body)
+}
+
+async fn wait_for_json_success(
+    client: &reqwest::Client,
+    url: String,
+    description: &str,
+) -> serde_json::Value {
+    let mut last_status = reqwest::StatusCode::INTERNAL_SERVER_ERROR;
+    let mut last_body = serde_json::json!(null);
+    for _ in 0..200 {
+        let (status, body) = get_json(client, &url).await;
+        if status.is_success() {
+            return body;
+        }
+        last_status = status;
+        last_body = body;
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    panic!(
+        "Timed out waiting for {} at {} (last status={}, last body={})",
+        description, url, last_status, last_body
+    );
+}
+
+async fn wait_for_pagination_limited_to(
+    client: &reqwest::Client,
+    addr: &str,
+    index_name: &str,
+    expected: u64,
+) -> bool {
+    let url = format!("http://{}/1/indexes/{}/settings", addr, index_name);
+    for _ in 0..200 {
+        let (status, body) = get_json(client, &url).await;
+        if status.is_success()
+            && body.get("paginationLimitedTo").and_then(|v| v.as_u64()) == Some(expected)
+        {
+            return true;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    false
+}
+
+async fn wait_for_hits_at_least(
+    client: &reqwest::Client,
+    addr: &str,
+    index_name: &str,
+    expected_hits: u64,
+) {
+    for _ in 0..200 {
+        let (_status, hits, _body) = query_index(client, addr, index_name, "").await;
+        if hits >= expected_hits {
+            return;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    panic!(
+        "Timed out waiting for index '{}' on {} to reach at least {} hits",
+        index_name, addr, expected_hits
+    );
+}
+
+/// Copy from node-a must create destination on node-b within 2 seconds.
+#[tokio::test]
+async fn test_two_node_copy_index_replicates() {
+    let (addr_a, addr_b, _tmp_a, _tmp_b) = common::spawn_replication_pair("node-a", "node-b").await;
+    let client = reqwest::Client::new();
+
+    let requests: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            serde_json::json!({
+                "action": "addObject",
+                "body": {"_id": format!("src_{}", i), "title": format!("Copy Source {}", i)}
+            })
+        })
+        .collect();
+    let seed_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/batch", addr_a))
+        .json(&serde_json::json!({ "requests": requests }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, seed_resp).await;
+
+    wait_for_hits_at_least(&client, &addr_b, "src_idx", 5).await;
+
+    let copy_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/operation", addr_a))
+        .json(&serde_json::json!({
+            "operation": "copy",
+            "destination": "dst_idx"
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, copy_resp).await;
+
+    wait_for_hits_at_least(&client, &addr_b, "dst_idx", 5).await;
+
+    let (_src_status, src_hits, _src_body) = query_index(&client, &addr_b, "src_idx", "").await;
+    let (_dst_status, dst_hits, _dst_body) = query_index(&client, &addr_b, "dst_idx", "").await;
+    assert!(
+        src_hits >= 5,
+        "source index should still have docs on node-b after copy; got {}",
+        src_hits
+    );
+    assert!(
+        dst_hits >= 5,
+        "destination index should have docs on node-b after copy; got {}",
+        dst_hits
+    );
+}
+
+/// Scoped copy (settings only) must replicate to node-b within 2 seconds.
+#[tokio::test]
+async fn test_two_node_copy_index_scoped_replicates() {
+    let (addr_a, addr_b, _tmp_a, _tmp_b) = common::spawn_replication_pair("node-a", "node-b").await;
+    let client = reqwest::Client::new();
+
+    let requests: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            serde_json::json!({
+                "action": "addObject",
+                "body": {"_id": format!("scoped_{}", i), "title": format!("Scoped Copy Source {}", i)}
+            })
+        })
+        .collect();
+    let seed_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/batch", addr_a))
+        .json(&serde_json::json!({ "requests": requests }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, seed_resp).await;
+    wait_for_hits_at_least(&client, &addr_b, "src_idx", 5).await;
+
+    let set_settings_resp = client
+        .put(format!("http://{}/1/indexes/src_idx/settings", addr_a))
+        .json(&serde_json::json!({ "paginationLimitedTo": 4242 }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, set_settings_resp).await;
+    let source_settings_ready =
+        wait_for_pagination_limited_to(&client, &addr_a, "src_idx", 4242).await;
+    assert!(
+        source_settings_ready,
+        "source settings on node-a did not stabilize to paginationLimitedTo=4242 within 2s"
+    );
+
+    let copy_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/operation", addr_a))
+        .json(&serde_json::json!({
+            "operation": "copy",
+            "destination": "dst_idx",
+            "scope": ["settings"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, copy_resp).await;
+
+    let mut last_settings_status = reqwest::StatusCode::INTERNAL_SERVER_ERROR;
+    let mut last_pagination_limited_to = None;
+    let mut last_dst_hits = 0;
+    for _ in 0..200 {
+        let dst_settings_resp = client
+            .get(format!("http://{}/1/indexes/dst_idx/settings", addr_b))
+            .send()
+            .await
+            .unwrap();
+        let dst_settings_status = dst_settings_resp.status();
+        let dst_settings_body = dst_settings_resp.json::<serde_json::Value>().await.unwrap();
+
+        let (_dst_query_status, dst_hits, _dst_query_body) =
+            query_index(&client, &addr_b, "dst_idx", "").await;
+
+        let pagination_limited_to = dst_settings_body
+            .get("paginationLimitedTo")
+            .and_then(|v| v.as_u64());
+        last_settings_status = dst_settings_status;
+        last_pagination_limited_to = pagination_limited_to;
+        last_dst_hits = dst_hits;
+        if dst_settings_status.is_success() && pagination_limited_to == Some(4242) && dst_hits == 0
+        {
+            return;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    panic!(
+        "Scoped copy did not replicate settings-only result to node-b within 2s (expected paginationLimitedTo=4242 and nbHits=0; last status={}, last paginationLimitedTo={:?}, last nbHits={})",
+        last_settings_status,
+        last_pagination_limited_to,
+        last_dst_hits
+    );
+}
+
+/// Scoped copy (synonyms only) must replicate synonym records to node-b.
+#[tokio::test]
+async fn test_two_node_copy_index_scoped_synonyms_replicates() {
+    let (addr_a, addr_b, _tmp_a, _tmp_b) = common::spawn_replication_pair("node-a", "node-b").await;
+    let client = reqwest::Client::new();
+
+    let requests: Vec<serde_json::Value> = (0..3)
+        .map(|i| {
+            serde_json::json!({
+                "action": "addObject",
+                "body": {"_id": format!("syn_scope_{}", i), "title": format!("Syn Scope {}", i)}
+            })
+        })
+        .collect();
+    let seed_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/batch", addr_a))
+        .json(&serde_json::json!({ "requests": requests }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, seed_resp).await;
+    wait_for_hits_at_least(&client, &addr_b, "src_idx", 3).await;
+
+    let set_settings_resp = client
+        .put(format!("http://{}/1/indexes/src_idx/settings", addr_a))
+        .json(&serde_json::json!({ "paginationLimitedTo": 4242 }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, set_settings_resp).await;
+    assert!(
+        wait_for_pagination_limited_to(&client, &addr_a, "src_idx", 4242).await,
+        "source settings on node-a did not stabilize to paginationLimitedTo=4242 within 2s"
+    );
+
+    let save_synonym_resp = client
+        .put(format!(
+            "http://{}/1/indexes/src_idx/synonyms/syn-copy",
+            addr_a
+        ))
+        .json(&serde_json::json!({
+            "objectID": "syn-copy",
+            "type": "synonym",
+            "synonyms": ["tv", "television"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, save_synonym_resp).await;
+
+    let copy_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/operation", addr_a))
+        .json(&serde_json::json!({
+            "operation": "copy",
+            "destination": "dst_idx",
+            "scope": ["synonyms"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, copy_resp).await;
+
+    let dst_synonym = wait_for_json_success(
+        &client,
+        format!("http://{}/1/indexes/dst_idx/synonyms/syn-copy", addr_b),
+        "destination synonym copy",
+    )
+    .await;
+    assert_eq!(dst_synonym["objectID"], serde_json::json!("syn-copy"));
+
+    let (_dst_query_status, dst_hits, _dst_query_body) =
+        query_index(&client, &addr_b, "dst_idx", "").await;
+    assert_eq!(dst_hits, 0, "synonyms-only copy should not copy records");
+
+    let (_dst_settings_status, dst_settings_body) = get_json(
+        &client,
+        &format!("http://{}/1/indexes/dst_idx/settings", addr_b),
+    )
+    .await;
+    assert_ne!(
+        dst_settings_body
+            .get("paginationLimitedTo")
+            .and_then(|v| v.as_u64()),
+        Some(4242),
+        "synonyms-only copy should not copy source settings"
+    );
+}
+
+/// Scoped copy (rules only) must replicate rules records to node-b.
+#[tokio::test]
+async fn test_two_node_copy_index_scoped_rules_replicates() {
+    let (addr_a, addr_b, _tmp_a, _tmp_b) = common::spawn_replication_pair("node-a", "node-b").await;
+    let client = reqwest::Client::new();
+
+    let requests: Vec<serde_json::Value> = (0..3)
+        .map(|i| {
+            serde_json::json!({
+                "action": "addObject",
+                "body": {"_id": format!("rule_scope_{}", i), "title": format!("Rule Scope {}", i)}
+            })
+        })
+        .collect();
+    let seed_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/batch", addr_a))
+        .json(&serde_json::json!({ "requests": requests }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, seed_resp).await;
+    wait_for_hits_at_least(&client, &addr_b, "src_idx", 3).await;
+
+    let set_settings_resp = client
+        .put(format!("http://{}/1/indexes/src_idx/settings", addr_a))
+        .json(&serde_json::json!({ "paginationLimitedTo": 4242 }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, set_settings_resp).await;
+    assert!(
+        wait_for_pagination_limited_to(&client, &addr_a, "src_idx", 4242).await,
+        "source settings on node-a did not stabilize to paginationLimitedTo=4242 within 2s"
+    );
+
+    let save_rule_resp = client
+        .put(format!(
+            "http://{}/1/indexes/src_idx/rules/rule-copy",
+            addr_a
+        ))
+        .json(&serde_json::json!({
+            "objectID": "rule-copy",
+            "conditions": [{"anchoring": "contains", "pattern": "laptop"}],
+            "consequence": {"params": {"query": "laptop computer"}}
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, save_rule_resp).await;
+
+    let copy_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/operation", addr_a))
+        .json(&serde_json::json!({
+            "operation": "copy",
+            "destination": "dst_idx",
+            "scope": ["rules"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, copy_resp).await;
+
+    let dst_rule = wait_for_json_success(
+        &client,
+        format!("http://{}/1/indexes/dst_idx/rules/rule-copy", addr_b),
+        "destination rule copy",
+    )
+    .await;
+    assert_eq!(dst_rule["objectID"], serde_json::json!("rule-copy"));
+
+    let (_dst_query_status, dst_hits, _dst_query_body) =
+        query_index(&client, &addr_b, "dst_idx", "").await;
+    assert_eq!(dst_hits, 0, "rules-only copy should not copy records");
+
+    let (_dst_settings_status, dst_settings_body) = get_json(
+        &client,
+        &format!("http://{}/1/indexes/dst_idx/settings", addr_b),
+    )
+    .await;
+    assert_ne!(
+        dst_settings_body
+            .get("paginationLimitedTo")
+            .and_then(|v| v.as_u64()),
+        Some(4242),
+        "rules-only copy should not copy source settings"
+    );
+}
+
+/// Move from node-a must rename index on node-b within 2 seconds.
+#[tokio::test]
+async fn test_two_node_move_index_replicates() {
+    let (addr_a, addr_b, _tmp_a, _tmp_b) = common::spawn_replication_pair("node-a", "node-b").await;
+    let client = reqwest::Client::new();
+
+    // Missing-source move should be a harmless no-op on the peer apply path.
+    let missing_move_resp = client
+        .post(format!("http://{}/1/indexes/missing_src/operation", addr_a))
+        .json(&serde_json::json!({
+            "operation": "move",
+            "destination": "missing_dst"
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, missing_move_resp).await;
+    for _ in 0..200 {
+        let (status, hits, _body) = query_index(&client, &addr_b, "missing_dst", "").await;
+        if status == reqwest::StatusCode::NOT_FOUND || hits == 0 {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+
+    let requests: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            serde_json::json!({
+                "action": "addObject",
+                "body": {"_id": format!("move_{}", i), "title": format!("Move Source {}", i)}
+            })
+        })
+        .collect();
+    let seed_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/batch", addr_a))
+        .json(&serde_json::json!({ "requests": requests }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, seed_resp).await;
+    wait_for_hits_at_least(&client, &addr_b, "src_idx", 5).await;
+
+    let move_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/operation", addr_a))
+        .json(&serde_json::json!({
+            "operation": "move",
+            "destination": "dst_idx"
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, move_resp).await;
+
+    for _ in 0..200 {
+        let (_dst_status, dst_hits, _dst_body) = query_index(&client, &addr_b, "dst_idx", "").await;
+        let (src_status, src_hits, _src_body) = query_index(&client, &addr_b, "src_idx", "").await;
+        let src_removed = src_status == reqwest::StatusCode::NOT_FOUND || src_hits == 0;
+        if dst_hits >= 5 && src_removed {
+            return;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    panic!(
+        "Move did not replicate to node-b within 2s (expected dst_idx>=5 hits and src_idx removed)"
+    );
+}
+
+/// Catch-up safety: after src_idx is moved to dst_idx, requesting
+/// /internal/ops for src_idx should still return source history up to the move op.
+/// It must not leak destination writes created after the move boundary.
+#[tokio::test]
+async fn test_internal_ops_moved_source_fallback_stops_at_move_boundary() {
+    let (addr, _tmp) = common::spawn_server_with_internal("node-a").await;
+    let client = reqwest::Client::new();
+
+    let seed_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/batch", addr))
+        .json(&serde_json::json!({
+            "requests": [{"action": "addObject", "body": {"_id": "before_move", "title": "Before Move"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr, seed_resp).await;
+
+    let move_resp = client
+        .post(format!("http://{}/1/indexes/src_idx/operation", addr))
+        .json(&serde_json::json!({
+            "operation": "move",
+            "destination": "dst_idx"
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr, move_resp).await;
+
+    // Destination write after move; must NOT appear in src_idx catch-up stream.
+    let dst_write_resp = client
+        .post(format!("http://{}/1/indexes/dst_idx/batch", addr))
+        .json(&serde_json::json!({
+            "requests": [{"action": "addObject", "body": {"_id": "after_move", "title": "After Move"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr, dst_write_resp).await;
+
+    let ops_resp = client
+        .get(format!(
+            "http://{}/internal/ops?tenant_id=src_idx&since_seq=0",
+            addr
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        ops_resp.status().is_success(),
+        "moved source stream should remain catch-up readable"
+    );
+    let body = ops_resp.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(
+        body["tenant_id"].as_str(),
+        Some("src_idx"),
+        "fallback response should keep the requested source tenant id"
+    );
+    assert!(
+        body["current_seq"].as_u64().is_some(),
+        "fallback response should include current_seq"
+    );
+    assert!(
+        body.get("oldest_retained_seq").is_none()
+            || body.get("oldest_retained_seq") == Some(&serde_json::Value::Null),
+        "moved-source fallback should not report retained-bound metadata from destination stream"
+    );
+    let ops = body["ops"]
+        .as_array()
+        .expect("ops should be an array in get_ops response");
+    assert!(
+        ops.iter()
+            .any(|op| op["op_type"].as_str() == Some("move_index")),
+        "source catch-up stream should include move_index operation"
+    );
+    assert_eq!(
+        ops.last().and_then(|op| op["op_type"].as_str()),
+        Some("move_index"),
+        "source catch-up stream must stop at move boundary"
+    );
+    assert!(
+        !ops.iter().any(|op| {
+            op["payload"]
+                .get("objectID")
+                .and_then(|v| v.as_str())
+                .map(|id| id == "after_move")
+                .unwrap_or(false)
+        }),
+        "post-move destination writes must not leak into source catch-up stream"
+    );
+}
+
+/// Clear on node-a must clear docs on node-b while preserving index existence.
+#[tokio::test]
+async fn test_two_node_clear_index_replicates() {
+    let (addr_a, addr_b, _tmp_a, _tmp_b) = common::spawn_replication_pair("node-a", "node-b").await;
+    let client = reqwest::Client::new();
+
+    let requests: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            serde_json::json!({
+                "action": "addObject",
+                "body": {"_id": format!("clear_{}", i), "title": format!("Clear Source {}", i)}
+            })
+        })
+        .collect();
+    let seed_resp = client
+        .post(format!("http://{}/1/indexes/testidx/batch", addr_a))
+        .json(&serde_json::json!({ "requests": requests }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, seed_resp).await;
+    wait_for_hits_at_least(&client, &addr_b, "testidx", 5).await;
+
+    let clear_resp = client
+        .post(format!("http://{}/1/indexes/testidx/clear", addr_a))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, clear_resp).await;
+
+    for _ in 0..200 {
+        let (query_status, hits, _query_body) = query_index(&client, &addr_b, "testidx", "").await;
+        let settings_status = client
+            .get(format!("http://{}/1/indexes/testidx/settings", addr_b))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        if query_status.is_success() && hits == 0 && settings_status.is_success() {
+            return;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    panic!(
+        "Clear did not replicate to node-b within 2s (expected testidx nbHits==0 and settings endpoint 200)"
+    );
+}
 
 /// Write to node-a via HTTP; doc must appear on node-b within 2 seconds.
 #[tokio::test]
@@ -1033,14 +1782,17 @@ async fn test_two_node_startup_catchup_via_get_ops() {
     // Node-b: starts fresh. Catch up from node-a using the replication manager.
     let tmp_b = TempDir::new().unwrap();
     let manager_b = flapjack::IndexManager::new(tmp_b.path());
-    let repl_mgr_b = ReplicationManager::new(NodeConfig {
-        node_id: "node-b".to_string(),
-        bind_addr: "0.0.0.0:0".to_string(),
-        peers: vec![PeerConfig {
-            node_id: "node-a".to_string(),
-            addr: format!("http://{}", addr_a),
-        }],
-    });
+    let repl_mgr_b = ReplicationManager::new(
+        NodeConfig {
+            node_id: "node-b".to_string(),
+            bind_addr: "0.0.0.0:0".to_string(),
+            peers: vec![PeerConfig {
+                node_id: "node-a".to_string(),
+                addr: format!("http://{}", addr_a),
+            }],
+        },
+        None,
+    );
 
     let ops = repl_mgr_b
         .catch_up_from_peer("catchup", 0)
@@ -1085,6 +1837,352 @@ async fn test_two_node_startup_catchup_via_get_ops() {
         turmeric_ok,
         "node-b should have 'Turmeric Toast' after startup catch-up"
     );
+}
+
+/// Restart catch-up: stop a node, write more docs on its peer, restart on the
+/// same data dir, and verify all docs (including those written during downtime)
+/// are queryable as soon as the restarted node is healthy.
+///
+/// RED state without pre-serve barrier: only docs from before the stop are present.
+/// GREEN with pre-serve barrier: all docs are present immediately after restart.
+#[tokio::test]
+async fn test_restart_catches_up_before_serving() {
+    let client = reqwest::Client::new();
+
+    // 1. Spawn a stoppable pair with bidirectional replication.
+    let (node_a, node_b, tmp_a, tmp_b) =
+        common::spawn_stoppable_replication_pair("rst-a", "rst-b").await;
+
+    // 2. Write 10 docs on A and wait for replication to B.
+    let resp = client
+        .post(format!(
+            "http://{}/1/indexes/restart_test/batch",
+            node_a.addr
+        ))
+        .json(&serde_json::json!({
+            "requests": (1..=10).map(|i| serde_json::json!({
+                "action": "addObject",
+                "body": {"objectID": format!("doc-{}", i), "num": i}
+            })).collect::<Vec<_>>()
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &node_a.addr, resp).await;
+
+    // Wait for push replication to deliver the docs to B.
+    let mut initial_hits = 0;
+    for _ in 0..200 {
+        let r: serde_json::Value = client
+            .post(format!(
+                "http://{}/1/indexes/restart_test/query",
+                node_b.addr
+            ))
+            .json(&serde_json::json!({"query": ""}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        initial_hits = r["nbHits"].as_u64().unwrap_or(0);
+        if initial_hits >= 10 {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        initial_hits, 10,
+        "Node B should have the first 10 docs before shutdown; got {}",
+        initial_hits
+    );
+
+    // 3. Stop node B.
+    let _ = &tmp_b; // keep alive
+    node_b.stop().await;
+
+    // 4. Write 10 more docs on A (B is down — these go to A's oplog only).
+    let resp = client
+        .post(format!(
+            "http://{}/1/indexes/restart_test/batch",
+            node_a.addr
+        ))
+        .json(&serde_json::json!({
+            "requests": (11..=20).map(|i| serde_json::json!({
+                "action": "addObject",
+                "body": {"objectID": format!("doc-{}", i), "num": i}
+            })).collect::<Vec<_>>()
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &node_a.addr, resp).await;
+
+    // 5. Restart B on the same data dir, with A as its peer.
+    let node_b_restarted = common::spawn_replication_node_on_existing_dir(
+        tmp_b.path(),
+        "rst-b",
+        &format!("http://{}", node_a.addr),
+        "rst-a",
+    )
+    .await;
+
+    // 6. Immediately query B for all 20 docs.
+    //    Pre-serve catch-up should have already fetched the 10 missing docs.
+    let search_result: serde_json::Value = client
+        .post(format!(
+            "http://{}/1/indexes/restart_test/query",
+            node_b_restarted.addr
+        ))
+        .json(&serde_json::json!({"query": ""}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let hits = search_result["nbHits"].as_u64().unwrap_or(0);
+    assert_eq!(
+        hits, 20,
+        "Restarted node B should have all 20 docs immediately after health check; got {}",
+        hits
+    );
+
+    // Cleanup: stop both nodes.
+    node_b_restarted.stop().await;
+    node_a.stop().await;
+    drop(tmp_a);
+    drop(tmp_b);
+}
+
+/// If peers are unavailable during bootstrap, the restarted replica must refuse
+/// to become healthy rather than serving stale local data.
+#[tokio::test]
+async fn test_restart_refuses_to_serve_when_peer_is_unreachable() {
+    let client = reqwest::Client::new();
+    let (node_a, node_b, tmp_a, tmp_b) =
+        common::spawn_stoppable_replication_pair("bootfail-a", "bootfail-b").await;
+
+    let resp = client
+        .post(format!(
+            "http://{}/1/indexes/restart_fail/batch",
+            node_a.addr
+        ))
+        .json(&serde_json::json!({
+            "requests": (1..=10).map(|i| serde_json::json!({
+                "action": "addObject",
+                "body": {"objectID": format!("doc-{}", i), "num": i}
+            })).collect::<Vec<_>>()
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &node_a.addr, resp).await;
+
+    let mut initial_hits = 0;
+    for _ in 0..200 {
+        let r: serde_json::Value = client
+            .post(format!(
+                "http://{}/1/indexes/restart_fail/query",
+                node_b.addr
+            ))
+            .json(&serde_json::json!({"query": ""}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        initial_hits = r["nbHits"].as_u64().unwrap_or(0);
+        if initial_hits >= 10 {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        initial_hits, 10,
+        "node B should have the first 10 docs before shutdown"
+    );
+
+    let node_a_addr = node_a.addr.clone();
+    node_b.stop().await;
+
+    let resp = client
+        .post(format!(
+            "http://{}/1/indexes/restart_fail/batch",
+            node_a_addr
+        ))
+        .json(&serde_json::json!({
+            "requests": (11..=20).map(|i| serde_json::json!({
+                "action": "addObject",
+                "body": {"objectID": format!("doc-{}", i), "num": i}
+            })).collect::<Vec<_>>()
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &node_a_addr, resp).await;
+
+    node_a.stop().await;
+
+    let restart = common::try_spawn_replication_node_on_existing_dir(
+        tmp_b.path(),
+        "bootfail-b",
+        &format!("http://{}", node_a_addr),
+        "bootfail-a",
+    )
+    .await;
+
+    assert!(
+        restart.is_err(),
+        "bootstrap should fail when the peer is unreachable instead of serving stale data"
+    );
+
+    let error = restart.err().unwrap();
+    assert!(
+        error.contains("Failed to fetch tenants")
+            || error.contains("Failed to fetch ops")
+            || error.contains("tripped circuit breakers"),
+        "bootstrap failure should report peer catch-up failure, got: {}",
+        error
+    );
+
+    drop(tmp_a);
+    drop(tmp_b);
+}
+
+/// Retention-gap restart: if node-b's durable seq falls behind node-a's retained
+/// oplog range, startup recovery must restore a full snapshot before serving.
+#[tokio::test]
+async fn test_restart_restores_snapshot_when_peer_oplog_is_compacted() {
+    let client = reqwest::Client::new();
+    let tenant = "retention_gap_test";
+
+    let (node_a, node_b, tmp_a, tmp_b) =
+        common::spawn_stoppable_replication_pair("gap-a", "gap-b").await;
+
+    let resp = client
+        .post(format!("http://{}/1/indexes/{}/batch", node_a.addr, tenant))
+        .json(&serde_json::json!({
+            "requests": (1..=10).map(|i| serde_json::json!({
+                "action": "addObject",
+                "body": {"objectID": format!("doc-{}", i), "num": i}
+            })).collect::<Vec<_>>()
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &node_a.addr, resp).await;
+
+    let mut initial_hits = 0;
+    for _ in 0..200 {
+        let r: serde_json::Value = client
+            .post(format!("http://{}/1/indexes/{}/query", node_b.addr, tenant))
+            .json(&serde_json::json!({"query": ""}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        initial_hits = r["nbHits"].as_u64().unwrap_or(0);
+        if initial_hits >= 10 {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        initial_hits, 10,
+        "Node B should replicate the first 10 docs before shutdown; got {}",
+        initial_hits
+    );
+
+    let b_committed_before_stop =
+        flapjack::index::oplog::read_committed_seq(&tmp_b.path().join(tenant));
+    assert_eq!(
+        b_committed_before_stop, 10,
+        "Node B durable committed_seq should be 10 before shutdown; got {}",
+        b_committed_before_stop
+    );
+
+    node_b.stop().await;
+
+    let resp = client
+        .post(format!("http://{}/1/indexes/{}/batch", node_a.addr, tenant))
+        .json(&serde_json::json!({
+            "requests": (11..=20).map(|i| serde_json::json!({
+                "action": "addObject",
+                "body": {"objectID": format!("doc-{}", i), "num": i}
+            })).collect::<Vec<_>>()
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &node_a.addr, resp).await;
+
+    let oplog_dir = tmp_a.path().join(tenant).join("oplog");
+    let oplog = flapjack::index::oplog::OpLog::open(&oplog_dir, tenant, "gap-a").unwrap();
+    // Force segment rotation in a deterministic way so truncate_before can drop
+    // an entire historical segment and expose a true retention gap.
+    let oversized_payload = "x".repeat(11 * 1024 * 1024);
+    oplog
+        .append(
+            "noop",
+            serde_json::json!({ "marker": "segment-rotate", "blob": oversized_payload }),
+        )
+        .expect("forcing segment rotation should succeed");
+    for seq_marker in 22..=30 {
+        oplog
+            .append("noop", serde_json::json!({ "marker": seq_marker }))
+            .expect("appending retained noop entries should succeed");
+    }
+
+    let removed_segments = oplog
+        .truncate_before(22)
+        .expect("truncate_before should succeed");
+    assert!(
+        removed_segments > 0,
+        "Expected at least one compacted segment to be removed"
+    );
+    assert_eq!(
+        oplog.oldest_seq(),
+        Some(22),
+        "Node A should retain only seq>=22 after compaction for this test scenario"
+    );
+
+    let node_b_restarted = common::spawn_replication_node_on_existing_dir(
+        tmp_b.path(),
+        "gap-b",
+        &format!("http://{}", node_a.addr),
+        "gap-a",
+    )
+    .await;
+
+    let search_result: serde_json::Value = client
+        .post(format!(
+            "http://{}/1/indexes/{}/query",
+            node_b_restarted.addr, tenant
+        ))
+        .json(&serde_json::json!({"query": ""}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let hits = search_result["nbHits"].as_u64().unwrap_or(0);
+    assert_eq!(
+        hits, 20,
+        "Restarted node B must restore a full snapshot when oplog retention gap is detected; got {}",
+        hits
+    );
+
+    node_b_restarted.stop().await;
+    node_a.stop().await;
+    drop(tmp_a);
+    drop(tmp_b);
 }
 
 // ============================================================
@@ -1447,14 +2545,17 @@ async fn test_periodic_sync_pulls_missed_ops_from_peer() {
     let manager_b = flapjack::IndexManager::new(tmp_b.path());
     manager_b.create_tenant("sync-test").unwrap();
 
-    let repl_mgr_b = ReplicationManager::new(NodeConfig {
-        node_id: "node-b-sync".to_string(),
-        bind_addr: "0.0.0.0:0".to_string(),
-        peers: vec![PeerConfig {
-            node_id: "node-a-sync".to_string(),
-            addr: format!("http://{}", addr_a),
-        }],
-    });
+    let repl_mgr_b = ReplicationManager::new(
+        NodeConfig {
+            node_id: "node-b-sync".to_string(),
+            bind_addr: "0.0.0.0:0".to_string(),
+            peers: vec![PeerConfig {
+                node_id: "node-a-sync".to_string(),
+                addr: format!("http://{}", addr_a),
+            }],
+        },
+        None,
+    );
 
     let state_b = Arc::new(flapjack_http::handlers::AppState {
         manager: manager_b.clone(),
@@ -1462,12 +2563,19 @@ async fn test_periodic_sync_pulls_missed_ops_from_peer() {
         replication_manager: Some(repl_mgr_b),
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            tmp_b.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -1547,14 +2655,17 @@ async fn test_periodic_sync_catches_up_multiple_tenants() {
     manager_b.create_tenant("tenant-alpha").unwrap();
     manager_b.create_tenant("tenant-beta").unwrap();
 
-    let repl_mgr_b = ReplicationManager::new(NodeConfig {
-        node_id: "node-b-multi".to_string(),
-        bind_addr: "0.0.0.0:0".to_string(),
-        peers: vec![PeerConfig {
-            node_id: "node-a-multi".to_string(),
-            addr: format!("http://{}", addr_a),
-        }],
-    });
+    let repl_mgr_b = ReplicationManager::new(
+        NodeConfig {
+            node_id: "node-b-multi".to_string(),
+            bind_addr: "0.0.0.0:0".to_string(),
+            peers: vec![PeerConfig {
+                node_id: "node-a-multi".to_string(),
+                addr: format!("http://{}", addr_a),
+            }],
+        },
+        None,
+    );
 
     let state_b = Arc::new(flapjack_http::handlers::AppState {
         manager: manager_b.clone(),
@@ -1562,12 +2673,19 @@ async fn test_periodic_sync_catches_up_multiple_tenants() {
         replication_manager: Some(repl_mgr_b),
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            tmp_b.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -1604,6 +2722,90 @@ async fn test_periodic_sync_catches_up_multiple_tenants() {
     );
 }
 
+/// Periodic sync must discover and recover tenants that only exist on peers.
+///
+/// Regression target: startup/periodic catch-up used to scan only local tenant
+/// directories, skipping peer-created tenants after downtime.
+#[tokio::test]
+async fn test_periodic_sync_discovers_peer_only_tenant() {
+    use flapjack_replication::{
+        config::{NodeConfig, PeerConfig},
+        manager::ReplicationManager,
+    };
+
+    let (addr_a, _tmp_a) = common::spawn_server_with_internal("node-a-peer-only").await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("http://{}/1/indexes/peer-only/batch", addr_a))
+        .json(&serde_json::json!({
+            "requests": [{"action": "addObject", "body": {"_id": "p1", "title": "Saffron Bun"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    common::wait_for_response_task(&client, &addr_a, resp).await;
+
+    // Node-b starts with no local tenant directories.
+    let tmp_b = tempfile::TempDir::new().unwrap();
+    let manager_b = flapjack::IndexManager::new(tmp_b.path());
+
+    let repl_mgr_b = ReplicationManager::new(
+        NodeConfig {
+            node_id: "node-b-peer-only".to_string(),
+            bind_addr: "0.0.0.0:0".to_string(),
+            peers: vec![PeerConfig {
+                node_id: "node-a-peer-only".to_string(),
+                addr: format!("http://{}", addr_a),
+            }],
+        },
+        None,
+    );
+
+    let state_b = Arc::new(flapjack_http::handlers::AppState {
+        manager: manager_b.clone(),
+        key_store: None,
+        replication_manager: Some(repl_mgr_b),
+        ssl_manager: None,
+        analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            tmp_b.path(),
+        )),
+        metrics_state: None,
+        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
+        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
+        start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
+        experiment_store: None,
+        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
+    });
+
+    flapjack_http::startup_catchup::run_periodic_catchup(Arc::clone(&state_b)).await;
+
+    let mut found = false;
+    for _ in 0..200 {
+        if manager_b
+            .search("peer-only", "Saffron", None, None, 10)
+            .map(|r| r.total)
+            .unwrap_or(0)
+            >= 1
+        {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+
+    assert!(
+        found,
+        "peer-only tenant should be discovered from peer and recovered during periodic sync"
+    );
+}
+
 /// spawn_periodic_sync fires the sync task within the configured interval.
 /// Uses a 1s interval and verifies data is pulled within 4s.
 ///
@@ -1635,14 +2837,17 @@ async fn test_spawn_periodic_sync_fires_within_interval() {
     let manager_b = flapjack::IndexManager::new(tmp_b.path());
     manager_b.create_tenant("spawn-test").unwrap();
 
-    let repl_mgr_b = ReplicationManager::new(NodeConfig {
-        node_id: "node-b-spawn".to_string(),
-        bind_addr: "0.0.0.0:0".to_string(),
-        peers: vec![PeerConfig {
-            node_id: "node-a-spawn".to_string(),
-            addr: format!("http://{}", addr_a),
-        }],
-    });
+    let repl_mgr_b = ReplicationManager::new(
+        NodeConfig {
+            node_id: "node-b-spawn".to_string(),
+            bind_addr: "0.0.0.0:0".to_string(),
+            peers: vec![PeerConfig {
+                node_id: "node-a-spawn".to_string(),
+                addr: format!("http://{}", addr_a),
+            }],
+        },
+        None,
+    );
 
     let state_b = Arc::new(flapjack_http::handlers::AppState {
         manager: manager_b.clone(),
@@ -1650,12 +2855,19 @@ async fn test_spawn_periodic_sync_fires_within_interval() {
         replication_manager: Some(repl_mgr_b),
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
+            tmp_b.path(),
+        )),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -1679,5 +2891,253 @@ async fn test_spawn_periodic_sync_fires_within_interval() {
     assert!(
         found,
         "spawn_periodic_sync should have fired within 5s and pulled 'Pistachio Latte' to node-b"
+    );
+}
+
+// ── Authenticated replication tests ────────────────────────────────────────
+
+/// Verify that /internal/replicate rejects requests without auth headers
+/// when the server has authentication enabled.
+#[tokio::test]
+async fn test_authenticated_replication_rejects_no_auth() {
+    let admin_key = "test-repl-auth-key-001";
+    let (addr, _tmp) = common::spawn_server_with_key(Some(admin_key)).await;
+    let client = reqwest::Client::new();
+
+    // No auth headers → 403
+    let resp = client
+        .post(format!("http://{}/internal/replicate", addr))
+        .json(&serde_json::json!({
+            "tenant_id": "test-tenant",
+            "ops": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "Request without auth headers should be rejected"
+    );
+
+    // Wrong key → 403
+    let resp = client
+        .post(format!("http://{}/internal/replicate", addr))
+        .header("x-algolia-api-key", "wrong-key")
+        .header("x-algolia-application-id", "flapjack-replication")
+        .json(&serde_json::json!({
+            "tenant_id": "test-tenant",
+            "ops": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "Request with wrong key should be rejected"
+    );
+
+    // Missing application-id → 403
+    let resp = client
+        .post(format!("http://{}/internal/replicate", addr))
+        .header("x-algolia-api-key", admin_key)
+        .json(&serde_json::json!({
+            "tenant_id": "test-tenant",
+            "ops": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "Request without application-id should be rejected"
+    );
+
+    // Correct admin key + application-id → 200
+    let resp = client
+        .post(format!("http://{}/internal/replicate", addr))
+        .header("x-algolia-api-key", admin_key)
+        .header("x-algolia-application-id", "flapjack-replication")
+        .json(&serde_json::json!({
+            "tenant_id": "test-tenant",
+            "ops": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "Request with correct admin key should succeed"
+    );
+}
+
+#[tokio::test]
+async fn test_peer_client_list_tenants_requires_auth_and_returns_visible_sorted_tenants() {
+    let admin_key = "test-repl-list-tenants-key-004";
+    let (addr, temp_dir) = common::spawn_server_with_key(Some(admin_key)).await;
+    let client = reqwest::Client::new();
+
+    for (index_name, object_id, title) in [
+        ("tenant-z", "z1", "Zaatar Biscuit"),
+        ("tenant-a", "a1", "Anise Cookie"),
+    ] {
+        let resp = client
+            .post(format!("http://{}/1/indexes/{}/batch", addr, index_name))
+            .header("x-algolia-api-key", admin_key)
+            .header("x-algolia-application-id", "test")
+            .json(&serde_json::json!({
+                "requests": [{
+                    "action": "addObject",
+                    "body": { "objectID": object_id, "title": title }
+                }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        common::wait_for_response_task_authed(&client, &addr, resp, Some(admin_key)).await;
+    }
+
+    std::fs::create_dir_all(temp_dir.path().join(".hidden-peer-dir")).unwrap();
+    std::fs::write(temp_dir.path().join("not-a-directory.txt"), "ignore-me").unwrap();
+
+    let wrong_key_peer = flapjack_replication::peer::PeerClient::new(
+        "peer-auth-wrong".to_string(),
+        format!("http://{}", addr),
+        Some("wrong-admin-key".to_string()),
+    );
+    let wrong_key_result = wrong_key_peer.list_tenants().await;
+    assert!(
+        wrong_key_result.is_err(),
+        "list_tenants with wrong key should fail"
+    );
+    let wrong_key_error = wrong_key_result.unwrap_err();
+    assert!(
+        wrong_key_error.contains("403"),
+        "wrong-key list_tenants error should include HTTP status 403, got: {}",
+        wrong_key_error
+    );
+
+    let good_key_peer = flapjack_replication::peer::PeerClient::new(
+        "peer-auth-ok".to_string(),
+        format!("http://{}", addr),
+        Some(admin_key.to_string()),
+    );
+    let tenants = good_key_peer
+        .list_tenants()
+        .await
+        .expect("list_tenants with valid key should succeed")
+        .tenants;
+
+    assert!(
+        tenants.windows(2).all(|pair| pair[0] <= pair[1]),
+        "tenant list should be sorted lexicographically, got: {:?}",
+        tenants
+    );
+    assert!(
+        tenants.contains(&"tenant-a".to_string()) && tenants.contains(&"tenant-z".to_string()),
+        "tenant list should include tenants created via write API, got: {:?}",
+        tenants
+    );
+    assert!(
+        !tenants.iter().any(|tenant| tenant.starts_with('.')),
+        "tenant list should not include hidden directories, got: {:?}",
+        tenants
+    );
+    assert!(
+        !tenants.iter().any(|tenant| tenant == "not-a-directory.txt"),
+        "tenant list should not include plain files, got: {:?}",
+        tenants
+    );
+}
+
+/// End-to-end: write a document on authenticated node A, verify it replicates
+/// to authenticated node B via PeerClient with admin key injection.
+#[tokio::test]
+async fn test_authenticated_two_node_replication() {
+    let admin_key = "test-repl-e2e-key-002";
+    let (addr_a, addr_b, key, _tmp_a, _tmp_b) =
+        common::spawn_authenticated_replication_pair("auth-node-a", "auth-node-b", admin_key).await;
+    let client = reqwest::Client::new();
+
+    // Write a document on node A (must send auth headers)
+    let resp = client
+        .post(format!("http://{}/1/indexes/auth-test/batch", addr_a))
+        .header("x-algolia-api-key", &key)
+        .header("x-algolia-application-id", "test")
+        .json(&serde_json::json!({
+            "requests": [{
+                "action": "addObject",
+                "body": { "objectID": "auth-obj-1", "name": "Auth Test Document" }
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "Batch write should succeed");
+    common::wait_for_response_task_authed(&client, &addr_a, resp, Some(&key)).await;
+
+    // Poll node B until the document appears (PeerClient should have
+    // injected auth headers automatically during replication)
+    let mut found = false;
+    for _ in 0..200 {
+        let resp = client
+            .post(format!("http://{}/1/indexes/auth-test/query", addr_b))
+            .header("x-algolia-api-key", &key)
+            .header("x-algolia-application-id", "test")
+            .json(&serde_json::json!({ "query": "Auth Test" }))
+            .send()
+            .await
+            .unwrap();
+        if resp.status().is_success() {
+            let body: serde_json::Value = resp.json().await.unwrap();
+            if body["nbHits"].as_u64().unwrap_or(0) >= 1 {
+                found = true;
+                break;
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        found,
+        "Document written on authenticated node A should replicate to authenticated node B"
+    );
+}
+
+/// Verify that a PeerClient with the wrong admin key cannot replicate to
+/// an authenticated server — the replication attempt returns an error.
+#[tokio::test]
+async fn test_peer_client_wrong_key_replication_fails() {
+    use flapjack_replication::types::ReplicateOpsRequest;
+
+    let correct_key = "test-repl-wrong-key-003";
+    let (addr, _tmp) = common::spawn_server_with_key(Some(correct_key)).await;
+
+    // Create a PeerClient with a WRONG admin key
+    let peer = flapjack_replication::peer::PeerClient::new(
+        "rogue-peer".to_string(),
+        format!("http://{}", addr),
+        Some("completely-wrong-key".to_string()),
+    );
+
+    let result = peer
+        .replicate_ops(ReplicateOpsRequest {
+            tenant_id: "test-tenant".to_string(),
+            ops: vec![],
+        })
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Replication with wrong key should return an error, got: {:?}",
+        result
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("403"),
+        "Error should mention 403 status, got: {}",
+        err
     );
 }

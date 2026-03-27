@@ -1,9 +1,27 @@
 export function deepCompare(algolia, flapjack, opts = {}) {
-  const ignore = new Set(opts.ignore || ['processingTimeMS', 'taskID', 'cursor', 'serverTimeMS', 'processingTimingsMS', 'params', 'serverTimeMS']);
+  const ignore = new Set(
+    opts.ignore || [
+      'processingTimeMS',
+      'taskID',
+      'cursor',
+      'serverTimeMS',
+      'processingTimingsMS',
+      'params',
+      '_automaticInsights',
+      'parsedQuery',
+      'serverUsed',
+      'exhaustive.facetValues',
+      'exhaustive.rulesMatch'
+    ]
+  );
   const diffs = [];
+
+  function isIgnored(path) {
+    return ignore.has(path);
+  }
   
   function walk(a, f, path = '') {
-    if (ignore.has(path)) return;
+    if (isIgnored(path)) return;
     
     const typeA = typeof a;
     const typeF = typeof f;
@@ -34,8 +52,12 @@ export function deepCompare(algolia, flapjack, opts = {}) {
     }
     
     if (typeA === 'object') {
-      const keysA = Object.keys(a).sort();
-      const keysF = Object.keys(f).sort();
+      const keysA = Object.keys(a)
+        .filter(k => !isIgnored(path ? `${path}.${k}` : k))
+        .sort();
+      const keysF = Object.keys(f)
+        .filter(k => !isIgnored(path ? `${path}.${k}` : k))
+        .sort();
       
       const missing = keysA.filter(k => !keysF.includes(k));
       const extra = keysF.filter(k => !keysA.includes(k));

@@ -1,3 +1,5 @@
+/**
+ */
 import http from 'http';
 import https from 'https';
 import { URL } from 'url';
@@ -19,6 +21,9 @@ const agentOptions = { keepAlive: true };
 const defaultHttpAgent = new http.Agent(agentOptions);
 const defaultHttpsAgent = new https.Agent(agentOptions);
 
+/**
+ * TODO: Document createHttpRequester.
+ */
 export function createHttpRequester({
   agent: userGlobalAgent,
   httpAgent: userHttpAgent,
@@ -28,6 +33,9 @@ export function createHttpRequester({
   const httpAgent = userHttpAgent || userGlobalAgent || defaultHttpAgent;
   const httpsAgent = userHttpsAgent || userGlobalAgent || defaultHttpsAgent;
 
+  /**
+   * TODO: Document send.
+   */
   function send(request: EndRequest): Promise<Response> {
     return new Promise((resolve) => {
       let responseTimeout: NodeJS.Timeout | undefined;

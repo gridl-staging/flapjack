@@ -10,6 +10,19 @@ function testIndexName(suite, caseNum) {
   return `test_${hash}`;
 }
 
+function normalizeNumericAttributeAlias(settings) {
+  const normalized = JSON.parse(JSON.stringify(settings));
+  const numericAttributes =
+    normalized.numericAttributesForFiltering ?? normalized.numericAttributesToIndex;
+
+  if (numericAttributes !== undefined) {
+    normalized.numericAttributesForFiltering = numericAttributes;
+  }
+
+  delete normalized.numericAttributesToIndex;
+  return normalized;
+}
+
 export default [
   {
     name: 'searchableAttributes persistence',
@@ -51,7 +64,9 @@ export default [
       };
     },
     validate(algolia, flapjack, verbose) {
-      const diffs = deepCompare(algolia, flapjack, { ignore: ['processingTimeMS', 'taskID', 'cursor', 'serverTimeMS', 'processingTimingsMS', 'params', 'minWordSizefor1Typo', 'minWordSizefor2Typos', 'hitsPerPage', 'maxValuesPerFacet', 'ranking', 'customRanking', 'separatorsToIndex', 'removeWordsIfNoResults', 'queryType', 'highlightPreTag', 'highlightPostTag', 'snippetEllipsisText', 'alternativesAsExact'] });
+      const normalizedAlgolia = normalizeNumericAttributeAlias(algolia);
+      const normalizedFlapjack = normalizeNumericAttributeAlias(flapjack);
+      const diffs = deepCompare(normalizedAlgolia, normalizedFlapjack, { ignore: ['processingTimeMS', 'taskID', 'cursor', 'serverTimeMS', 'processingTimingsMS', 'params', 'minWordSizefor1Typo', 'minWordSizefor2Typos', 'hitsPerPage', 'maxValuesPerFacet', 'ranking', 'customRanking', 'separatorsToIndex', 'removeWordsIfNoResults', 'queryType', 'highlightPreTag', 'highlightPostTag', 'snippetEllipsisText', 'alternativesAsExact'] });
       if (diffs.length > 0) {
         throw { diffs };
       }

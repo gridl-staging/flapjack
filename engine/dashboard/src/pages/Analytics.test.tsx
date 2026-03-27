@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { TEST_ROUTER_FUTURE } from '@/test/routerFuture'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { IndexLayout } from '@/components/layout/IndexLayout'
 import { Analytics } from './Analytics'
 
 // Mock all analytics hooks — tests focus on the page shell, not chart data
@@ -19,12 +21,35 @@ vi.mock('@/hooks/useAnalytics', () => ({
   useGeoBreakdown: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
   useGeoTopSearches: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
   useGeoRegions: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
-  defaultRange: vi.fn().mockReturnValue({ startDate: '2026-02-11', endDate: '2026-02-18' }),
-  previousRange: vi.fn().mockReturnValue({ startDate: '2026-02-04', endDate: '2026-02-10' }),
+  useAddToCartRate: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
+  usePurchaseRate: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
+  useRevenue: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
+  useCountries: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
+  useConversionRate: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
+  defaultRange: vi.fn((days: number) => {
+    const end = new Date('2026-02-18T00:00:00.000Z')
+    const start = new Date(end)
+    start.setUTCDate(start.getUTCDate() - days)
+    return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
+  }),
+  previousRange: vi.fn((range: { startDate: string; endDate: string }) => {
+    const start = new Date(`${range.startDate}T00:00:00.000Z`)
+    const end = new Date(`${range.endDate}T00:00:00.000Z`)
+    const days = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+    const prevEnd = new Date(start)
+    prevEnd.setUTCDate(prevEnd.getUTCDate() - 1)
+    const prevStart = new Date(prevEnd)
+    prevStart.setUTCDate(prevStart.getUTCDate() - days)
+    return { startDate: prevStart.toISOString().slice(0, 10), endDate: prevEnd.toISOString().slice(0, 10) }
+  }),
 }))
 
 vi.mock('@/hooks/useIndexes', () => ({
   useIndexes: vi.fn(),
+}))
+
+vi.mock('@/hooks/useSettings', () => ({
+  useSettings: vi.fn(),
 }))
 
 // Recharts uses ResizeObserver which isn't in jsdom
@@ -39,15 +64,19 @@ vi.mock('recharts', () => ({
 }))
 
 import { useIndexes } from '@/hooks/useIndexes'
+import { useSettings } from '@/hooks/useSettings'
 
-function makeWrapper(path: string, routePattern: string) {
+function makeWrapper(path: string, nonIndexRoute?: string) {
   return function wrapper({ children }: { children: React.ReactNode }) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     return (
       <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={[path]}>
+        <MemoryRouter future={TEST_ROUTER_FUTURE} initialEntries={[path]}>
           <Routes>
-            <Route path={routePattern} element={children} />
+            <Route path="/index/:indexName" element={<IndexLayout />}>
+              <Route path="analytics" element={children} />
+            </Route>
+            {nonIndexRoute ? <Route path={nonIndexRoute} element={children} /> : null}
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
@@ -55,12 +84,13 @@ function makeWrapper(path: string, routePattern: string) {
   }
 }
 
-const withIndex = makeWrapper('/index/products/analytics', '/index/:indexName/analytics')
+const withIndex = makeWrapper('/index/products/analytics')
 const withoutIndex = makeWrapper('/analytics', '/analytics')
 
 describe('Analytics', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(useSettings).mockReturnValue({ data: { mode: 'keywordSearch' }, isLoading: false } as any)
   })
 
   it('shows "No Indexes Found" when no indexes exist and no indexName in URL', () => {
@@ -111,5 +141,31 @@ describe('Analytics', () => {
     expect(screen.getByTestId('tab-overview')).toBeInTheDocument()
     expect(screen.getByTestId('tab-searches')).toBeInTheDocument()
     expect(screen.getByTestId('tab-no-results')).toBeInTheDocument()
+  })
+
+  it('renders the Conversions tab trigger', () => {
+    vi.mocked(useIndexes).mockReturnValue({ data: [{ uid: 'products', entries: 100, dataSize: 0 }], isLoading: false } as any)
+    render(<Analytics />, { wrapper: withIndex })
+    expect(screen.getByTestId('tab-conversions')).toBeInTheDocument()
+  })
+
+  it('wires the extracted overview, conversions, and geography tabs into the page shell', async () => {
+    const user = userEvent.setup()
+    vi.mocked(useIndexes).mockReturnValue({ data: [{ uid: 'products', entries: 100, dataSize: 0 }], isLoading: false } as any)
+
+    render(<Analytics />, { wrapper: withIndex })
+
+    expect(screen.getByTestId('tab-overview')).toHaveAttribute('data-state', 'active')
+    expect(screen.getByTestId('search-volume-chart')).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('tab-conversions'))
+
+    expect(screen.getByTestId('tab-conversions')).toHaveAttribute('data-state', 'active')
+    expect(screen.getByTestId('conversion-country-filter')).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('tab-geography'))
+
+    expect(screen.getByTestId('tab-geography')).toHaveAttribute('data-state', 'active')
+    expect(screen.getByText('No geographic data')).toBeInTheDocument()
   })
 })

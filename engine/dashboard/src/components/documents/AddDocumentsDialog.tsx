@@ -1,3 +1,6 @@
+/**
+ * @module Dialog component for adding documents to a Flapjack search index via JSON input, file upload, or sample data, with a schema-aware form builder.
+ */
 import { useState, useCallback, useRef, useEffect, type DragEvent } from 'react';
 import { useAddDocuments } from '@/hooks/useDocuments';
 import {
@@ -21,6 +24,13 @@ interface AddDocumentsDialogProps {
   indexName: string;
 }
 
+/**
+ * Parses a JSON string into an array of document objects.
+ * Accepts either a single JSON object or an array of objects.
+ * @param text - Raw JSON string to parse
+ * @returns Array of parsed document objects
+ * @throws If the input is empty, not valid JSON, an empty array, or not an object/array of objects
+ */
 function parseDocuments(text: string): Record<string, unknown>[] {
   const trimmed = text.trim();
   if (!trimmed) throw new Error('No content provided');
@@ -66,6 +76,12 @@ function toFormFields(detected: FieldInfo[]): FormField[] {
   }));
 }
 
+/**
+ * Converts form field entries into a document object, auto-generating an `objectID`.
+ * Skips fields with empty names or values. Returns `null` if no fields have content.
+ * @param fields - Form field definitions with name, type, and value
+ * @returns A document object with typed values, or `null` if all fields are empty
+ */
 function buildDocumentFromFields(fields: FormField[]): Record<string, unknown> | null {
   const filled = fields.filter((f) => f.name.trim() && f.value.trim());
   if (filled.length === 0) return null;
@@ -90,6 +106,13 @@ function buildDocumentFromFields(fields: FormField[]): Record<string, unknown> |
   return doc;
 }
 
+/**
+ * Modal dialog for adding documents to a search index.
+ * Provides three input modes: a JSON editor with a form builder that auto-populates fields from the index schema, a drag-and-drop file upload (.json, max 50MB), and a sample data loader. The form builder and JSON textarea stay in sync — edits to the form update the textarea, and manual textarea edits detach the sync.
+ * @param open - Whether the dialog is visible
+ * @param onOpenChange - Callback to toggle dialog visibility
+ * @param indexName - Target index to add documents to
+ */
 export function AddDocumentsDialog({
   open,
   onOpenChange,

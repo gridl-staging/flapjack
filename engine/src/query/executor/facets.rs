@@ -1,76 +1,63 @@
+//! Facet collection and distinct deduplication for search results. Executes queries with tantivy collectors, extracts and trims facet counts, and deduplicates documents by attribute value with configurable group limits.
 use super::QueryExecutor;
 use crate::error::Result;
-use crate::types::{FacetCount, FacetRequest, SearchResult, Sort};
+use crate::types::{FacetCount, FacetRequest, FacetStats, SearchResult, Sort};
 use std::collections::HashMap;
 use tantivy::collector::{Count, FacetCollector, TopDocs};
 use tantivy::query::Query as TantivyQuery;
 use tantivy::Searcher;
 
+/// Groups sort, pagination, facet, and distinct parameters for faceted search execution.
+pub struct FacetSearchParams<'a> {
+    pub sort: Option<&'a Sort>,
+    pub limit: usize,
+    pub offset: usize,
+    pub has_text_query: bool,
+    pub facet_requests: Option<&'a [FacetRequest]>,
+    pub distinct_count: Option<u32>,
+}
+
 impl QueryExecutor {
+    /// Execute a search with optional facet requests, applying filters, sorting, and pagination. If facet requests are provided and non-empty, delegates to execute_with_facets_internal for full facet collection; otherwise executes a standard search without facets. Optionally deduplicates results by the configured distinct attribute.
+    ///
+    /// # Arguments
+    /// - searcher: Tantivy searcher instance
+    /// - query: The search query
+    /// - filter: Optional filter to apply before searching
+    /// - params: FacetSearchParams containing sort, limit, offset, has_text_query, facet_requests, and distinct_count
+    ///
+    /// # Returns
+    /// SearchResult with documents, total count, and facet data. The facets map is empty if no facets were requested.
     pub fn execute_with_facets(
         &self,
         searcher: &Searcher,
         query: Box<dyn TantivyQuery>,
         filter: Option<&crate::types::Filter>,
-        sort: Option<&Sort>,
-        limit: usize,
-        offset: usize,
-        has_text_query: bool,
-        facet_requests: Option<&[FacetRequest]>,
-    ) -> Result<SearchResult> {
-        self.execute_with_facets_and_distinct(
-            searcher,
-            query,
-            filter,
-            sort,
-            limit,
-            offset,
-            has_text_query,
-            facet_requests,
-            None,
-        )
-    }
-
-    pub fn execute_with_facets_and_distinct(
-        &self,
-        searcher: &Searcher,
-        query: Box<dyn TantivyQuery>,
-        filter: Option<&crate::types::Filter>,
-        sort: Option<&Sort>,
-        limit: usize,
-        offset: usize,
-        has_text_query: bool,
-        facet_requests: Option<&[FacetRequest]>,
-        distinct_count: Option<u32>,
+        params: &FacetSearchParams<'_>,
     ) -> Result<SearchResult> {
         let tf0 = std::time::Instant::now();
         let final_query = self.apply_filter(query, filter)?;
         let tf1 = tf0.elapsed();
 
-        if let Some(facets) = facet_requests {
+        if let Some(facets) = params.facet_requests {
             if facets.is_empty() {
                 return Err(crate::error::FlapjackError::InvalidQuery(
                     "Empty facet request array".to_string(),
                 ));
             }
 
-            return self.execute_with_facets_internal(
-                searcher,
-                final_query,
-                sort,
-                limit,
-                offset,
-                has_text_query,
-                facets,
-                distinct_count,
-            );
+            return self.execute_with_facets_internal(searcher, final_query, facets, params);
         }
 
         let tf2 = tf0.elapsed();
-        let (documents, total) = match sort {
+        let (documents, total) = match params.sort {
             None | Some(Sort::ByRelevance) => {
-                let (docs, count) =
-                    self.execute_relevance_sort(searcher, final_query, limit, offset)?;
+                let (docs, count) = self.execute_relevance_sort(
+                    searcher,
+                    final_query,
+                    params.limit,
+                    params.offset,
+                )?;
                 tracing::debug!(
                     "[EXEC] filter={:?} relevance_sort={:?}",
                     tf1,
@@ -79,25 +66,31 @@ impl QueryExecutor {
                 (docs, count)
             }
             Some(Sort::ByField { field, order }) => {
-                if has_text_query {
+                if params.has_text_query {
                     let (docs, count) = self.execute_relevance_first_sort(
                         searcher,
                         final_query,
                         field,
                         order,
-                        limit,
-                        offset,
+                        params.limit,
+                        params.offset,
                     )?;
                     (docs, count)
                 } else {
-                    let (docs, count) =
-                        self.execute_pure_sort(searcher, final_query, field, order, limit, offset)?;
+                    let (docs, count) = self.execute_pure_sort(
+                        searcher,
+                        final_query,
+                        field,
+                        order,
+                        params.limit,
+                        params.offset,
+                    )?;
                     (docs, count)
                 }
             }
         };
 
-        let (documents, total) = if let Some(distinct) = distinct_count {
+        let (documents, total) = if let Some(distinct) = params.distinct_count {
             if distinct > 0 {
                 self.apply_distinct(documents, total, distinct)?
             } else {
@@ -111,22 +104,42 @@ impl QueryExecutor {
             documents,
             total,
             facets: HashMap::new(),
+            facets_stats: HashMap::new(),
             user_data: Vec::new(),
             applied_rules: Vec::new(),
+            parsed_query: self.query_text.clone(),
+            exhaustive_facet_values: true,
+            exhaustive_rules_match: true,
+            query_after_removal: None,
+            rendering_content: None,
+            effective_around_lat_lng: None,
+            effective_around_radius: None,
         })
     }
 
+    /// Execute a search with facet collection and optional distinct deduplication. Handles both relevance-based and field-based sorting with optional custom ranking, applies pagination with document reconstruction, and extracts count-based and numeric statistics for facets. When limit and offset are both 0, skips document reconstruction but still collects complete facet data.
+    ///
+    /// # Arguments
+    /// - searcher: Tantivy searcher instance
+    /// - query: The search query (already filtered)
+    /// - facet_requests: Facet paths to collect
+    /// - params: FacetSearchParams containing sort, limit, offset, has_text_query, and distinct_count
+    ///
+    /// # Returns
+    /// SearchResult with documents (sorted and paginated), total count, facet counts sorted by frequency, statistics for numeric facets (min/max/avg/sum), and exhaustive_facet_values flag indicating if all unique facet values are included.
     pub(crate) fn execute_with_facets_internal(
         &self,
         searcher: &Searcher,
         query: Box<dyn TantivyQuery>,
-        sort: Option<&Sort>,
-        limit: usize,
-        offset: usize,
-        has_text_query: bool,
         facet_requests: &[FacetRequest],
-        distinct_count: Option<u32>,
+        params: &FacetSearchParams<'_>,
     ) -> Result<SearchResult> {
+        let sort = params.sort;
+        let limit = params.limit;
+        let offset = params.offset;
+        let has_text_query = params.has_text_query;
+        let distinct_count = params.distinct_count;
+
         let mut facet_collector = FacetCollector::for_field("_facets");
         for req in facet_requests {
             facet_collector.add_facet(&req.path);
@@ -151,12 +164,22 @@ impl QueryExecutor {
             } else {
                 (Vec::new(), count)
             };
+            let (facets, facets_stats, exhaustive_facet_values) =
+                self.extract_facet_counts_and_stats(&facets, facet_requests);
             return Ok(SearchResult {
                 documents,
                 total,
-                facets: self.extract_facet_counts(facets, facet_requests),
+                facets,
+                facets_stats,
                 user_data: Vec::new(),
                 applied_rules: Vec::new(),
+                parsed_query: self.query_text.clone(),
+                exhaustive_facet_values,
+                exhaustive_rules_match: true,
+                query_after_removal: None,
+                rendering_content: None,
+                effective_around_lat_lng: None,
+                effective_around_radius: None,
             });
         }
 
@@ -209,10 +232,12 @@ impl QueryExecutor {
                     self.execute_pure_sort_internal(
                         searcher,
                         query,
-                        field,
-                        order,
-                        limit,
-                        offset,
+                        &super::sorting::SortExecutionParams {
+                            field,
+                            order,
+                            limit,
+                            offset,
+                        },
                         Some(facet_collector),
                     )?
                 }
@@ -229,15 +254,34 @@ impl QueryExecutor {
             (documents, total)
         };
 
+        let (facets, facets_stats, exhaustive_facet_values) =
+            self.extract_facet_counts_and_stats(&facet_counts, facet_requests);
         Ok(SearchResult {
             documents,
             total,
-            facets: self.extract_facet_counts(facet_counts, facet_requests),
+            facets,
+            facets_stats,
             user_data: Vec::new(),
             applied_rules: Vec::new(),
+            parsed_query: self.query_text.clone(),
+            exhaustive_facet_values,
+            exhaustive_rules_match: true,
+            query_after_removal: None,
+            rendering_content: None,
+            effective_around_lat_lng: None,
+            effective_around_radius: None,
         })
     }
 
+    /// Deduplicate documents by attribute value, keeping at most distinct_count documents per group. Skips documents missing the distinct attribute. Returns group count as total.
+    ///
+    /// # Arguments
+    /// - `documents`: Search result documents to deduplicate
+    /// - `original_total`: Original hit count before deduplication
+    /// - `distinct_count`: Maximum documents to keep per group
+    ///
+    /// # Returns
+    /// Deduplicated documents and number of unique groups.
     pub(crate) fn apply_distinct(
         &self,
         documents: Vec<crate::types::ScoredDocument>,
@@ -278,6 +322,14 @@ impl QueryExecutor {
         Ok((deduplicated, group_count))
     }
 
+    /// Limit facet values to the configured maximum per facet. Uses explicit max_values_per_facet override, falls back to settings, defaults to 100, capped at 1000.
+    ///
+    /// # Arguments
+    /// - `facets`: HashMap of facet field names to their counts
+    /// - `_requests`: Facet requests (currently unused)
+    ///
+    /// # Returns
+    /// Facets with each field's counts limited to the maximum.
     pub(crate) fn trim_facet_counts(
         &self,
         facets: HashMap<String, Vec<FacetCount>>,
@@ -298,11 +350,23 @@ impl QueryExecutor {
             .collect()
     }
 
-    pub(crate) fn extract_facet_counts(
+    /// Extract facet counts and numeric statistics from search results. For numeric facets, calculates min, max, sum, and average. Sets exhaustive_facet_values to false if any facet has more unique values than the limit.
+    ///
+    /// # Arguments
+    /// - `facet_counts`: Tantivy facet counts from search
+    /// - `requests`: Facet requests specifying paths and field names
+    ///
+    /// # Returns
+    /// Tuple of (facet counts map, facet stats map, exhaustive_facet_values flag).
+    pub(crate) fn extract_facet_counts_and_stats(
         &self,
-        facet_counts: tantivy::collector::FacetCounts,
+        facet_counts: &tantivy::collector::FacetCounts,
         requests: &[FacetRequest],
-    ) -> HashMap<String, Vec<FacetCount>> {
+    ) -> (
+        HashMap<String, Vec<FacetCount>>,
+        HashMap<String, FacetStats>,
+        bool,
+    ) {
         let limit = self
             .max_values_per_facet
             .or_else(|| {
@@ -314,21 +378,16 @@ impl QueryExecutor {
             .min(1000);
 
         let mut result = HashMap::new();
+        let mut stats = HashMap::new();
+        let mut exhaustive_facet_values = true;
 
         for req in requests {
             let counts: Vec<FacetCount> = facet_counts
                 .top_k(&req.path, limit)
                 .into_iter()
-                .map(|(facet, count)| {
-                    let path_str = facet.to_path_string();
-                    let trimmed = path_str.trim_start_matches('/');
-                    let prefix = format!("{}/", req.path.trim_start_matches('/'));
-                    let clean_path = trimmed.strip_prefix(&prefix).unwrap_or(trimmed).to_string();
-
-                    FacetCount {
-                        path: clean_path,
-                        count,
-                    }
+                .map(|(facet, count)| FacetCount {
+                    path: clean_facet_path(req, facet),
+                    count,
                 })
                 .collect();
 
@@ -338,10 +397,63 @@ impl QueryExecutor {
                 .entry(req.field.clone())
                 .or_insert_with(Vec::new)
                 .extend(counts);
+
+            let mut all_numeric = true;
+            let mut min = f64::INFINITY;
+            let mut max = f64::NEG_INFINITY;
+            let mut sum = 0.0_f64;
+            let mut total_count = 0_u64;
+            let mut unique_count = 0_usize;
+
+            for (facet, count) in facet_counts.get(&req.path) {
+                unique_count += 1;
+                if !all_numeric {
+                    continue;
+                }
+                let raw = clean_facet_path(req, facet);
+                match raw.parse::<f64>() {
+                    Ok(val) if val.is_finite() => {
+                        if val < min {
+                            min = val;
+                        }
+                        if val > max {
+                            max = val;
+                        }
+                        sum += val * count as f64;
+                        total_count += count;
+                    }
+                    _ => {
+                        all_numeric = false;
+                    }
+                }
+            }
+
+            if unique_count > limit {
+                exhaustive_facet_values = false;
+            }
+
+            if all_numeric && total_count > 0 {
+                stats.insert(
+                    req.field.clone(),
+                    FacetStats {
+                        min,
+                        max,
+                        avg: sum / total_count as f64,
+                        sum,
+                    },
+                );
+            }
         }
 
-        result
+        (result, stats, exhaustive_facet_values)
     }
+}
+
+fn clean_facet_path(req: &FacetRequest, facet: &tantivy::schema::Facet) -> String {
+    let path_str = facet.to_path_string();
+    let trimmed = path_str.trim_start_matches('/');
+    let prefix = format!("{}/", req.path.trim_start_matches('/'));
+    trimmed.strip_prefix(&prefix).unwrap_or(trimmed).to_string()
 }
 
 #[cfg(test)]
@@ -379,6 +491,7 @@ mod tests {
         }
     }
 
+    /// Helper to construct a HashMap of facet counts from field names and count entries. Used in tests to build expected data structures.
     fn facet_counts(entries: Vec<(&str, Vec<(&str, u64)>)>) -> HashMap<String, Vec<FacetCount>> {
         entries
             .into_iter()
@@ -494,6 +607,7 @@ mod tests {
         assert_eq!(total, 10);
     }
 
+    /// Verify that distinct_count=1 keeps only one document per attribute value group.
     #[test]
     fn distinct_count_1_deduplicates() {
         let settings = IndexSettings {
@@ -513,6 +627,7 @@ mod tests {
         assert_eq!(total, 2); // 2 groups
     }
 
+    /// Verify that distinct_count=2 allows up to two documents per attribute value group.
     #[test]
     fn distinct_count_2_allows_two_per_group() {
         let settings = IndexSettings {
@@ -531,6 +646,7 @@ mod tests {
         assert_eq!(total, 2); // 2 groups
     }
 
+    /// Verify that documents without the configured distinct attribute are skipped entirely during deduplication.
     #[test]
     fn distinct_missing_field_skipped() {
         let settings = IndexSettings {

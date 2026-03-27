@@ -9,6 +9,15 @@ use tantivy::schema::{document::ReferenceValue, Value};
 use tantivy::{DocSet, Searcher, TERMINATED};
 
 impl QueryExecutor {
+    fn ordered_searchable_paths(&self) -> Vec<&String> {
+        self.searchable_paths
+            .iter()
+            .filter(|p| !self.unordered_paths.contains((*p).as_str()))
+            .take(2)
+            .collect()
+    }
+
+    /// TODO: Document QueryExecutor.execute_relevance_sort.
     pub(crate) fn execute_relevance_sort(
         &self,
         searcher: &Searcher,
@@ -52,6 +61,7 @@ impl QueryExecutor {
         Ok((documents, total))
     }
 
+    /// TODO: Document QueryExecutor.apply_tier2_and_custom_ranking.
     pub(crate) fn apply_tier2_and_custom_ranking(
         &self,
         searcher: &Searcher,
@@ -169,6 +179,7 @@ impl QueryExecutor {
             .collect())
     }
 
+    /// TODO: Document QueryExecutor.apply_tier2_only.
     pub(crate) fn apply_tier2_only(
         &self,
         searcher: &Searcher,
@@ -184,7 +195,8 @@ impl QueryExecutor {
             doc_positions.insert((doc.1.segment_ord, doc.1.doc_id), u32::MAX);
         }
 
-        let top_paths: Vec<&String> = self.searchable_paths.iter().take(2).collect();
+        // Only apply position penalty to ordered paths (unordered paths skip position scoring)
+        let top_paths = self.ordered_searchable_paths();
 
         for segment_ord in 0..searcher.segment_readers().len() {
             let segment_reader = searcher.segment_reader(segment_ord as u32);
@@ -235,6 +247,7 @@ impl QueryExecutor {
             .collect())
     }
 
+    /// TODO: Document QueryExecutor.extract_min_position.
     pub(crate) fn extract_min_position(
         &self,
         searcher: &Searcher,
@@ -248,8 +261,8 @@ impl QueryExecutor {
 
         let mut min_pos = u32::MAX;
 
-        // Only check top 2 searchable paths (same as apply_tier2_only)
-        for path in self.searchable_paths.iter().take(2) {
+        // Only check top 2 ordered searchable paths (same selection as apply_tier2_only).
+        for path in self.ordered_searchable_paths() {
             for term_text in query_terms {
                 let full_term = format!("{}\0s{}", path, term_text);
                 let term = tantivy::Term::from_field_text(self.json_search_field, &full_term);
@@ -257,9 +270,19 @@ impl QueryExecutor {
                 if let Some(mut postings) =
                     inverted_index.read_postings(&term, IndexRecordOption::WithFreqsAndPositions)?
                 {
-                    // Use seek() to jump directly to target doc instead of
-                    // walking through every doc in the posting list.
-                    let doc_id = postings.seek(addr.doc_id);
+                    // `DocSet::seek` requires target >= current doc. If the first posting
+                    // is already beyond our target doc, this term cannot match the doc.
+                    let current_doc = postings.doc();
+                    if current_doc == TERMINATED || current_doc > addr.doc_id {
+                        continue;
+                    }
+                    // Use seek() to jump directly to the target doc instead of walking
+                    // through every posting.
+                    let doc_id = if current_doc == addr.doc_id {
+                        current_doc
+                    } else {
+                        postings.seek(addr.doc_id)
+                    };
                     if doc_id == addr.doc_id {
                         let mut positions: Vec<u32> =
                             Vec::with_capacity(postings.term_freq() as usize);

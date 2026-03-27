@@ -1,3 +1,6 @@
+/**
+ * @module Provides the SampleDataTabContent component for seeding an index with bundled demo datasets (movies, products) plus companion synonyms and merchandising rules.
+ */
 import { useState, useCallback } from 'react';
 import { useAddDocuments } from '@/hooks/useDocuments';
 import { Button } from '@/components/ui/button';
@@ -139,6 +142,14 @@ async function seedExtras(indexName: string, datasetKey: DatasetKey) {
   }
 }
 
+/**
+ * Renders a panel for loading pre-built sample datasets (movies or products) into an index.
+ * 
+ * Displays a dataset picker, a document count input clamped to the available range, a preview table of the first five records, and a load button. On load, inserts the selected documents along with demo synonyms and merchandising rules, then fires `onSuccess`.
+ * 
+ * @param props.indexName - Target index to populate with sample data.
+ * @param props.onSuccess - Callback invoked after documents, synonyms, and rules are successfully written.
+ */
 export function SampleDataTabContent({ indexName, onSuccess }: SampleDataTabContentProps) {
   const [dataset, setDataset] = useState<DatasetKey>('movies');
   const [countInput, setCountInput] = useState('1000');

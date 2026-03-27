@@ -13,43 +13,97 @@
  * - Semantic ratio slider label updates
  * - Search results appear when hybrid search is active
  */
+import type { APIRequestContext, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
 import {
   addDocuments,
+  createIndex,
   deleteIndex,
   configureEmbedder,
   clearEmbedders,
   addDocumentsWithVectors,
+  isVectorSearchEnabled,
+  searchIndex,
+  waitForEmbedder,
+  waitForNoEmbedders,
 } from '../../fixtures/api-helpers';
 
-// Dedicated index — avoids race condition with vector-settings tests
-// that modify the shared e2e-products index in parallel.
-const HYBRID_INDEX = 'e2e-hybrid';
+function extractObjectIds(hits: unknown[] | undefined): string[] {
+  if (!Array.isArray(hits)) {
+    return [];
+  }
+
+  return hits
+    .map((hit) => {
+      if (!hit || typeof hit !== 'object') {
+        return '';
+      }
+      const objectID = (hit as Record<string, unknown>).objectID;
+      return typeof objectID === 'string' ? objectID : '';
+    })
+    .filter((value): value is string => value.length > 0);
+}
+
+async function waitForQueryHit(
+  request: APIRequestContext,
+  indexName: string,
+  query: string,
+  expectedObjectId?: string,
+): Promise<void> {
+  await expect(async () => {
+    const response = await searchIndex(request, indexName, query);
+    const objectIds = extractObjectIds(response.hits);
+    if (expectedObjectId) {
+      expect(objectIds).toContain(expectedObjectId);
+      return;
+    }
+    expect(response.nbHits ?? 0).toBeGreaterThan(0);
+  }).toPass({ timeout: 15_000 });
+}
+
+async function expectHybridControlsUnavailable(page: Page): Promise<void> {
+  await expect(page.getByTestId('hybrid-controls')).not.toBeVisible();
+  await expect(page.getByText('Vector Search unavailable (not compiled in)')).toBeVisible();
+}
 
 test.describe('Hybrid Search Controls', () => {
   // Tests modify shared index settings — must run serially (not in parallel)
   test.describe.configure({ mode: 'serial' });
+  let hybridIndex = '';
+  let vectorSearchEnabled = true;
 
   test.beforeAll(async ({ request }) => {
-    // Create a fresh index with docs for search tests
-    await deleteIndex(request, HYBRID_INDEX);
-    await addDocuments(request, HYBRID_INDEX, [
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    hybridIndex = `e2e-hybrid-${uniqueSuffix}`;
+    vectorSearchEnabled = await isVectorSearchEnabled(request);
+
+    await deleteIndex(request, hybridIndex);
+    await createIndex(request, hybridIndex);
+
+    await addDocuments(request, hybridIndex, [
       { objectID: 'h-1', name: 'Hybrid Doc Alpha', category: 'Test' },
       { objectID: 'h-2', name: 'Hybrid Doc Beta', category: 'Test' },
     ]);
-    // Explicitly clear embedders in case the index retained stale config
-    await clearEmbedders(request, HYBRID_INDEX);
+    await waitForQueryHit(request, hybridIndex, 'hybrid');
+
+    // Explicitly clear embedders and verify persistence before UI assertions.
+    await clearEmbedders(request, hybridIndex);
+    await waitForNoEmbedders(request, hybridIndex);
   });
 
   test.afterAll(async ({ request }) => {
-    await deleteIndex(request, HYBRID_INDEX);
+    if (hybridIndex) {
+      await deleteIndex(request, hybridIndex);
+    }
   });
 
   test('hybrid controls hidden when no embedders configured', async ({
+    request,
     page,
   }) => {
     // Index has no embedders configured
-    await page.goto(`/index/${HYBRID_INDEX}`);
+    await waitForNoEmbedders(request, hybridIndex);
+    await page.goto(`/index/${hybridIndex}`);
     await expect(
       page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
     ).toBeVisible({ timeout: 15_000 });
@@ -58,20 +112,59 @@ test.describe('Hybrid Search Controls', () => {
     await expect(page.getByTestId('hybrid-controls')).not.toBeVisible();
   });
 
+  test('hybrid controls stay hidden when vector capability is compiled out', async ({
+    request,
+    page,
+  }) => {
+    await configureEmbedder(request, hybridIndex, 'default', {
+      source: 'userProvided',
+      dimensions: 384,
+    });
+    await waitForEmbedder(request, hybridIndex, 'default');
+
+    await page.route('**/health', async (route) => {
+      const response = await route.fetch();
+      const health = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...health,
+          capabilities: {
+            ...health.capabilities,
+            vectorSearch: false,
+            vectorSearchLocal: false,
+          },
+        },
+      });
+    });
+
+    await page.goto(`/index/${hybridIndex}`);
+    await expect(
+      page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('hybrid-controls')).not.toBeVisible();
+  });
+
   test('hybrid controls visible when embedders configured', async ({
     request,
     page,
   }) => {
     // Seed embedder
-    await configureEmbedder(request, HYBRID_INDEX, 'default', {
+    await configureEmbedder(request, hybridIndex, 'default', {
       source: 'userProvided',
       dimensions: 384,
     });
+    await waitForEmbedder(request, hybridIndex, 'default');
 
-    await page.goto(`/index/${HYBRID_INDEX}`);
+    await page.goto(`/index/${hybridIndex}`);
     await expect(
       page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
     ).toBeVisible({ timeout: 15_000 });
+
+    if (!vectorSearchEnabled) {
+      await expectHybridControlsUnavailable(page);
+      return;
+    }
 
     // Hybrid controls should be visible
     await expect(page.getByTestId('hybrid-controls')).toBeVisible({
@@ -87,15 +180,18 @@ test.describe('Hybrid Search Controls', () => {
 
   test('semantic ratio slider updates label', async ({ request, page }) => {
     // Ensure embedder is configured (may already be from previous test)
-    await configureEmbedder(request, HYBRID_INDEX, 'default', {
+    await configureEmbedder(request, hybridIndex, 'default', {
       source: 'userProvided',
       dimensions: 384,
     });
+    await waitForEmbedder(request, hybridIndex, 'default');
 
-    await page.goto(`/index/${HYBRID_INDEX}`);
-    await expect(page.getByTestId('hybrid-controls')).toBeVisible({
-      timeout: 15_000,
-    });
+    await page.goto(`/index/${hybridIndex}`);
+    if (!vectorSearchEnabled) {
+      await expectHybridControlsUnavailable(page);
+      return;
+    }
+    await expect(page.getByTestId('hybrid-controls')).toBeVisible({ timeout: 15_000 });
 
     // Change slider value to 1.0 (semantic only)
     const slider = page.getByTestId('semantic-ratio-slider');
@@ -118,11 +214,13 @@ test.describe('Hybrid Search Controls', () => {
     page,
   }) => {
     // Seed embedder + docs with vectors
-    await configureEmbedder(request, HYBRID_INDEX, 'default', {
+    await configureEmbedder(request, hybridIndex, 'default', {
       source: 'userProvided',
       dimensions: 384,
     });
-    await addDocumentsWithVectors(request, HYBRID_INDEX, [
+    await waitForEmbedder(request, hybridIndex, 'default');
+
+    await addDocumentsWithVectors(request, hybridIndex, [
       {
         objectID: 'vec-1',
         name: 'Vector Laptop',
@@ -136,11 +234,14 @@ test.describe('Hybrid Search Controls', () => {
         _vectors: { default: new Array(384).fill(0.2) },
       },
     ]);
+    await waitForQueryHit(request, hybridIndex, 'laptop', 'vec-1');
 
-    await page.goto(`/index/${HYBRID_INDEX}`);
-    await expect(page.getByTestId('hybrid-controls')).toBeVisible({
-      timeout: 15_000,
-    });
+    await page.goto(`/index/${hybridIndex}`);
+    if (!vectorSearchEnabled) {
+      await expectHybridControlsUnavailable(page);
+      return;
+    }
+    await expect(page.getByTestId('hybrid-controls')).toBeVisible({ timeout: 15_000 });
 
     // Perform a search
     const searchInput = page.getByPlaceholder(/search documents/i);

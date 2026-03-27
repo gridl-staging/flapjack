@@ -1,3 +1,5 @@
+"""
+"""
 from os import environ
 from typing import Optional
 
@@ -8,6 +10,7 @@ from flapjacksearch.http.user_agent import UserAgent
 
 
 class MonitoringConfig(BaseConfig):
+    """TODO: Document MonitoringConfig."""
     def __init__(self, app_id: Optional[str], api_key: Optional[str]) -> None:
         super().__init__(app_id, api_key)
 

@@ -27,6 +27,14 @@
 import { test, expect } from '../../fixtures/auth.fixture';
 
 test.describe('Migrate Page', () => {
+  function sourceIndexInput(page: import('@playwright/test').Page) {
+    return page.getByLabel('Source Index (Algolia)');
+  }
+
+  function targetIndexInput(page: import('@playwright/test').Page) {
+    return page.getByLabel(/Target Index \(Flapjack\)/);
+  }
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/migrate');
     await expect(page.getByRole('heading', { name: /migrate from algolia/i })).toBeVisible({ timeout: 10_000 });
@@ -61,7 +69,7 @@ test.describe('Migrate Page', () => {
   test('filling credentials and source index enables migrate button', async ({ page }) => {
     await page.getByLabel('Application ID').fill('test-app-id');
     await page.getByLabel('Admin API Key').fill('test-api-key');
-    await page.locator('#source-index').fill('test-index');
+    await sourceIndexInput(page).fill('test-index');
 
     const migrateBtn = page.getByRole('button', { name: /migrate/i });
     await expect(migrateBtn).toBeEnabled();
@@ -76,8 +84,8 @@ test.describe('Migrate Page', () => {
     // Fill a value so we can verify toggle
     await keyInput.fill('secret-key');
 
-    // Click the eye toggle button (sibling button inside the relative container)
-    const toggleBtn = keyInput.locator('xpath=..').getByRole('button');
+    // Click the eye toggle button
+    const toggleBtn = page.getByTestId('toggle-api-key-visibility');
     await toggleBtn.click();
     await expect(keyInput).toHaveAttribute('type', 'text');
 
@@ -101,19 +109,19 @@ test.describe('Migrate Page', () => {
   });
 
   test('target index defaults to source index name when left blank', async ({ page }) => {
-    const sourceInput = page.locator('#source-index');
+    const sourceInput = sourceIndexInput(page);
     await sourceInput.fill('my-products');
 
     // The target input placeholder should reflect the source name
-    const targetInput = page.locator('#target-index');
+    const targetInput = targetIndexInput(page);
     await expect(targetInput).toHaveAttribute('placeholder', 'my-products');
   });
 
   test('custom target index overrides source name in button text', async ({ page }) => {
     await page.getByLabel('Application ID').fill('test-app-id');
     await page.getByLabel('Admin API Key').fill('test-api-key');
-    await page.locator('#source-index').fill('source-idx');
-    await page.locator('#target-index').fill('custom-target');
+    await sourceIndexInput(page).fill('source-idx');
+    await targetIndexInput(page).fill('custom-target');
 
     const migrateBtn = page.getByRole('button', { name: /migrate/i });
     await expect(migrateBtn).toBeEnabled();
@@ -125,13 +133,13 @@ test.describe('Migrate Page', () => {
     // Fill all fields to enable the button
     await page.getByLabel('Application ID').fill('test-app-id');
     await page.getByLabel('Admin API Key').fill('test-api-key');
-    await page.locator('#source-index').fill('test-index');
+    await sourceIndexInput(page).fill('test-index');
 
     const migrateBtn = page.getByRole('button', { name: /migrate/i });
     await expect(migrateBtn).toBeEnabled();
 
     // Clear the source index
-    await page.locator('#source-index').clear();
+    await sourceIndexInput(page).clear();
 
     // Button should become disabled again
     await expect(migrateBtn).toBeDisabled();
@@ -140,7 +148,7 @@ test.describe('Migrate Page', () => {
   test('clearing app ID re-disables migrate button', async ({ page }) => {
     await page.getByLabel('Application ID').fill('test-app-id');
     await page.getByLabel('Admin API Key').fill('test-api-key');
-    await page.locator('#source-index').fill('test-index');
+    await sourceIndexInput(page).fill('test-index');
 
     const migrateBtn = page.getByRole('button', { name: /migrate/i });
     await expect(migrateBtn).toBeEnabled();
@@ -154,13 +162,36 @@ test.describe('Migrate Page', () => {
     // Fill in fake credentials
     await page.getByLabel('Application ID').fill('fake-app-id');
     await page.getByLabel('Admin API Key').fill('fake-api-key');
-    await page.locator('#source-index').fill('nonexistent-index');
+    await sourceIndexInput(page).fill('nonexistent-index');
 
     // Click migrate
     await page.getByRole('button', { name: /migrate/i }).click();
 
     // Should show an error card after the request fails
     await expect(page.getByText(/migration failed/i)).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('migration attempts do not expose Algolia API keys in API Logs', async ({ page }) => {
+    const uniqueApiKey = `fake-api-key-${Date.now()}`;
+
+    await page.getByLabel('Application ID').fill('fake-app-id');
+    await page.getByLabel('Admin API Key').fill(uniqueApiKey);
+    await sourceIndexInput(page).fill('nonexistent-index');
+
+    await page.getByRole('button', { name: /migrate/i }).click();
+    await expect(page.getByText(/migration failed/i)).toBeVisible({ timeout: 15_000 });
+
+    // Generate a normal logged request so the logs page proves the logger still works.
+    await page.goto('/overview');
+    await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible({ timeout: 10_000 });
+
+    await page.goto('/logs');
+    await expect(page.getByRole('heading', { name: /api log/i })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('logs-list')).toBeVisible({ timeout: 10_000 });
+
+    const filterInput = page.getByPlaceholder(/filter by url, method, or body/i);
+    await filterInput.fill(uniqueApiKey);
+    await expect(page.getByRole('heading', { name: /no api logs/i })).toBeVisible({ timeout: 10_000 });
   });
 
   test('info section describes what gets migrated', async ({ page }) => {

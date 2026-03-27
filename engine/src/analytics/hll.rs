@@ -201,6 +201,7 @@ mod tests {
         );
     }
 
+    /// Verify merged cardinality is accurate when two sketches share 50% of their items (3000 overlap out of 9000 unique).
     #[test]
     fn test_merge_50_percent_overlap() {
         let items1: Vec<String> = (0..6000).map(|i| format!("user_{}", i)).collect();
@@ -219,6 +220,7 @@ mod tests {
         );
     }
 
+    /// Verify that serializing and deserializing via both raw bytes and base64 preserves cardinality exactly.
     #[test]
     fn test_serialize_roundtrip() {
         let items: Vec<String> = (0..1000).map(|i| format!("item_{}", i)).collect();

@@ -1,0 +1,58 @@
+# 2-node Flapjack replication + analytics fan-out example.
+#
+# Usage:
+#   docker compose up -d --build
+#   # Wait for both nodes to be healthy (~10s), then:
+#   ./test_replication.sh
+#   ./demo.sh
+#   docker compose down -v
+#
+# Both nodes share the same Docker network and discover each other via
+# FLAPJACK_PEERS. Public routes are exposed at localhost:7700 and localhost:7701.
+
+services:
+  node-a:
+    build:
+      context: ../../..
+      dockerfile: engine/Dockerfile
+    environment:
+      FLAPJACK_DATA_DIR: /data
+      FLAPJACK_BIND_ADDR: "0.0.0.0:7700"
+      FLAPJACK_NO_AUTH: "1"
+      FLAPJACK_NODE_ID: node-a
+      FLAPJACK_PEERS: "node-b=http://node-b:7700"
+      RUST_LOG: info
+    ports:
+      - "7700:7700"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7700/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - fj-net
+
+  node-b:
+    build:
+      context: ../../..
+      dockerfile: engine/Dockerfile
+    environment:
+      FLAPJACK_DATA_DIR: /data
+      FLAPJACK_BIND_ADDR: "0.0.0.0:7700"
+      FLAPJACK_NO_AUTH: "1"
+      FLAPJACK_NODE_ID: node-b
+      FLAPJACK_PEERS: "node-a=http://node-a:7700"
+      RUST_LOG: info
+    ports:
+      - "7701:7700"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7700/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - fj-net
+
+networks:
+  fj-net:
+    driver: bridge

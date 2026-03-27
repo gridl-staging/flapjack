@@ -154,13 +154,13 @@ mod params {
     }
 
     #[test]
-    fn params_string_does_not_override_explicit_fields() {
+    fn params_string_overrides_explicit_fields() {
         let mut req = make_request(
             serde_json::json!({"indexName": "products", "query": "explicit", "hitsPerPage": 10, "params": "query=fromparams&hitsPerPage=5"}),
         );
         req.apply_params_string();
-        assert_eq!(req.query, "explicit");
-        assert_eq!(req.hits_per_page, Some(10));
+        assert_eq!(req.query, "fromparams");
+        assert_eq!(req.hits_per_page, Some(5));
     }
 
     #[test]

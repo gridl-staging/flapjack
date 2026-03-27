@@ -1,55 +1,107 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Json,
 };
 use flapjack::query_suggestions::{build_suggestions_index, QsConfig, QsConfigStore};
+use flapjack::validate_index_name;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
 use super::AppState;
+use crate::error_response::json_error;
+
+/// Standard success response for query-suggestions mutation operations.
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct QsMutationResponse {
+    pub status: u16,
+    pub message: String,
+}
 
 fn store(state: &AppState) -> QsConfigStore {
     QsConfigStore::new(&state.manager.base_path)
 }
 
+fn invalid_input_response(message: String) -> Response {
+    json_error(StatusCode::BAD_REQUEST, message)
+}
+
+fn validate_qs_index_name(index_name: &str) -> Result<(), String> {
+    validate_index_name(index_name).map_err(|e| e.to_string())
+}
+
+fn validate_qs_config(config: &QsConfig) -> Result<(), String> {
+    validate_qs_index_name(&config.index_name)?;
+    for source in &config.source_indices {
+        validate_qs_index_name(&source.index_name)?;
+    }
+    Ok(())
+}
+
+fn store_error_response(error: std::io::Error) -> Response {
+    let status = if error.kind() == std::io::ErrorKind::InvalidInput {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    json_error(status, error.to_string())
+}
+
 /// GET /1/configs — list all Query Suggestions configurations
+#[utoipa::path(
+    get,
+    path = "/1/configs",
+    tag = "query-suggestions",
+    responses(
+        (status = 200, description = "All query suggestions configurations", body = [QsConfig]),
+        (status = 500, description = "Query suggestions store read failed")
+    ),
+    security(("api_key" = []))
+)]
 pub async fn list_configs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match store(&state).list_configs() {
         Ok(configs) => Json(json!(configs)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
 /// POST /1/configs — create a new configuration and schedule a build
+#[utoipa::path(
+    post,
+    path = "/1/configs",
+    tag = "query-suggestions",
+    request_body = QsConfig,
+    responses(
+        (status = 200, description = "Configuration created and build scheduled", body = QsMutationResponse),
+        (status = 400, description = "Invalid query suggestions configuration"),
+        (status = 409, description = "Configuration already exists")
+    ),
+    security(("api_key" = []))
+)]
 pub async fn create_config(
     State(state): State<Arc<AppState>>,
     Json(config): Json<QsConfig>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_qs_config(&config) {
+        return invalid_input_response(message);
+    }
+
     let s = store(&state);
 
     if s.config_exists(&config.index_name) {
-        return (
+        return json_error(
             StatusCode::CONFLICT,
-            Json(json!({
-                "status": 409,
-                "message": format!("A configuration for '{}' already exists.", config.index_name)
-            })),
-        )
-            .into_response();
+            format!(
+                "A configuration for '{}' already exists.",
+                config.index_name
+            ),
+        );
     }
 
     if let Err(e) = s.save_config(&config) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
-        )
-            .into_response();
+        return store_error_response(e);
     }
 
     // Mark as running and fire off async build
@@ -70,61 +122,79 @@ pub async fn create_config(
 }
 
 /// GET /1/configs/:indexName — get a single configuration
+#[utoipa::path(get, path = "/1/configs/{indexName}", tag = "query-suggestions",
+    params(("indexName" = String, Path, description = "Index name")),
+    responses(
+        (status = 200, description = "Query suggestions configuration", body = QsConfig),
+        (status = 400, description = "Invalid index name"),
+        (status = 404, description = "Configuration not found")
+    ),
+    security(("api_key" = [])))]
 pub async fn get_config(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_qs_index_name(&index_name) {
+        return invalid_input_response(message);
+    }
+
     match store(&state).load_config(&index_name) {
         Ok(Some(config)) => Json(json!(config)).into_response(),
-        Ok(None) => (
+        Ok(None) => json_error(
             StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No configuration found for '{}'.", index_name)})),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
-        )
-            .into_response(),
+            format!("No configuration found for '{}'.", index_name),
+        ),
+        Err(e) => store_error_response(e),
     }
 }
 
 /// PUT /1/configs/:indexName — update an existing configuration and rebuild
+#[utoipa::path(put, path = "/1/configs/{indexName}", tag = "query-suggestions",
+    params(("indexName" = String, Path, description = "Index name")),
+    request_body = QsConfig,
+    responses(
+        (status = 200, description = "Configuration updated and build scheduled", body = QsMutationResponse),
+        (status = 400, description = "Invalid index name or configuration"),
+        (status = 404, description = "Configuration not found"),
+        (status = 409, description = "Build already in progress")
+    ),
+    security(("api_key" = [])))]
 pub async fn update_config(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
     Json(mut config): Json<QsConfig>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_qs_index_name(&index_name) {
+        return invalid_input_response(message);
+    }
+
     let s = store(&state);
 
     if !s.config_exists(&index_name) {
-        return (
+        return json_error(
             StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No configuration found for '{}'.", index_name)})),
-        )
-            .into_response();
+            format!("No configuration found for '{}'.", index_name),
+        );
     }
 
     // Ensure the indexName in the body matches the path
     config.index_name = index_name;
+    if let Err(message) = validate_qs_config(&config) {
+        return invalid_input_response(message);
+    }
 
     if let Err(e) = s.save_config(&config) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
-        )
-            .into_response();
+        return store_error_response(e);
     }
 
     // Guard against concurrent builds: two simultaneous builds on the same staging
     // index would corrupt each other (both writing to {indexName}__building).
     let status = s.load_status(&config.index_name);
     if status.is_running {
-        return (
+        return json_error(
             StatusCode::CONFLICT,
-            Json(json!({"message": "A build is already in progress. Wait for it to finish before updating."})),
-        )
-            .into_response();
+            "A build is already in progress. Wait for it to finish before updating.",
+        );
     }
 
     let mut new_status = status;
@@ -144,10 +214,22 @@ pub async fn update_config(
 }
 
 /// DELETE /1/configs/:indexName — delete configuration (does NOT delete the suggestions index)
+#[utoipa::path(delete, path = "/1/configs/{indexName}", tag = "query-suggestions",
+    params(("indexName" = String, Path, description = "Index name")),
+    responses(
+        (status = 200, description = "Configuration deleted", body = QsMutationResponse),
+        (status = 400, description = "Invalid index name"),
+        (status = 404, description = "Configuration not found")
+    ),
+    security(("api_key" = [])))]
 pub async fn delete_config(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_qs_index_name(&index_name) {
+        return invalid_input_response(message);
+    }
+
     match store(&state).delete_config(&index_name) {
         Ok(true) => (
             StatusCode::OK,
@@ -157,76 +239,100 @@ pub async fn delete_config(
             })),
         )
             .into_response(),
-        Ok(false) => (
+        Ok(false) => json_error(
             StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No configuration found for '{}'.", index_name)})),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
-        )
-            .into_response(),
+            format!("No configuration found for '{}'.", index_name),
+        ),
+        Err(e) => store_error_response(e),
     }
 }
 
 /// GET /1/configs/:indexName/status — build status
+#[utoipa::path(get, path = "/1/configs/{indexName}/status", tag = "query-suggestions",
+    params(("indexName" = String, Path, description = "Index name")),
+    responses(
+        (status = 200, description = "Current build status", body = flapjack::query_suggestions::BuildStatus),
+        (status = 400, description = "Invalid index name"),
+        (status = 404, description = "Configuration not found")
+    ),
+    security(("api_key" = [])))]
 pub async fn get_status(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_qs_index_name(&index_name) {
+        return invalid_input_response(message);
+    }
+
     if !store(&state).config_exists(&index_name) {
-        return (
+        return json_error(
             StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No configuration found for '{}'.", index_name)})),
-        )
-            .into_response();
+            format!("No configuration found for '{}'.", index_name),
+        );
     }
     let status = store(&state).load_status(&index_name);
     Json(json!(status)).into_response()
 }
 
 /// GET /1/logs/:indexName — build logs
+#[utoipa::path(get, path = "/1/logs/{indexName}", tag = "query-suggestions",
+    params(("indexName" = String, Path, description = "Index name")),
+    responses(
+        (status = 200, description = "Build logs", body = [flapjack::query_suggestions::LogEntry]),
+        (status = 400, description = "Invalid index name")
+    ),
+    security(("api_key" = [])))]
 pub async fn get_logs(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_qs_index_name(&index_name) {
+        return invalid_input_response(message);
+    }
+
     let logs = store(&state).read_logs(&index_name);
     Json(json!(logs)).into_response()
 }
 
 /// POST /1/configs/:indexName/build — trigger an immediate rebuild (Flapjack extension)
+#[utoipa::path(post, path = "/1/configs/{indexName}/build", tag = "query-suggestions",
+    params(("indexName" = String, Path, description = "Index name")),
+    responses(
+        (status = 200, description = "Build triggered", body = QsMutationResponse),
+        (status = 400, description = "Invalid index name"),
+        (status = 404, description = "Configuration not found"),
+        (status = 409, description = "Build already in progress")
+    ),
+    security(("api_key" = [])))]
 pub async fn trigger_build(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_qs_index_name(&index_name) {
+        return invalid_input_response(message);
+    }
+
     let s = store(&state);
 
     let config = match s.load_config(&index_name) {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return (
+            return json_error(
                 StatusCode::NOT_FOUND,
-                Json(json!({"message": format!("No configuration found for '{}'.", index_name)})),
-            )
-                .into_response()
+                format!("No configuration found for '{}'.", index_name),
+            );
         }
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"message": e.to_string()})),
-            )
-                .into_response()
+            return store_error_response(e);
         }
     };
 
     let status = s.load_status(&index_name);
     if status.is_running {
-        return (
+        return json_error(
             StatusCode::CONFLICT,
-            Json(json!({"message": "A build is already in progress for this configuration."})),
-        )
-            .into_response();
+            "A build is already in progress for this configuration.",
+        );
     }
 
     let mut new_status = status;

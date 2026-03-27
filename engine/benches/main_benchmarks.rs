@@ -1,8 +1,24 @@
+//! Criterion benchmarks for core IndexManager operations: search queries, document indexing, and tenant export/import.
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use flapjack::index::SearchOptions;
 use flapjack::{Document, FacetRequest, FieldValue, Filter, IndexManager, Sort, SortOrder};
 use std::collections::HashMap;
 use tempfile::TempDir;
 
+/// Create a tenant with synthetic product documents for benchmarking.
+///
+/// Populates the tenant with `num_docs` documents, each containing title, description,
+/// category (facet), and price fields.
+///
+/// # Arguments
+///
+/// * `manager` - The index manager to create the tenant in.
+/// * `tenant_id` - Identifier for the new tenant.
+/// * `num_docs` - Number of documents to generate and index.
+///
+/// # Panics
+///
+/// Panics if tenant creation or document insertion fails.
 fn setup_tenant(manager: &IndexManager, tenant_id: &str, num_docs: usize) {
     manager.create_tenant(tenant_id).unwrap();
 
@@ -34,6 +50,15 @@ fn setup_tenant(manager: &IndexManager, tenant_id: &str, num_docs: usize) {
     manager.add_documents(tenant_id, docs).unwrap();
 }
 
+/// Generate a batch of synthetic product documents for indexing benchmarks.
+///
+/// # Arguments
+///
+/// * `count` - Number of documents to create.
+///
+/// # Returns
+///
+/// A `Vec<Document>` with title, description, category, and price fields populated.
 fn setup_docs(count: usize) -> Vec<Document> {
     let mut docs = Vec::new();
     for i in 0..count {
@@ -60,6 +85,11 @@ fn setup_docs(count: usize) -> Vec<Document> {
     docs
 }
 
+/// Benchmark search query performance across five scenarios.
+///
+/// Runs text-only, range-filtered, sorted, faceted, and full-stack queries
+/// against a 5,000-document tenant. Each scenario isolates a different
+/// combination of search features to identify bottlenecks.
 fn bench_query(c: &mut Criterion) {
     let temp = TempDir::new().unwrap();
     let manager = IndexManager::new(temp.path());
@@ -100,7 +130,13 @@ fn bench_query(c: &mut Criterion) {
                 field: "category".to_string(),
                 path: "/electronics".to_string(),
             };
-            manager.search_with_facets("bench", "laptop", None, None, 10, 0, Some(&[facet]))
+            let options = SearchOptions {
+                limit: 10,
+                offset: 0,
+                facets: Some(&[facet]),
+                ..Default::default()
+            };
+            manager.search_with_options("bench", "laptop", &options)
         })
     });
 
@@ -119,21 +155,25 @@ fn bench_query(c: &mut Criterion) {
                 field: "category".to_string(),
                 path: "/electronics".to_string(),
             };
-            manager.search_with_facets(
-                "bench",
-                "laptop",
-                Some(&filter),
-                Some(&sort),
-                10,
-                0,
-                Some(&[facet]),
-            )
+            let options = SearchOptions {
+                filter: Some(&filter),
+                sort: Some(&sort),
+                limit: 10,
+                offset: 0,
+                facets: Some(&[facet]),
+                ..Default::default()
+            };
+            manager.search_with_options("bench", "laptop", &options)
         })
     });
 
     group.finish();
 }
 
+/// Benchmark document ingestion and commit for varying batch sizes.
+///
+/// Tests `add_documents` with batches of 10, 100, and 500 documents,
+/// each on a freshly created tenant to measure cold-path indexing cost.
 fn bench_indexing(c: &mut Criterion) {
     let mut group = c.benchmark_group("indexing");
 
@@ -162,6 +202,10 @@ fn bench_indexing(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark tenant export and import operations on a 5,000-document index.
+///
+/// Measures `export_tenant` and `import_tenant` throughput using fresh
+/// temporary directories for each iteration to avoid cache effects.
 fn bench_migration(c: &mut Criterion) {
     let temp = TempDir::new().unwrap();
     let manager = IndexManager::new(temp.path());

@@ -300,6 +300,136 @@ class FlapjackSearchE2eTest extends TestCase
     }
 
     // =========================================================================
+    // Browse Cursor Pagination
+    // =========================================================================
+
+    public function testBrowseCursorPagination(): void
+    {
+        $response = self::$client->browse(self::$indexName, [
+            'hitsPerPage' => 2,
+        ]);
+
+        $this->assertArrayHasKey('hits', $response);
+        $this->assertCount(2, $response['hits']);
+        $this->assertArrayHasKey('cursor', $response);
+        $this->assertNotEmpty($response['cursor'], 'Expected cursor for pagination');
+
+        // Follow cursor
+        $response2 = self::$client->browse(self::$indexName, [
+            'cursor' => $response['cursor'],
+            'hitsPerPage' => 2,
+        ]);
+
+        $this->assertArrayHasKey('hits', $response2);
+        $this->assertGreaterThanOrEqual(1, count($response2['hits']), 'Expected hits on second page');
+    }
+
+    // =========================================================================
+    // Stage 1 Settings Round-Trip
+    // =========================================================================
+
+    public function testSettingsNumericAttributesForFilteringRoundtrip(): void
+    {
+        $updateResponse = self::$client->setSettings(self::$indexName, [
+            'numericAttributesForFiltering' => ['price', 'rating'],
+        ]);
+        self::waitForTask($updateResponse['taskID'] ?? 0);
+
+        $settings = self::$client->getSettings(self::$indexName);
+        $this->assertArrayHasKey('numericAttributesForFiltering', $settings);
+        $this->assertContains('price', $settings['numericAttributesForFiltering']);
+        $this->assertContains('rating', $settings['numericAttributesForFiltering']);
+    }
+
+    public function testSettingsUnorderedSearchableAttributesRoundtrip(): void
+    {
+        $updateResponse = self::$client->setSettings(self::$indexName, [
+            'searchableAttributes' => ['unordered(name)', 'brand', 'unordered(description)'],
+        ]);
+        self::waitForTask($updateResponse['taskID'] ?? 0);
+
+        $settings = self::$client->getSettings(self::$indexName);
+        $this->assertContains('unordered(name)', $settings['searchableAttributes']);
+        $this->assertContains('unordered(description)', $settings['searchableAttributes']);
+
+        // Restore
+        $restoreResponse = self::$client->setSettings(self::$indexName, [
+            'searchableAttributes' => ['name', 'brand', 'category'],
+        ]);
+        self::waitForTask($restoreResponse['taskID'] ?? 0);
+    }
+
+    public function testSettingsAllowCompressionOfIntegerArrayRoundtrip(): void
+    {
+        $updateResponse = self::$client->setSettings(self::$indexName, [
+            'allowCompressionOfIntegerArray' => true,
+        ]);
+        self::waitForTask($updateResponse['taskID'] ?? 0);
+
+        $settings = self::$client->getSettings(self::$indexName);
+        $this->assertArrayHasKey('allowCompressionOfIntegerArray', $settings);
+        $this->assertTrue($settings['allowCompressionOfIntegerArray']);
+    }
+
+    // =========================================================================
+    // API Key CRUD
+    // =========================================================================
+
+    public function testApiKeyCrud(): void
+    {
+        $host = 'http://localhost:7700';
+        $headers = [
+            'Content-Type: application/json',
+            'x-algolia-api-key: ' . self::$apiKey,
+            'x-algolia-application-id: ' . self::$appId,
+        ];
+
+        // Create
+        $ch = curl_init("$host/1/keys");
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+            'acl' => ['search', 'browse'],
+            'description' => 'PHP SDK matrix test key',
+            'indexes' => [self::$indexName],
+        ]));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $result = json_decode(curl_exec($ch), true);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $this->assertEquals(200, $httpCode, 'Create key should return 200');
+        $this->assertArrayHasKey('key', $result);
+        $key = $result['key'];
+
+        // List
+        $ch = curl_init("$host/1/keys");
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $result = json_decode(curl_exec($ch), true);
+        curl_close($ch);
+        $this->assertArrayHasKey('keys', $result);
+
+        // Get
+        $ch = curl_init("$host/1/keys/$key");
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $result = json_decode(curl_exec($ch), true);
+        curl_close($ch);
+        $this->assertEquals($key, $result['value']);
+
+        // Delete
+        $ch = curl_init("$host/1/keys/$key");
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        $this->assertEquals(200, $httpCode, 'Delete key should return 200');
+    }
+
+    // =========================================================================
     // Synonyms Tests
     // =========================================================================
 

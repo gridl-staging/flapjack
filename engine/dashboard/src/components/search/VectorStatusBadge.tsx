@@ -5,12 +5,30 @@ import type { EmbedderConfig, IndexMode } from '@/lib/types';
 interface VectorStatusBadgeProps {
   embedders: Record<string, EmbedderConfig> | undefined;
   mode: IndexMode | undefined;
+  vectorSearchEnabled: boolean | undefined;
 }
 
 export const VectorStatusBadge = memo(function VectorStatusBadge({
   embedders,
   mode,
+  vectorSearchEnabled,
 }: VectorStatusBadgeProps) {
+  if (vectorSearchEnabled === undefined) {
+    return null;
+  }
+
+  if (vectorSearchEnabled === false) {
+    return (
+      <Badge
+        variant="outline"
+        data-testid="vector-status-badge-disabled"
+        className="text-xs"
+      >
+        Vector Search unavailable (not compiled in)
+      </Badge>
+    );
+  }
+
   const embedderCount = embedders ? Object.keys(embedders).length : 0;
   if (embedderCount === 0) return null;
 

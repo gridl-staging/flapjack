@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { analyticsKeys } from '@/lib/queryKeys';
 import { useIndexes, useDeleteIndex } from '@/hooks/useIndexes';
 import { useHealth } from '@/hooks/useHealth';
 import { useAnalyticsOverview, defaultRange, type DateRange } from '@/hooks/useAnalytics';
@@ -91,7 +92,7 @@ export function Overview() {
       return res.data;
     },
     onSuccess: () => {
-      queryClient.resetQueries({ queryKey: ['analytics'] });
+      queryClient.resetQueries({ queryKey: analyticsKeys.all });
       setShowCleanupDialog(false);
     },
   });
@@ -347,6 +348,7 @@ export function Overview() {
                   <div
                     key={index.uid}
                     className="flex items-center justify-between p-4 rounded-md border border-border hover:bg-accent/50 transition-colors cursor-pointer"
+                    data-testid={`overview-index-row-${index.uid}`}
                     onClick={() => navigate(`/index/${encodeURIComponent(index.uid)}`)}
                   >
                     <div className="flex items-center gap-3">
@@ -358,7 +360,10 @@ export function Overview() {
                       />
                       <div>
                         <h3 className="font-medium">{index.uid}</h3>
-                        <p className="text-sm text-muted-foreground">
+                        <p
+                          className="text-sm text-muted-foreground"
+                          data-testid={`overview-index-meta-${index.uid}`}
+                        >
                           {index.entries?.toLocaleString() || 0} documents · {formatBytes(index.dataSize || 0)}
                           {index.updatedAt && ` · Updated ${formatDate(index.updatedAt)}`}
                           {pending > 0 && (

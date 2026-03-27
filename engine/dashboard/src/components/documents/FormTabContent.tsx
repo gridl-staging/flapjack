@@ -1,3 +1,6 @@
+/**
+ * @module Provides a form-based UI for composing a single document to insert into a Flapjack index, with automatic field detection from the index schema and a live JSON preview.
+ */
 import { useState, useEffect, useCallback } from 'react';
 import { useIndexFields, type FieldInfo } from '@/hooks/useIndexFields';
 import { Input } from '@/components/ui/input';
@@ -16,6 +19,14 @@ interface FormTabContentProps {
   onDocumentReady: (doc: Record<string, unknown> | null) => void;
 }
 
+/**
+ * Converts an array of form fields into a document object ready for indexing.
+ * Filters out fields with empty names or values, assigns a random short `objectID`,
+ * and coerces each value to its declared type (number, boolean, or string).
+ * 
+ * @param fields - The form fields to convert into a document.
+ * @returns A document record with typed values and an `objectID`, or `null` if no fields have both a name and value filled in.
+ */
 function buildDocument(fields: FormField[]): Record<string, unknown> | null {
   const filled = fields.filter((f) => f.name.trim() && f.value.trim());
   if (filled.length === 0) return null;
@@ -54,6 +65,16 @@ function toFormFields(detected: FieldInfo[]): FormField[] {
   }));
 }
 
+/**
+ * Dynamic form for composing a single document to add to an index.
+ * On mount, auto-populates field rows from the index's detected schema via `useIndexFields`;
+ * for empty indexes a single blank row is shown instead. Each row lets the user set a field name,
+ * type (text / number / boolean), and value. Calls `onDocumentReady` with the built document
+ * (or `null`) whenever the fields change, and renders a live JSON preview.
+ * 
+ * @param indexName - The index whose schema is used to seed the initial field rows.
+ * @param onDocumentReady - Callback invoked on every field change with the constructed document or `null`.
+ */
 export function FormTabContent({ indexName, onDocumentReady }: FormTabContentProps) {
   const { data: detectedFields } = useIndexFields(indexName);
   const [fields, setFields] = useState<FormField[]>([]);

@@ -4,8 +4,10 @@ import { Card } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import type { FieldInfo } from '@/hooks/useIndexFields';
+import type { IndexSettings } from '@/lib/types';
 
 export interface SettingSectionProps {
   title: string;
@@ -112,6 +114,54 @@ export const FieldChips = memo(function FieldChips({
           </button>
         );
       })}
+    </div>
+  );
+});
+
+type ArrayFieldKey =
+  | 'searchableAttributes'
+  | 'attributesForFaceting'
+  | 'attributesToRetrieve'
+  | 'attributesToHighlight'
+  | 'unretrievableAttributes';
+
+export interface ArrayFieldEditorProps {
+  settingsKey: ArrayFieldKey;
+  settings: Partial<IndexSettings>;
+  fields: FieldInfo[];
+  fieldsLoading: boolean;
+  onArrayChange: (key: keyof IndexSettings, value: string) => void;
+  onFieldToggle: (key: keyof IndexSettings, fieldName: string) => void;
+  placeholder: string;
+  rows?: number;
+}
+
+export const ArrayFieldEditor = memo(function ArrayFieldEditor({
+  settingsKey,
+  settings,
+  fields,
+  fieldsLoading,
+  onArrayChange,
+  onFieldToggle,
+  placeholder,
+  rows = 2,
+}: ArrayFieldEditorProps) {
+  const selectedValues = settings[settingsKey] ?? [];
+
+  return (
+    <div className="space-y-2">
+      <FieldChips
+        availableFields={fields}
+        selectedValues={selectedValues}
+        onToggle={(fieldName) => onFieldToggle(settingsKey, fieldName)}
+        isLoading={fieldsLoading}
+      />
+      <Textarea
+        value={selectedValues.join(', ')}
+        onChange={(event) => onArrayChange(settingsKey, event.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+      />
     </div>
   );
 });

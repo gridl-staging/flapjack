@@ -1,4 +1,6 @@
 /**
+ */
+/**
  * Analytics data seeding helpers for integration tests.
  * 
  * These helpers create real analytics data by:
@@ -11,9 +13,14 @@
 import type { APIRequestContext } from '@playwright/test';
 import { API_BASE as API, API_HEADERS as HEADERS } from './local-instance';
 
+/**
+ * TODO: Document AnalyticsSeedConfig.
+ */
 export interface AnalyticsSeedConfig {
   /** Index name to seed */
   indexName: string;
+  /** Number of historical days to seed for analytics comparisons */
+  days?: number;
   /** Number of documents to add */
   documentCount: number;
   /** Number of searches to execute */
@@ -29,6 +36,7 @@ export interface AnalyticsSeedConfig {
 /** Default configuration for analytics seeding */
 export const DEFAULT_ANALYTICS_CONFIG: AnalyticsSeedConfig = {
   indexName: 'analytics-test',
+  days: 7,
   documentCount: 100,
   searchCount: 500,
   noResultRate: 0.05,
@@ -76,7 +84,7 @@ export async function seedAnalytics(
   request: APIRequestContext,
   config: AnalyticsSeedConfig = DEFAULT_ANALYTICS_CONFIG,
 ): Promise<void> {
-  const { indexName, documentCount } = config;
+  const { indexName, documentCount, days = 7 } = config;
 
   // 1. Create index and add documents (needed for searches to work)
   const documents = PRODUCTS.slice(0, Math.min(documentCount, PRODUCTS.length));
@@ -96,25 +104,29 @@ export async function seedAnalytics(
     headers: HEADERS,
     data: {
       index: indexName,
-      days: 7, // Generate 7 days of analytics data
+      days,
     },
   });
 
   // Wait for analytics data to be available
-  // Seed creates data for the past 7 days (NOT including today)
+  // Seed creates data for the requested historical window (NOT including today).
   await new Promise((resolve) => setTimeout(resolve, 3000));
 
   // Verify data was created by checking the /2/overview endpoint
-  // Use yesterday as end date since seed doesn't create data for today
+  // Use yesterday as end date since seed doesn't create data for today.
+  // Include an extra day of buffer so timezone boundaries do not hide seeded rows.
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  const verificationWindowDays = Math.max(days + 1, 8);
+  const verificationStartDate = new Date(
+    Date.now() - verificationWindowDays * 24 * 60 * 60 * 1000,
+  );
 
   try {
     const response = await request.get(`${API}/2/overview`, {
       headers: HEADERS,
       params: {
         index: indexName,
-        startDate: eightDaysAgo.toISOString().split('T')[0],
+        startDate: verificationStartDate.toISOString().split('T')[0],
         endDate: yesterday.toISOString().split('T')[0],
       },
     });

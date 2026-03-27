@@ -43,3 +43,19 @@
 4. See only keys with access to that index displayed
 5. Click "All" to reset the filter
 6. See all keys displayed again
+
+## api-keys-6: Create key with restrict sources and verify key card badges
+1. Go to /keys
+2. Click "Create Key"
+3. Enter a description prefixed with "E2E"
+4. Enter restrict sources with CIDR values using commas and newlines (example: `10.0.0.0/8, 192.168.1.0/24` and `172.16.0.0/12`)
+5. Submit the dialog
+6. See the created key card show a "Restrict Sources" section
+7. See each submitted CIDR rendered as a badge in that section
+8. Cleanup: delete created keys with the `E2E` description prefix
+
+## api-keys-7: Blank restrict sources is omitted from create payload
+1. Open the Create Key dialog
+2. Enter a description and leave restrict sources blank (or whitespace-only)
+3. Submit the dialog
+4. Verify request payload does not include `restrictSources`

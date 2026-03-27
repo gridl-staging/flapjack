@@ -1,3 +1,4 @@
+//! Handlers for the facet-value search endpoint, supporting query highlighting, filtering, and configurable sort order.
 use super::AppState;
 use crate::dto::{FacetHit, SearchFacetValuesRequest, SearchFacetValuesResponse};
 use crate::filter_parser::parse_filter;
@@ -7,31 +8,37 @@ use axum::{
 };
 use flapjack::error::FlapjackError;
 use flapjack::index::settings::IndexSettings;
-use flapjack::types::FacetRequest;
+use flapjack::index::SearchOptions;
+use flapjack::types::{FacetCount, FacetRequest};
 use std::sync::Arc;
 use std::time::Instant;
 
 pub fn parse_facet_params(params_str: &str) -> SearchFacetValuesRequest {
-    let mut facet_query = String::new();
-    let mut filters = None;
-    let mut max_facet_hits = 10usize;
+    let mut req = SearchFacetValuesRequest {
+        facet_query: String::new(),
+        filters: None,
+        max_facet_hits: 10,
+        sort_facet_values_by: None,
+    };
+    apply_facet_params(&mut req, params_str);
+    req
+}
 
+fn apply_facet_params(req: &mut SearchFacetValuesRequest, params_str: &str) {
     for (key, value) in url::form_urlencoded::parse(params_str.as_bytes()) {
         match key.as_ref() {
-            "facetQuery" => facet_query = value.into_owned(),
-            "filters" => filters = Some(value.into_owned()),
-            "maxFacetHits" => max_facet_hits = value.parse().unwrap_or(10),
+            "facetQuery" => req.facet_query = value.into_owned(),
+            "filters" => req.filters = Some(value.into_owned()),
+            "maxFacetHits" => req.max_facet_hits = value.parse().unwrap_or(10),
+            "sortFacetValuesBy" => req.sort_facet_values_by = Some(value.into_owned()),
             _ => {}
         }
     }
-
-    SearchFacetValuesRequest {
-        facet_query,
-        filters,
-        max_facet_hits,
-    }
 }
 
+/// Wrap the first case-insensitive occurrence of `query` in the facet `value` with `<em>` tags.
+///
+/// Returns the original value unchanged when `query` is empty or not found. The match preserves the original casing of the value.
 fn highlight_facet_match(value: &str, query: &str) -> String {
     if query.is_empty() {
         return value.to_string();
@@ -52,6 +59,24 @@ fn highlight_facet_match(value: &str, query: &str) -> String {
     }
 }
 
+fn use_alpha_facet_sort(
+    request_sort_facet_values_by: Option<&str>,
+    settings_sort_facet_values_by: Option<&str>,
+) -> bool {
+    request_sort_facet_values_by
+        .or(settings_sort_facet_values_by)
+        .unwrap_or("count")
+        == "alpha"
+}
+
+fn sort_facet_counts(counts: &mut Vec<&FacetCount>, sort_alpha: bool) {
+    if sort_alpha {
+        counts.sort_by(|a, b| a.path.cmp(&b.path));
+    } else {
+        counts.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.path.cmp(&b.path)));
+    }
+}
+
 /// Search for facet values from a multi-search `type: "facet"` query.
 /// Called by the batch_search handler when a request has `type: "facet"`.
 pub async fn search_facet_values_inline(
@@ -61,8 +86,10 @@ pub async fn search_facet_values_inline(
     facet_query: &str,
     max_facet_hits: usize,
     filters: Option<&str>,
+    sort_facet_values_by: Option<&str>,
 ) -> Result<serde_json::Value, FlapjackError> {
     let start = Instant::now();
+    flapjack::index::manager::validate_index_name(index_name)?;
 
     let settings_path = state
         .manager
@@ -103,16 +130,15 @@ pub async fn search_facet_values_inline(
         path: format!("/{}", facet_name),
     };
 
-    let result = state.manager.search_full(
+    let result = state.manager.search_with_options(
         index_name,
         "",
-        filter.as_ref(),
-        None,
-        0,
-        0,
-        Some(&[facet_request]),
-        None,
-        Some(1000),
+        &SearchOptions {
+            filter: filter.as_ref(),
+            facets: Some(&[facet_request]),
+            max_values_per_facet: Some(1000),
+            ..Default::default()
+        },
     )?;
 
     let facet_counts = result.facets.get(facet_name);
@@ -131,7 +157,11 @@ pub async fn search_facet_values_inline(
         })
         .collect();
 
-    matching.sort_by(|a, b| b.count.cmp(&a.count));
+    let sort_alpha = use_alpha_facet_sort(
+        sort_facet_values_by,
+        settings.sort_facet_values_by.as_deref(),
+    );
+    sort_facet_counts(&mut matching, sort_alpha);
 
     let hits: Vec<serde_json::Value> = matching
         .into_iter()
@@ -190,40 +220,47 @@ pub async fn search_facet_values(
             facet_query: String::new(),
             filters: None,
             max_facet_hits: 10,
+            sort_facet_values_by: None,
         }
     } else {
         let body_json: serde_json::Value = serde_json::from_str(&body_str)
             .map_err(|e| FlapjackError::InvalidQuery(format!("Invalid JSON: {}", e)))?;
 
+        let mut req = SearchFacetValuesRequest {
+            facet_query: body_json
+                .get("facetQuery")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            filters: body_json
+                .get("filters")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            max_facet_hits: body_json
+                .get("maxFacetHits")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10) as usize,
+            sort_facet_values_by: body_json
+                .get("sortFacetValuesBy")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        };
+
         if let Some(params_val) = body_json.get("params") {
             if let Some(params_str) = params_val.as_str() {
-                parse_facet_params(params_str)
+                apply_facet_params(&mut req, params_str);
             } else {
                 return Err(FlapjackError::InvalidQuery(
                     "params must be a string".to_string(),
                 ));
             }
-        } else if let Ok(r) = serde_json::from_value::<SearchFacetValuesRequest>(body_json.clone())
-        {
-            r
-        } else {
-            SearchFacetValuesRequest {
-                facet_query: body_json
-                    .get("facetQuery")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                filters: body_json
-                    .get("filters")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                max_facet_hits: body_json
-                    .get("maxFacetHits")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(10) as usize,
-            }
         }
+
+        req
     };
+
+    req.validate()?;
+    flapjack::index::manager::validate_index_name(&index_name)?;
 
     let settings_path = state
         .manager
@@ -259,16 +296,15 @@ pub async fn search_facet_values(
         path: format!("/{}", facet_name),
     };
 
-    let result = state.manager.search_full(
+    let result = state.manager.search_with_options(
         &index_name,
         "",
-        filter.as_ref(),
-        None,
-        0,
-        0,
-        Some(&[facet_request]),
-        None,
-        Some(1000),
+        &SearchOptions {
+            filter: filter.as_ref(),
+            facets: Some(&[facet_request]),
+            max_values_per_facet: Some(1000),
+            ..Default::default()
+        },
     )?;
 
     let facet_counts = result.facets.get(&facet_name);
@@ -288,7 +324,11 @@ pub async fn search_facet_values(
         })
         .collect();
 
-    matching.sort_by(|a, b| b.count.cmp(&a.count));
+    let sort_alpha = use_alpha_facet_sort(
+        req.sort_facet_values_by.as_deref(),
+        settings.sort_facet_values_by.as_deref(),
+    );
+    sort_facet_counts(&mut matching, sort_alpha);
 
     let hits: Vec<FacetHit> = matching
         .into_iter()
@@ -413,5 +453,73 @@ mod tests {
         assert_eq!(req.facet_query, "");
         assert_eq!(req.max_facet_hits, 10);
         assert!(req.filters.is_none());
+    }
+
+    #[test]
+    fn parse_facet_params_sort_facet_values_by() {
+        let req = parse_facet_params("facetQuery=ni&sortFacetValuesBy=alpha");
+        assert_eq!(req.facet_query, "ni");
+        assert_eq!(req.sort_facet_values_by, Some("alpha".to_string()));
+    }
+
+    // ── Stage 4: sortFacetValuesBy helpers ──
+
+    #[test]
+    fn sort_mode_request_overrides_settings() {
+        assert!(use_alpha_facet_sort(Some("alpha"), Some("count")));
+        assert!(!use_alpha_facet_sort(Some("count"), Some("alpha")));
+    }
+
+    #[test]
+    fn sort_mode_falls_back_to_settings_then_default() {
+        assert!(use_alpha_facet_sort(None, Some("alpha")));
+        assert!(!use_alpha_facet_sort(None, Some("count")));
+        assert!(!use_alpha_facet_sort(None, None));
+    }
+
+    /// Verify that alphabetical facet sorting orders entries lexicographically by path, ignoring count.
+    #[test]
+    fn sort_facet_counts_alpha_orders_lexicographically() {
+        let values = [
+            flapjack::types::FacetCount {
+                path: "zeta".to_string(),
+                count: 100,
+            },
+            flapjack::types::FacetCount {
+                path: "alpha".to_string(),
+                count: 1,
+            },
+            flapjack::types::FacetCount {
+                path: "beta".to_string(),
+                count: 50,
+            },
+        ];
+        let mut refs: Vec<_> = values.iter().collect();
+        sort_facet_counts(&mut refs, true);
+        let ordered: Vec<&str> = refs.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(ordered, vec!["alpha", "beta", "zeta"]);
+    }
+
+    /// Verify that count-based facet sorting orders entries by descending count with lexicographic tiebreak on equal counts.
+    #[test]
+    fn sort_facet_counts_count_orders_desc_then_alpha_tiebreak() {
+        let values = [
+            flapjack::types::FacetCount {
+                path: "beta".to_string(),
+                count: 5,
+            },
+            flapjack::types::FacetCount {
+                path: "alpha".to_string(),
+                count: 5,
+            },
+            flapjack::types::FacetCount {
+                path: "gamma".to_string(),
+                count: 8,
+            },
+        ];
+        let mut refs: Vec<_> = values.iter().collect();
+        sort_facet_counts(&mut refs, false);
+        let ordered: Vec<(&str, u64)> = refs.iter().map(|f| (f.path.as_str(), f.count)).collect();
+        assert_eq!(ordered, vec![("gamma", 8), ("alpha", 5), ("beta", 5)]);
     }
 }

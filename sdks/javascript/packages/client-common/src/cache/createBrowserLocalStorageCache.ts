@@ -1,5 +1,10 @@
+/**
+ */
 import type { BrowserLocalStorageCacheItem, BrowserLocalStorageOptions, Cache, CacheEvents } from '../types';
 
+/**
+ * TODO: Document createBrowserLocalStorageCache.
+ */
 export function createBrowserLocalStorageCache(options: BrowserLocalStorageOptions): Cache {
   let storage: Storage;
   // We've changed the namespace to avoid conflicts with v4, as this version is a huge breaking change
@@ -21,6 +26,9 @@ export function createBrowserLocalStorageCache(options: BrowserLocalStorageOptio
     getStorage().setItem(namespaceKey, JSON.stringify(namespace));
   }
 
+  /**
+   * TODO: Document removeOutdatedCacheItems.
+   */
   function removeOutdatedCacheItems(): void {
     const timeToLive = options.timeToLive ? options.timeToLive * 1000 : null;
     const namespace = getNamespace<BrowserLocalStorageCacheItem>();
@@ -50,6 +58,9 @@ export function createBrowserLocalStorageCache(options: BrowserLocalStorageOptio
   }
 
   return {
+    /**
+     * TODO: Document get.
+     */
     get<TValue>(
       key: Record<string, any> | string,
       defaultValue: () => Promise<TValue>,

@@ -2,7 +2,7 @@ import { algoliasearch } from 'algoliasearch';
 import * as dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { CacheManager } from './lib/cache-manager.js';
 import { TestRunner } from './lib/test-runner.js';
 import { loadFixtures } from './lib/fixtures.js';
@@ -178,7 +178,36 @@ async function ensureServer() {
 
   console.log('Release server not running. Starting it...');
   const repoRoot = join(__dirname, '..');
-  execSync('./_dev/s/dev-server.sh --release restart', { cwd: repoRoot, stdio: 'inherit' });
+
+  execSync('cargo build --release -p flapjack-server', {
+    cwd: repoRoot,
+    stdio: 'inherit'
+  });
+
+  const serverUrl = new URL(FLAPJACK_URL);
+  const child = spawn('./target/release/flapjack', [], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      FLAPJACK_DATA_DIR: join(repoRoot, '_dev', 'dev-data'),
+      FLAPJACK_BIND_ADDR: serverUrl.host,
+      FLAPJACK_ADMIN_KEY
+    },
+    detached: true,
+    stdio: 'ignore'
+  });
+  child.unref();
+
+  const start = Date.now();
+  while (Date.now() - start < 30000) {
+    try {
+      const res = await fetch(`${FLAPJACK_URL}/health`);
+      if (res.ok) return;
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  throw new Error(`Timed out waiting for Flapjack server at ${FLAPJACK_URL}`);
 }
 
 async function main() {

@@ -24,6 +24,7 @@ type Transport struct {
 	exposeIntermediateNetworkErrors bool
 }
 
+// TODO: Document New.
 func New(cfg Configuration) *Transport {
 	transport := &Transport{
 		requester:                       cfg.Requester,
@@ -44,6 +45,7 @@ func New(cfg Configuration) *Transport {
 	return transport
 }
 
+// TODO: Document prepareRetryableRequest.
 func prepareRetryableRequest(req *http.Request) (*http.Request, error) {
 	// Read the original body
 	if req.Body == nil {
@@ -66,6 +68,7 @@ func prepareRetryableRequest(req *http.Request) (*http.Request, error) {
 	return req, nil
 }
 
+// TODO: Document Transport.Request.
 func (t *Transport) Request(ctx context.Context, req *http.Request, k call.Kind, c RequestConfiguration) (*http.Response, []byte, error) {
 	var intermediateNetworkErrors []error
 
@@ -180,6 +183,7 @@ func (t *Transport) Request(ctx context.Context, req *http.Request, k call.Kind,
 	return nil, nil, errs.ErrNoMoreHostToTry
 }
 
+// TODO: Document Transport.request.
 func (t *Transport) request(req *http.Request, host Host, timeout time.Duration, connectTimeout time.Duration) (*http.Response, error) {
 	req.URL.Scheme = host.scheme
 	req.URL.Host = host.host

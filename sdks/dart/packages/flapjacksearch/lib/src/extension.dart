@@ -1,5 +1,6 @@
 import 'package:flapjacksearch/flapjacksearch_lite.dart';
 
+/// TODO: Document SearchClientExt.
 extension SearchClientExt on SearchClient {
   /// Perform a search operation targeting one index.
   Future<SearchResponse> searchIndex({

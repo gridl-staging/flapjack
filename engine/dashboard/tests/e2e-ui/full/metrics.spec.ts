@@ -26,6 +26,7 @@
  *   - Search count > 0 (seeded searches)
  */
 import { test, expect } from '../../fixtures/auth.fixture';
+import { EXPECTED_COUNTS } from '../../fixtures/test-data';
 import { TEST_INDEX } from '../helpers';
 
 test.describe('Metrics Page', () => {
@@ -50,6 +51,12 @@ test.describe('Metrics Page', () => {
     const uptimeText = await uptimeEl.textContent();
     // Should render "Uptime: Xs", "Uptime: Xm Ys", "Uptime: Xh Ym", or "Uptime: Xd Yh"
     expect(uptimeText).toMatch(/Uptime:\s+\d+[smhd]/);
+
+    // Default overview should reflect seeded corpus totals.
+    const docsCard = page.getByTestId('metrics-total-docs');
+    await expect(docsCard).toBeVisible();
+    const docsValue = await docsCard.getByTestId('stat-value').textContent();
+    expect(Number(docsValue?.replace(/,/g, ''))).toBeGreaterThanOrEqual(EXPECTED_COUNTS.documents);
   });
 
   test('Overview tab shows aggregate request cards with numeric values', async ({ page }) => {
@@ -85,14 +92,14 @@ test.describe('Metrics Page', () => {
     await expect(docsCard).toBeVisible({ timeout: 15_000 });
     await expect(docsCard.getByText('Total Documents')).toBeVisible();
     const docValue = await docsCard.getByTestId('stat-value').textContent();
-    expect(Number(docValue?.replace(/,/g, ''))).toBeGreaterThanOrEqual(12);
+    expect(Number(docValue?.replace(/,/g, ''))).toBeGreaterThanOrEqual(EXPECTED_COUNTS.documents);
 
     // Total Storage card
     const storageCard = page.getByTestId('metrics-total-storage');
     await expect(storageCard).toBeVisible();
     await expect(storageCard.getByText('Total Storage')).toBeVisible();
     const storageValue = await storageCard.getByTestId('stat-value').textContent();
-    expect(storageValue).toBeTruthy();
+    expect(storageValue?.trim()).toMatch(/^\d+(\.\d+)?\s*(B|KB|MB|GB)$/i);
     expect(storageValue).not.toBe('0 Bytes');
 
     // Loaded Tenants card
@@ -132,13 +139,13 @@ test.describe('Metrics Page', () => {
     const docCell = page.getByTestId(`metrics-cell-${TEST_INDEX}-docs`);
     await expect(docCell).toBeVisible();
     const docText = await docCell.textContent();
-    expect(Number(docText?.replace(/,/g, ''))).toBeGreaterThanOrEqual(12);
+    expect(Number(docText?.replace(/,/g, ''))).toBeGreaterThanOrEqual(EXPECTED_COUNTS.documents);
 
     // Storage cell — should not be "0 Bytes"
     const storageCell = page.getByTestId(`metrics-cell-${TEST_INDEX}-storage`);
     await expect(storageCell).toBeVisible();
     const storageText = await storageCell.textContent();
-    expect(storageText).toBeTruthy();
+    expect(storageText?.trim()).toMatch(/^\d+(\.\d+)?\s*(B|KB|MB|GB)$/i);
     expect(storageText).not.toBe('0 Bytes');
   });
 

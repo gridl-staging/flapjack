@@ -1,3 +1,4 @@
+//! Thread-safe registry tracking which indexes are paused, used to reject writes with 503 during migration.
 use dashmap::DashSet;
 use std::sync::Arc;
 
@@ -160,6 +161,11 @@ mod tests {
         );
     }
 
+    /// Verify that concurrent pause and resume calls on the same index do not panic or deadlock.
+    ///
+    /// Spawns 100 threads that alternate between pausing and resuming a shared index.
+    /// The final paused state is intentionally unasserted since it depends on thread
+    /// scheduling; the test validates absence of panics, data races, and deadlocks.
     #[test]
     fn test_pause_resume_concurrent_safe() {
         let registry = PausedIndexes::new();

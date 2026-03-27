@@ -1,0 +1,93 @@
+# 3-node Flapjack HA cluster with nginx load balancer.
+#
+# Architecture:
+#   nginx (host port 7800) → node-a, node-b, node-c (round-robin)
+#   Each node listens on port 7700 inside the compose network (not host-exposed).
+#   Each node replicates writes to both peers via async oplog.
+#   nginx health checks route around failed nodes automatically.
+#
+# Usage:
+#   docker compose up -d --build
+#   ./test_ha.sh            # run HA tests (failover, replication, catch-up)
+#   docker compose down -v
+
+services:
+  node-a:
+    build:
+      context: ../../..
+      dockerfile: engine/Dockerfile
+    environment:
+      FLAPJACK_DATA_DIR: /data
+      FLAPJACK_BIND_ADDR: "0.0.0.0:7700"
+      FLAPJACK_NO_AUTH: "1"
+      FLAPJACK_NODE_ID: node-a
+      FLAPJACK_PEERS: "node-b=http://node-b:7700,node-c=http://node-c:7700"
+      RUST_LOG: info
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7700/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - fj-net
+
+  node-b:
+    build:
+      context: ../../..
+      dockerfile: engine/Dockerfile
+    environment:
+      FLAPJACK_DATA_DIR: /data
+      FLAPJACK_BIND_ADDR: "0.0.0.0:7700"
+      FLAPJACK_NO_AUTH: "1"
+      FLAPJACK_NODE_ID: node-b
+      FLAPJACK_PEERS: "node-a=http://node-a:7700,node-c=http://node-c:7700"
+      RUST_LOG: info
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7700/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - fj-net
+
+  node-c:
+    build:
+      context: ../../..
+      dockerfile: engine/Dockerfile
+    environment:
+      FLAPJACK_DATA_DIR: /data
+      FLAPJACK_BIND_ADDR: "0.0.0.0:7700"
+      FLAPJACK_NO_AUTH: "1"
+      FLAPJACK_NODE_ID: node-c
+      FLAPJACK_PEERS: "node-a=http://node-a:7700,node-b=http://node-b:7700"
+      RUST_LOG: info
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7700/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - fj-net
+
+  # nginx load balancer: round-robin across all 3 nodes.
+  # Unhealthy nodes are automatically removed from the pool.
+  lb:
+    image: nginx:alpine
+    ports:
+      - "7800:80"    # Load-balanced endpoint
+      - "7801:8080"  # nginx status page
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      node-a:
+        condition: service_healthy
+      node-b:
+        condition: service_healthy
+      node-c:
+        condition: service_healthy
+    networks:
+      - fj-net
+
+networks:
+  fj-net:
+    driver: bridge

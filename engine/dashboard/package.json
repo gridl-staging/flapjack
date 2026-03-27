@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "update-server": "cargo build -p flapjack-server --release && cp target/release/flapjack dashboard/bin/flapjack-stable && echo '✓ Server binary updated'",
+    "update-server": "cargo build -p flapjack-server --release && mkdir -p bin && cp ../target/release/flapjack bin/flapjack-stable && echo '✓ Server binary updated'",
     "server": "bash scripts/start-stable-server.sh",
     "build": "tsc && vite build",
+    "check": "tsc --noEmit",
+    "check:tour": "tsc --noEmit -p tsconfig.tour.json",
     "preview": "vite preview",
     "lint": "eslint 'src/**/*.{ts,tsx}' --max-warnings 0",
     "test:unit": "vitest",
@@ -25,7 +27,7 @@
     "test:pages": "playwright test --project=e2e-ui",
     "test:integration": "playwright test --project=e2e-api",
     "test:report": "playwright show-report",
-    "lint:e2e": "eslint --config tests/e2e-ui/eslint.config.mjs 'tests/e2e-ui/**/*.spec.ts'"
+    "lint:e2e": "eslint --config tests/e2e-ui/eslint.config.mjs 'tests/e2e-ui/**/*.spec.ts' 'tests/e2e-ui/helpers.ts'"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
@@ -39,9 +41,11 @@
     "@radix-ui/react-toast": "^1.2.15",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tanstack/react-query": "^5.25.0",
+    "@types/dompurify": "^3.0.5",
     "axios": "^1.6.7",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
+    "dompurify": "^3.3.1",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -53,6 +57,7 @@
     "zustand": "^4.5.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.1",
     "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.1.0",

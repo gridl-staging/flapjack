@@ -11,6 +11,7 @@
 /// Target: < 4 seconds total.
 use flapjack::index::settings::IndexSettings;
 use flapjack::index::synonyms::{Synonym, SynonymStore};
+use flapjack::index::SearchOptions;
 use flapjack::types::{Document, FacetRequest, FieldValue, Filter, Sort, SortOrder};
 use flapjack::IndexManager;
 use flapjack_http::auth;
@@ -93,8 +94,14 @@ async fn smoke_library() {
         field: "category".to_string(),
         path: "/category".to_string(),
     }];
+    let facet_options = SearchOptions {
+        limit: 10,
+        offset: 0,
+        facets: Some(&facets),
+        ..Default::default()
+    };
     let r = mgr
-        .search_with_facets("products", "", None, None, 10, 0, Some(&facets))
+        .search_with_options("products", "", &facet_options)
         .unwrap();
     assert_eq!(r.total, 5, "facets: should return all docs");
     let cat_facets = &r.facets["category"];
@@ -351,12 +358,19 @@ async fn smoke_internal_endpoint() {
         replication_manager: None,
         ssl_manager: None,
         analytics_engine: None,
+        recommend_config: Default::default(),
+        dictionary_manager: std::sync::Arc::new(
+            flapjack::dictionaries::manager::DictionaryManager::new(tmp.path()),
+        ),
         metrics_state: None,
         usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
         paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+        usage_persistence: None,
+        geoip_reader: None,
+        notification_service: None,
         start_time: std::time::Instant::now(),
+        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
-        #[cfg(feature = "vector-search")]
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
     });
 
@@ -429,7 +443,7 @@ fn smoke_memory_safety() {
 // ─── CORS tests (from test_cors.rs) ──────────────────────────────────────────
 
 mod cors {
-    use axum::{middleware, routing::get, Router};
+    use axum::{middleware, Router};
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::net::TcpListener;
@@ -445,17 +459,28 @@ mod cors {
             replication_manager: None,
             ssl_manager: None,
             analytics_engine: None,
+            recommend_config: Default::default(),
+            dictionary_manager: std::sync::Arc::new(
+                flapjack::dictionaries::manager::DictionaryManager::new(temp_dir.path()),
+            ),
             metrics_state: None,
             usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
             paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
+            usage_persistence: None,
+            geoip_reader: None,
+            notification_service: None,
             start_time: std::time::Instant::now(),
+            conversation_store:
+                flapjack_http::conversation_store::ConversationStore::default_shared(),
             experiment_store: None,
-            #[cfg(feature = "vector-search")]
             embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
         });
 
+        let public_health_routes =
+            flapjack_http::router::build_public_health_routes().with_state(state.clone());
+
         let app = Router::new()
-            .route("/health", get(flapjack_http::handlers::health))
+            .merge(public_health_routes)
             .route(
                 "/1/indexes/:indexName/query",
                 axum::routing::post(flapjack_http::handlers::search),

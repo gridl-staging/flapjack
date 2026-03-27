@@ -64,10 +64,16 @@
 //! See [LIB.md](https://github.com/stuartcrobinson/flapjack202511/blob/main/LIB.md)
 //! for the full embedding guide.
 
+pub mod dictionaries;
 pub mod error;
 pub mod experiments;
+pub mod filter_parser;
 pub mod index;
+pub mod language;
+pub mod personalization;
 pub mod query;
+pub mod recommend;
+mod text_normalization;
 pub mod tokenizer;
 pub mod types;
 
@@ -81,7 +87,7 @@ pub mod analytics;
 pub mod query_suggestions;
 
 pub use error::{FlapjackError, Result};
-pub use index::{manager::IndexManager, Index, ManagedIndexWriter};
+pub use index::{manager::validate_index_name, manager::IndexManager, Index, ManagedIndexWriter};
 pub use query::{QueryExecutor, QueryParser};
 pub use types::*;
 

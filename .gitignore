@@ -3,7 +3,9 @@
 /.cache
 **/node_modules/
 node_modules/
+.secret/
 
+**/events_v1.jsonl
 
 /.vscode
 /.env
@@ -19,7 +21,6 @@ node_modules/
 
 # Generated/temporary JSON (specific files, not blanket *.json)
 railway.json
-.claude/settings.local.json
 sdk_test/.cache/
 **/test-results/
 benchmarks_2/results.json
@@ -33,15 +34,22 @@ demo-dualclient/public/openapi.json
 
 # PHP / Composer
 **/vendor/
-composer.lock
 *.phpunit.result.cache
 
 # Build output (all subprojects)
 **/dist/
 
-# Lock files for dependencies (keep Cargo.lock for binaries, ignore others)
+# Lock files for dependencies
+# Keep: Cargo.lock (binary crate), dashboard + sdk_test package-lock.json
+# Ignore: other SDK/integration lock files (published libraries, not apps)
 **/package-lock.json
 !engine/dashboard/package-lock.json
+!engine/sdk_test/package-lock.json
+**/yarn.lock
+**/Gemfile.lock
+**/poetry.lock
+**/pubspec.lock
+**/composer.lock
 
 # ML model caches
 **/.fastembed_cache/
@@ -59,6 +67,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# matt runtime state/logs
+.matt/
+
 node_modules
 dist
 dist-ssr
@@ -69,6 +80,23 @@ bin/
 
 # Per-clone local test/runtime ports and keys
 flapjack.local.conf
+
+# API key stores (hashed keys, still sensitive)
+engine/dashboard/data/keys.json
+engine/_dev/dev-data/keys.json
+engine/_dev/dev-data/keys.json.backup
+engine/_dev/dev-data/.admin_key_shown
+
+# Diagnostic output dumps
+od_diag_*.txt
+od_sqlite_diag_*.txt
+
+# Slupe workflow I/O
+slupe_input.md
+.slupe_output.md
+
+# Local/session-specific instruction files
+NESL_INSTRUCTIONS.md
 
 # Editor directories and files
 .vscode/*
@@ -85,7 +113,9 @@ flapjack.local.conf
 # Node
 node_modules/
 
-__pycache__/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
 
 # Large binary/archive files
 sdks/wordpress/*.zip
@@ -93,3 +123,22 @@ sdks/javascript/.yarn/releases/
 
 
 *.parquet
+
+.hashbrown
+
+# Tour video artifacts — stored in GitHub Releases, not in git
+# See: https://github.com/gridl-hq/flapjack/releases/tag/tour-videos
+engine/dashboard/tour/videos/*.webm
+engine/dashboard/tour/videos/*.mp4
+
+chatting/
+
+# Stage 1 internal artifact untracking guards
+**/DIRMAP.md
+**/CODE_MAP.md
+deep_dives/
+docs2/multi_instance/
+util/prompts/
+util/notes.md
+util/movedReserach.md
+util/handoff_session*

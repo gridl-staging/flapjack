@@ -5,6 +5,11 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use clap::{parser::ValueSource, ArgMatches, CommandFactory, FromArgMatches, Parser, Subcommand};
 use flapjack_http::serve;
 
+/// Top-level CLI definition for the `flapjack` binary.
+///
+/// Supports optional subcommands (`Uninstall`, `ResetAdminKey`) and server configuration
+/// flags including data directory, bind address, port, local-dev instance isolation,
+/// auto-port assignment, and authentication control.
 #[derive(Parser)]
 #[command(name = "flapjack")]
 struct Cli {
@@ -39,6 +44,7 @@ enum Command {
     ResetAdminKey,
 }
 
+/// TODO: Document run_uninstall.
 fn run_uninstall() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set")?;
     let install_dir =
@@ -76,44 +82,7 @@ fn run_uninstall() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        // Remove the "# Flapjack" comment line and the export/set line that follows it
-        let mut new_lines: Vec<&str> = Vec::new();
-        let mut lines = contents.lines().peekable();
-        let mut modified = false;
-
-        while let Some(line) = lines.next() {
-            if line.trim() == "# Flapjack" {
-                // Skip this comment and the next line (the export/set PATH line)
-                if let Some(next) = lines.peek() {
-                    if next.contains(".flapjack") {
-                        lines.next(); // consume the PATH line
-                        modified = true;
-                        // Also skip a leading blank line if we left one
-                        continue;
-                    }
-                }
-                modified = true;
-                continue;
-            }
-            // Skip standalone PATH lines referencing .flapjack (in case format differs)
-            if (line.contains("export PATH") || line.contains("set -gx PATH"))
-                && line.contains(".flapjack")
-            {
-                modified = true;
-                continue;
-            }
-            new_lines.push(line);
-        }
-
-        if modified {
-            // Trim trailing blank lines that may have been left behind
-            while new_lines.last() == Some(&"") {
-                new_lines.pop();
-            }
-            let mut new_contents = new_lines.join("\n");
-            if !new_contents.is_empty() {
-                new_contents.push('\n');
-            }
+        if let Some(new_contents) = strip_flapjack_path_entries(&contents) {
             std::fs::write(path, new_contents)?;
             eprintln!("Cleaned PATH entry from {}", rc_path);
         }
@@ -123,6 +92,58 @@ fn run_uninstall() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// TODO: Document strip_flapjack_path_entries.
+fn strip_flapjack_path_entries(contents: &str) -> Option<String> {
+    let mut new_lines: Vec<&str> = Vec::new();
+    let mut lines = contents.lines().peekable();
+    let mut modified = false;
+
+    while let Some(line) = lines.next() {
+        if line.trim() == "# Flapjack" {
+            if matches!(lines.peek(), Some(next_line) if next_line.contains(".flapjack")) {
+                lines.next();
+            }
+            modified = true;
+            continue;
+        }
+
+        if is_flapjack_path_line(line) {
+            modified = true;
+            continue;
+        }
+
+        new_lines.push(line);
+    }
+
+    if !modified {
+        return None;
+    }
+
+    while new_lines.last() == Some(&"") {
+        new_lines.pop();
+    }
+
+    let mut new_contents = new_lines.join("\n");
+    if !new_contents.is_empty() {
+        new_contents.push('\n');
+    }
+    Some(new_contents)
+}
+
+fn is_flapjack_path_line(line: &str) -> bool {
+    (line.contains("export PATH") || line.contains("set -gx PATH")) && line.contains(".flapjack")
+}
+
+/// Parse CLI arguments and dispatch to the appropriate subcommand or start the HTTP server.
+///
+/// When no subcommand is given, resolves runtime configuration (data directory and bind address)
+/// from explicit flags, `--instance` derivation, environment variables, or built-in defaults,
+/// then launches the Flapjack HTTP server via `serve()`.
+///
+/// # Subcommands
+///
+/// - `Uninstall` — removes the install directory and cleans shell PATH entries.
+/// - `ResetAdminKey` — generates and prints a new admin API key.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cmd = Cli::command();
@@ -186,16 +207,20 @@ fn resolve_data_dir(cli: &Cli, matches: &ArgMatches) -> Result<String, String> {
     Ok(cli.data_dir.clone())
 }
 
+/// TODO: Document resolve_bind_addr.
 fn resolve_bind_addr(cli: &Cli, matches: &ArgMatches) -> Result<String, String> {
-    if cli.auto_port && is_set_on_command_line(matches, "bind_addr") {
+    let bind_addr_from_cli = is_set_on_command_line(matches, "bind_addr");
+    let port_from_cli = is_set_on_command_line(matches, "port");
+
+    if cli.auto_port && bind_addr_from_cli {
         return Err("--auto-port cannot be used with --bind-addr".to_string());
     }
 
-    if cli.auto_port && is_set_on_command_line(matches, "port") {
+    if cli.auto_port && port_from_cli {
         return Err("--auto-port cannot be used with --port".to_string());
     }
 
-    if is_set_on_command_line(matches, "bind_addr") {
+    if bind_addr_from_cli {
         return Ok(cli
             .bind_addr
             .clone()
@@ -203,19 +228,19 @@ fn resolve_bind_addr(cli: &Cli, matches: &ArgMatches) -> Result<String, String> 
     }
 
     if cli.auto_port {
-        return Ok("127.0.0.1:0".to_string());
+        return Ok(loopback_bind_addr(0));
     }
 
-    if is_set_on_command_line(matches, "port") {
+    if port_from_cli {
         let port = cli
             .port
             .expect("port should be set when source is command line");
-        return Ok(format!("127.0.0.1:{port}"));
+        return Ok(loopback_bind_addr(port));
     }
 
     if let Some(instance) = cli.instance.as_deref() {
         validate_instance_name(instance)?;
-        return Ok(format!("127.0.0.1:{}", derive_instance_port(instance)));
+        return Ok(loopback_bind_addr(derive_instance_port(instance)));
     }
 
     if let Some(bind_addr) = &cli.bind_addr {
@@ -223,14 +248,18 @@ fn resolve_bind_addr(cli: &Cli, matches: &ArgMatches) -> Result<String, String> 
     }
 
     if let Some(port) = cli.port {
-        return Ok(format!("127.0.0.1:{port}"));
+        return Ok(loopback_bind_addr(port));
     }
 
-    Ok("127.0.0.1:7700".to_string())
+    Ok(loopback_bind_addr(7700))
 }
 
 fn is_set_on_command_line(matches: &ArgMatches, arg: &str) -> bool {
     matches.value_source(arg) == Some(ValueSource::CommandLine)
+}
+
+fn loopback_bind_addr(port: u16) -> String {
+    format!("127.0.0.1:{port}")
 }
 
 fn validate_instance_name(instance: &str) -> Result<(), String> {
@@ -293,6 +322,11 @@ mod tests {
         );
     }
 
+    /// Assert that `derive_instance_port` produces fixed, algorithm-stable port numbers for known inputs.
+    ///
+    /// Guards against accidental changes to the FNV-1a implementation that would silently
+    /// reassign ports for running `--instance` sessions after a rebuild. Also verifies that
+    /// a set of common branch names map to distinct ports.
     #[test]
     fn derive_instance_port_stable_known_values() {
         // FNV-1a is algorithm-stable: these exact values must not drift.
@@ -356,6 +390,24 @@ mod tests {
         std::env::remove_var("FLAPJACK_PORT");
 
         assert_eq!(bind_addr, "127.0.0.1:0");
+    }
+
+    /// Asserts that the bare no-env, no-CLI default resolves to loopback-only.
+    /// This locks the native default so a Dockerfile ENV cannot silently widen host exposure.
+    #[test]
+    fn bare_default_resolves_to_loopback() {
+        let _guard = ENV_MUTEX.lock().expect("lock env mutex");
+        // Clear any env vars that could influence resolution
+        std::env::remove_var("FLAPJACK_BIND_ADDR");
+        std::env::remove_var("FLAPJACK_PORT");
+
+        let (cli, matches) = parse_cli(&["flapjack"]);
+        let bind_addr = resolve_bind_addr(&cli, &matches).expect("resolve bind addr");
+
+        assert_eq!(
+            bind_addr, "127.0.0.1:7700",
+            "bare default must be loopback-only; container images override via ENV, not code"
+        );
     }
 
     #[test]

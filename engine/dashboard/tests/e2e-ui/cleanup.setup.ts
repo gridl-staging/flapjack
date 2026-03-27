@@ -3,23 +3,29 @@
  * Runs ONCE after all e2e-ui tests complete.
  */
 import { test as teardown } from '@playwright/test';
+import { TEST_INDEX } from '../fixtures/test-data';
 import { API_BASE as API, API_HEADERS as H } from '../fixtures/local-instance';
-import { deleteExperimentsByPrefix } from '../fixtures/api-helpers';
+import {
+  deleteExperimentsByPrefix,
+  deletePersonalizationStrategy,
+} from '../fixtures/api-helpers';
 
 teardown('cleanup test data', async ({ request }) => {
   // Delete seeded test index
-  await request.delete(`${API}/1/indexes/e2e-products`, { headers: H }).catch(() => {});
+  await request.delete(`${API}/1/indexes/${TEST_INDEX}`, { headers: H }).catch(() => {});
 
   // Delete temp indexes that tests may have created
   await request.delete(`${API}/1/indexes/e2e-temp`, { headers: H }).catch(() => {});
-  await request.delete(`${API}/1/indexes/e2e-experiments`, { headers: H }).catch(() => {});
 
   // Clear analytics for test index
   await request.delete(`${API}/2/analytics/clear`, {
     headers: H,
-    params: { index: 'e2e-products' },
+    params: { index: TEST_INDEX },
   }).catch(() => {});
 
   // Clean up seeded and per-test experiments (including running experiments).
   await deleteExperimentsByPrefix(request, 'e2e-');
+
+  // Remove the global strategy through the backend so cleanup tracks the live server instance.
+  await deletePersonalizationStrategy(request);
 });

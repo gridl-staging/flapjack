@@ -7,6 +7,7 @@ import type { EmbedderConfig } from '@/lib/types';
 describe('SearchModeSection', () => {
   const defaultProps = {
     mode: undefined as 'neuralSearch' | 'keywordSearch' | undefined,
+    vectorSearchEnabled: true,
     embedders: undefined as Record<string, EmbedderConfig> | undefined,
     onChange: vi.fn(),
   };
@@ -69,6 +70,40 @@ describe('SearchModeSection', () => {
     );
 
     expect(screen.queryByTestId('search-mode-warning')).not.toBeInTheDocument();
+  });
+
+  it('shows compiled-out warning instead of no-embedders warning when vector search is disabled', () => {
+    render(
+      <SearchModeSection
+        {...defaultProps}
+        mode="neuralSearch"
+        embedders={undefined}
+        vectorSearchEnabled={false}
+      />
+    );
+
+    const compiledOutWarning = screen.getByTestId('search-mode-compiled-out-warning');
+    expect(compiledOutWarning).toBeInTheDocument();
+    expect(compiledOutWarning).toHaveTextContent(/not compiled in/i);
+    expect(screen.queryByTestId('search-mode-warning')).not.toBeInTheDocument();
+  });
+
+  it('waits for capability data before enabling neural search controls', () => {
+    render(
+      <SearchModeSection
+        {...defaultProps}
+        mode="keywordSearch"
+        embedders={undefined}
+        vectorSearchEnabled={undefined}
+      />
+    );
+
+    expect(screen.getByTestId('search-mode-capability-pending')).toBeInTheDocument();
+    expect(screen.queryByTestId('search-mode-compiled-out-warning')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('search-mode-warning')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: 'Neural Search' })
+    ).toBeDisabled();
   });
 
   it('calls onChange with keywordSearch when switching back from neuralSearch', async () => {

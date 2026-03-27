@@ -1,28 +1,54 @@
-/**
- * E2E-UI Full Suite — API Keys Page (Real Server)
- *
- * NON-MOCKED SIMULATED-HUMAN REAL-BROWSER TESTS.
- * Tests run against a REAL Flapjack server with seeded test data.
- *
- * NOTE: The /1/keys API is defined in the OpenAPI spec but not yet implemented
- * on the server (returns 404). Tests that require key creation/deletion are
- * skipped until the backend supports these operations.
- *
- * Covers:
- * - Page loads and shows empty state
- * - Create key dialog opens and shows all form sections
- * - Dialog permissions toggling works
- * - (Skipped) Create, delete, copy, scope tests — need backend /1/keys support
- */
+import type { Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
+import {
+  createApiKey,
+  createIndex,
+  deleteApiKeysByDescriptionPrefix,
+  deleteIndex,
+} from '../../fixtures/api-helpers';
+
+const API_KEYS_URL = '/keys';
+const E2E_DESCRIPTION_PREFIX = 'E2E';
+
+function prefixedDescription(name: string): string {
+  return `${E2E_DESCRIPTION_PREFIX} ${name}`;
+}
+
+async function openCreateKeyDialog(page: Page) {
+  await page.getByRole('button', { name: 'Create Key', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  return dialog;
+}
 
 test.describe('API Keys Page', () => {
+  test.describe.configure({ mode: 'serial' });
 
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/keys');
-    await expect(
-      page.getByRole('heading', { name: 'API Keys', exact: true })
-    ).toBeVisible({ timeout: 10000 });
+  test.beforeEach(async ({ page, request }) => {
+    await deleteApiKeysByDescriptionPrefix(request, E2E_DESCRIPTION_PREFIX);
+    await page.goto(API_KEYS_URL);
+    await expect(page.getByRole('heading', { name: 'API Keys', exact: true })).toBeVisible({ timeout: 10_000 });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await deleteApiKeysByDescriptionPrefix(request, E2E_DESCRIPTION_PREFIX);
+  });
+
+  test('loads seeded key and renders description, key value, and restrict sources', async ({ page, request }) => {
+    const description = prefixedDescription('Seeded Key');
+    const created = await createApiKey(request, {
+      description,
+      acl: ['search'],
+      restrictSources: ['192.168.1.0/24'],
+    });
+
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'API Keys', exact: true })).toBeVisible({ timeout: 10_000 });
+
+    const seededCard = page.getByTestId('key-card').filter({ hasText: description });
+    await expect(seededCard).toBeVisible({ timeout: 10_000 });
+    await expect(seededCard.getByText(created.key)).toBeVisible({ timeout: 10_000 });
+    await expect(seededCard.getByText('192.168.1.0/24')).toBeVisible({ timeout: 10_000 });
   });
 
   test('API keys page loads and shows heading and create button', async ({ page }) => {
@@ -31,9 +57,7 @@ test.describe('API Keys Page', () => {
   });
 
   test('create key dialog shows all form sections', async ({ page }) => {
-    await page.getByRole('button', { name: 'Create Key', exact: true }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
+    const dialog = await openCreateKeyDialog(page);
 
     await expect(dialog.getByText('Description')).toBeVisible();
     await expect(dialog.getByText('Permissions').first()).toBeVisible();
@@ -57,52 +81,213 @@ test.describe('API Keys Page', () => {
   });
 
   test('toggling permissions updates selection badges', async ({ page }) => {
-    await page.getByRole('button', { name: 'Create Key', exact: true }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
+    const dialog = await openCreateKeyDialog(page);
 
-    // Default permission "search" should be shown in the selected permissions badges
-    const permBadges = dialog.getByTestId('selected-permissions');
-    await expect(permBadges.getByText('search').first()).toBeVisible();
+    const permissionBadges = dialog.getByTestId('selected-permissions');
+    await expect(permissionBadges.getByText('search').first()).toBeVisible();
 
-    // Toggle "Add Object" on — badge should appear
-    await dialog.getByRole('button', { name: /Add Object/i }).click();
-    await expect(permBadges.getByText('addObject').first()).toBeVisible();
+    await dialog.getByTestId('acl-option-addObject').click();
+    await expect(permissionBadges.getByText('addObject').first()).toBeVisible();
 
-    // Toggle "Search" off — "addObject" should remain
-    await dialog.getByRole('button', { name: /^Search/ }).click();
-    await expect(permBadges.getByText('addObject').first()).toBeVisible();
+    await dialog.getByTestId('acl-option-search').click();
+    await expect(permissionBadges.getByText('addObject').first()).toBeVisible();
 
     await dialog.getByRole('button', { name: /cancel/i }).click();
   });
 
-  // ---------- Tests below require /1/keys backend support (not yet implemented) ----------
+  test('create a new API key increments visible key-card count by exactly one', async ({ page }) => {
+    const keyCards = page.getByTestId('key-card');
+    const beforeCreateCount = await keyCards.count();
+    const dialog = await openCreateKeyDialog(page);
 
-  test.skip('create a new API key and verify it appears in the list', async ({ page }) => {
-    // Requires POST /1/keys (returns 404 on current server)
+    await dialog.getByPlaceholder('e.g., Frontend search key').fill(prefixedDescription('Create List Key'));
+    await dialog.getByRole('button', { name: /create key/i }).click();
+
+    const createdCard = page.getByTestId('key-card').filter({ hasText: prefixedDescription('Create List Key') });
+    await expect(createdCard).toBeVisible({ timeout: 10_000 });
+    await expect(keyCards).toHaveCount(beforeCreateCount + 1, { timeout: 10_000 });
+    await expect(createdCard.getByTestId('key-permissions').getByText('search')).toBeVisible({ timeout: 10_000 });
   });
 
-  test.skip('create then delete an API key', async ({ page }) => {
-    // Requires POST /1/keys + DELETE /1/keys/:key
+  test('create then delete an API key', async ({ page }) => {
+    const description = prefixedDescription('Delete Key');
+    const keyCards = page.getByTestId('key-card');
+    const beforeCreateCount = await keyCards.count();
+
+    const dialog = await openCreateKeyDialog(page);
+    await dialog.getByPlaceholder('e.g., Frontend search key').fill(description);
+    await dialog.getByRole('button', { name: /create key/i }).click();
+
+    const keyCard = page.getByTestId('key-card').filter({ hasText: description });
+    await expect(keyCard).toBeVisible({ timeout: 10_000 });
+    await expect(keyCards).toHaveCount(beforeCreateCount + 1, { timeout: 10_000 });
+
+    const beforeDeleteCount = await keyCards.count();
+
+    await keyCard.getByTestId('delete-key-btn').click();
+    const confirmDialog = page.getByRole('dialog', { name: 'Delete API Key' });
+    await expect(confirmDialog).toBeVisible({ timeout: 10_000 });
+    await confirmDialog.getByRole('button', { name: 'Delete', exact: true }).click();
+
+    await expect(page.getByTestId('key-card').filter({ hasText: description })).toHaveCount(0, { timeout: 10_000 });
+    await expect(keyCards).toHaveCount(beforeDeleteCount - 1, { timeout: 10_000 });
   });
 
-  test.skip('key cards display permissions badges', async ({ page }) => {
-    // Requires POST /1/keys to create a key first
+  test('creating a key through dialog preserves the exact selected permission set', async ({ page }) => {
+    const description = prefixedDescription('Permissions Key');
+    const expectedPermissions = ['search', 'addObject', 'analytics'];
+    const dialog = await openCreateKeyDialog(page);
+    await dialog.getByPlaceholder('e.g., Frontend search key').fill(description);
+    await dialog.getByTestId('acl-option-addObject').click();
+    await dialog.getByTestId('acl-option-analytics').click();
+    await dialog.getByRole('button', { name: /create key/i }).click();
+
+    const keyCard = page.getByTestId('key-card').filter({ hasText: description });
+    await expect(keyCard).toBeVisible({ timeout: 10_000 });
+    const permissions = keyCard.getByTestId('key-permissions');
+    await expect(permissions.locator('div')).toHaveCount(expectedPermissions.length, { timeout: 10_000 });
+    const renderedPermissions = (await permissions.locator('div').allInnerTexts())
+      .map((permission) => permission.trim())
+      .sort();
+    expect(renderedPermissions).toEqual([...expectedPermissions].sort());
   });
 
-  test.skip('copy button is visible on key cards', async ({ page }) => {
-    // Requires POST /1/keys to create a key first
+  test('copy button is visible on key cards', async ({ page, request }) => {
+    await createApiKey(request, {
+      description: prefixedDescription('Copy Button Key'),
+      acl: ['search'],
+    });
+
+    await page.reload();
+
+    const keyCard = page.getByTestId('key-card').filter({ hasText: prefixedDescription('Copy Button Key') });
+    await expect(keyCard).toBeVisible({ timeout: 10_000 });
+    await expect(keyCard.getByRole('button', { name: /copy/i })).toBeVisible({ timeout: 10_000 });
   });
 
-  test.skip('clicking copy button shows Copied feedback', async ({ page }) => {
-    // Requires POST /1/keys to create a key first
+  test('clicking copy button shows Copied feedback and writes the expected key to clipboard', async ({ page, request, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+
+    await createApiKey(request, {
+      description: prefixedDescription('Copy Feedback Key'),
+      acl: ['search'],
+    });
+
+    await page.reload();
+
+    const keyCard = page.getByTestId('key-card').filter({ hasText: prefixedDescription('Copy Feedback Key') });
+    await expect(keyCard).toBeVisible({ timeout: 10_000 });
+    const keyValue = (await keyCard.locator('code').first().innerText()).trim();
+
+    await expect(keyCard.getByRole('button', { name: 'Copy', exact: true })).toBeVisible({ timeout: 10_000 });
+    await keyCard.getByRole('button', { name: 'Copy', exact: true }).click();
+    await expect(keyCard.getByRole('button', { name: /copied/i })).toBeVisible({ timeout: 10_000 });
+    const clipboardValue = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipboardValue).toBe(keyValue);
   });
 
-  test.skip('key with no index scope shows All Indexes badge', async ({ page }) => {
-    // Requires POST /1/keys to create a key first
+  test('key with no index scope shows All Indexes badge', async ({ page, request }) => {
+    await createApiKey(request, {
+      description: prefixedDescription('Global Scope Key'),
+      acl: ['search'],
+    });
+
+    await page.reload();
+
+    const keyCard = page.getByTestId('key-card').filter({ hasText: prefixedDescription('Global Scope Key') });
+    await expect(keyCard).toBeVisible({ timeout: 10_000 });
+    await expect(keyCard.getByText('All Indexes')).toBeVisible({ timeout: 10_000 });
   });
 
-  test.skip('create key with restricted index scope shows specific index badge', async ({ page }) => {
-    // Requires POST /1/keys to create a key first
+  test('index filter bar shows scoped filters and toggling preserves scoped plus global key visibility', async ({ page, request }) => {
+    const isolatedIndex = `e2e-api-keys-filter-${Date.now()}`;
+    const secondaryIndex = `e2e-api-keys-filter-other-${Date.now()}`;
+    const scopedDescription = prefixedDescription('Filter Scoped Key');
+    const globalDescription = prefixedDescription('Filter Global Key');
+    const otherScopedDescription = prefixedDescription('Filter Other Scoped Key');
+
+    await createIndex(request, isolatedIndex);
+    await createIndex(request, secondaryIndex);
+
+    try {
+      await createApiKey(request, {
+        description: scopedDescription,
+        acl: ['search'],
+        indexes: [isolatedIndex],
+      });
+      await createApiKey(request, {
+        description: globalDescription,
+        acl: ['search'],
+      });
+      await createApiKey(request, {
+        description: otherScopedDescription,
+        acl: ['search'],
+        indexes: [secondaryIndex],
+      });
+
+      await page.reload();
+
+      const filterBar = page.getByTestId('index-filter-bar');
+      await expect(filterBar).toBeVisible({ timeout: 10_000 });
+
+      const scopedFilterButton = page.getByTestId(`filter-index-${isolatedIndex}`);
+      await expect(scopedFilterButton).toBeVisible({ timeout: 10_000 });
+      await scopedFilterButton.click();
+
+      await expect(page.getByTestId('key-card').filter({ hasText: scopedDescription })).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByTestId('key-card').filter({ hasText: globalDescription })).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByTestId('key-card').filter({ hasText: otherScopedDescription })).toHaveCount(0, { timeout: 10_000 });
+
+      await page.getByTestId('filter-all').click();
+
+      const e2eCards = page.getByTestId('key-card').filter({ hasText: E2E_DESCRIPTION_PREFIX });
+      await expect(e2eCards).toHaveCount(3, { timeout: 10_000 });
+      await expect(page.getByTestId('key-card').filter({ hasText: otherScopedDescription })).toBeVisible({ timeout: 10_000 });
+    } finally {
+      await deleteApiKeysByDescriptionPrefix(request, E2E_DESCRIPTION_PREFIX);
+      await deleteIndex(request, isolatedIndex);
+      await deleteIndex(request, secondaryIndex);
+    }
+  });
+
+  test('create key with restricted index scope shows specific index badge', async ({ page, request }) => {
+    const indexUid = `e2e-api-keys-index-${Date.now()}`;
+    await createIndex(request, indexUid);
+
+    try {
+      await page.reload();
+
+      const dialog = await openCreateKeyDialog(page);
+      await dialog.getByPlaceholder('e.g., Frontend search key').fill(prefixedDescription('Scoped Index Key'));
+      await dialog.getByRole('button', { name: indexUid, exact: true }).click();
+      await dialog.getByRole('button', { name: /create key/i }).click();
+
+      const keyCard = page.getByTestId('key-card').filter({ hasText: prefixedDescription('Scoped Index Key') });
+      await expect(keyCard).toBeVisible({ timeout: 10_000 });
+      await expect(keyCard.getByText(indexUid)).toBeVisible({ timeout: 10_000 });
+    } finally {
+      await deleteIndex(request, indexUid);
+    }
+  });
+
+  test('create key with restrict sources through the dialog shows source badges', async ({ page }) => {
+    await expect(page.getByTestId('key-restrict-sources')).toHaveCount(0);
+
+    const dialog = await openCreateKeyDialog(page);
+
+    await dialog.getByPlaceholder('e.g., Frontend search key').fill(prefixedDescription('Restrict Sources Dialog'));
+    await dialog.getByLabel(/Restrict Sources/i).fill('10.0.0.0/8, 192.168.0.0/16\n172.16.0.0/12');
+    await dialog.getByRole('button', { name: /create key/i }).click();
+
+    const keyCard = page.getByTestId('key-card').filter({ hasText: prefixedDescription('Restrict Sources Dialog') });
+    await expect(keyCard).toBeVisible({ timeout: 10_000 });
+    const restrictSourcesSection = keyCard.getByTestId('key-restrict-sources');
+    await expect(restrictSourcesSection).toBeVisible({ timeout: 10_000 });
+
+    const expectedSources = ['10.0.0.0/8', '192.168.0.0/16', '172.16.0.0/12'];
+    const renderedSources = (await restrictSourcesSection.innerText())
+      .match(/\d+\.\d+\.\d+\.\d+\/\d+/g)
+      ?.sort() ?? [];
+    expect(renderedSources).toEqual([...expectedSources].sort());
   });
 });

@@ -1,21 +1,29 @@
+use crate::extractors::ValidatedIndexName;
+use crate::handlers::internal_ops::{
+    apply_clear_index_op, apply_clear_rules_op, apply_clear_synonyms_op, apply_copy_index_op,
+    apply_delete_op, apply_delete_rule_op, apply_delete_synonym_op, apply_move_index_op,
+    apply_save_rule_op, apply_save_rules_op, apply_save_synonym_op, apply_save_synonyms_op,
+    apply_upsert_op, flush_document_batch,
+};
 use crate::handlers::AppState;
 use axum::{
     extract::{Path, Query, State},
+    http::header,
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
-use flapjack::index::oplog::OpLogEntry;
-use flapjack::types::Document;
-use flapjack::IndexManager;
+use flapjack::index::oplog::{OpLog, OpLogEntry};
+use flapjack::index::snapshot::export_to_bytes;
+use flapjack::{validate_index_name, IndexManager};
 use flapjack_replication::types::{
-    GetOpsQuery, GetOpsResponse, ReplicateOpsRequest, ReplicateOpsResponse,
+    GetOpsQuery, GetOpsResponse, ListTenantsResponse, ReplicateOpsRequest, ReplicateOpsResponse,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Core apply logic: parse ops and write to IndexManager.
 /// Returns the highest sequence number applied, or an error string.
-/// Extracted for reuse by the HTTP handler and startup catch-up.
 ///
 /// Implements LWW (last-writer-wins) conflict resolution:
 /// - For upserts: (timestamp_ms, node_id) tuples are compared; higher wins.
@@ -26,131 +34,110 @@ pub async fn apply_ops_to_manager(
     tenant_id: &str,
     ops: &[OpLogEntry],
 ) -> Result<u64, String> {
-    // P3: Use get_or_load instead of create_tenant so that recover_from_oplog fires on
-    // first access, rebuilding lww_map from the oplog before the LWW check below.
-    // If the tenant does not exist yet, fall back to create_tenant (new index, no history).
-    if manager.get_or_load(tenant_id).is_err() {
-        let _ = manager.create_tenant(tenant_id);
-    }
+    validate_index_name(tenant_id).map_err(|e| e.to_string())?;
+
+    bootstrap_document_lww_state(manager, tenant_id, ops);
 
     let mut max_seq = 0u64;
     let mut upserts = Vec::new();
     let mut deletes = Vec::new();
-    // Track the final winning op type for each doc ID so we can resolve
-    // conflicts when the same doc has both upserts and deletes in one batch.
-    let mut final_op_type: std::collections::HashMap<String, &str> =
-        std::collections::HashMap::new();
+    let mut final_op_type: HashMap<String, &str> = HashMap::new();
 
     for op_entry in ops {
         max_seq = max_seq.max(op_entry.seq);
         let incoming = (op_entry.timestamp_ms, op_entry.node_id.clone());
-
-        match op_entry.op_type.as_str() {
-            "upsert" => {
-                if let Some(body) = op_entry.payload.get("body") {
-                    // LWW check: skip if an op with a higher (ts, node_id) was already applied.
-                    let object_id = body
-                        .get("_id")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| body.get("objectID").and_then(|v| v.as_str()))
-                        .unwrap_or("");
-                    if !object_id.is_empty() {
-                        if let Some(existing) = manager.get_lww(tenant_id, object_id) {
-                            // existing wins if its (ts, node_id) >= incoming (ts, node_id)
-                            if existing >= incoming {
-                                tracing::debug!(
-                                    "[REPL LWW] skipping stale upsert for {}/{} (existing={:?} >= incoming={:?})",
-                                    tenant_id, object_id, existing, incoming
-                                );
-                                continue;
-                            }
-                        }
-                    }
-                    match Document::from_json(body) {
-                        Ok(doc) => {
-                            // Record LWW state before queuing so subsequent ops in this
-                            // batch see the updated state.  Use add_documents_for_replication
-                            // below so write_queue does NOT overwrite this with system time.
-                            if !object_id.is_empty() {
-                                manager.record_lww(tenant_id, object_id, incoming.0, incoming.1);
-                                final_op_type.insert(object_id.to_string(), "upsert");
-                            }
-                            upserts.push(doc);
-                        }
-                        Err(e) => tracing::warn!(
-                            "[REPL {}] failed to parse upsert seq {}: {}",
-                            tenant_id,
-                            op_entry.seq,
-                            e
-                        ),
-                    }
-                }
-            }
-            "delete" => {
-                if let Some(id) = op_entry.payload.get("objectID").and_then(|v| v.as_str()) {
-                    // LWW check: skip delete if a newer upsert was already applied.
-                    if let Some(existing) = manager.get_lww(tenant_id, id) {
-                        if existing > incoming {
-                            tracing::debug!(
-                                "[REPL LWW] skipping stale delete for {}/{} (existing={:?} > incoming={:?})",
-                                tenant_id, id, existing, incoming
-                            );
-                            continue;
-                        }
-                    }
-                    // Record the delete in LWW map so future upserts with older ts are rejected.
-                    manager.record_lww(tenant_id, id, incoming.0, incoming.1.clone());
-                    final_op_type.insert(id.to_string(), "delete");
-                    deletes.push(id.to_string());
-                }
-            }
-            _ => tracing::warn!(
-                "[REPL {}] unknown op_type {} at seq {}",
-                tenant_id,
-                op_entry.op_type,
-                op_entry.seq
-            ),
-        }
+        apply_replication_op(
+            manager,
+            tenant_id,
+            op_entry,
+            incoming,
+            &mut upserts,
+            &mut deletes,
+            &mut final_op_type,
+        )
+        .await;
     }
 
-    // Resolve batch ordering: when the same doc ID appears in both upserts and
-    // deletes, only the final operation (by LWW timestamp) should be applied.
-    // Without this, all upserts are applied first then all deletes, which would
-    // cause a later re-upsert to be incorrectly deleted.
-    upserts.retain(|doc| final_op_type.get(&doc.id).copied().unwrap_or("upsert") == "upsert");
-    deletes.retain(|id| final_op_type.get(id.as_str()).copied().unwrap_or("delete") == "delete");
-
-    // Deduplicate upserts: keep only the last version for each doc ID.
-    // tantivy's delete_term only affects pre-existing docs, so adding two
-    // docs with the same ID in one batch leaves both in the index.
-    {
-        let mut seen = std::collections::HashSet::new();
-        let mut deduped = Vec::with_capacity(upserts.len());
-        for doc in upserts.into_iter().rev() {
-            if seen.insert(doc.id.clone()) {
-                deduped.push(doc);
-            }
-        }
-        deduped.reverse();
-        upserts = deduped;
-    }
-
-    if !upserts.is_empty() {
-        // Use for_replication variant so write_queue does NOT overwrite the op timestamps
-        // already recorded in lww_map above with a newer system timestamp.
-        manager
-            .add_documents_for_replication(tenant_id, upserts)
-            .map_err(|e| format!("add_documents failed: {}", e))?;
-    }
-
-    if !deletes.is_empty() {
-        manager
-            .delete_documents_sync_for_replication(tenant_id, deletes)
-            .await
-            .map_err(|e| format!("delete_documents failed: {}", e))?;
-    }
-
+    flush_document_batch(manager, tenant_id, upserts, deletes, final_op_type).await?;
     Ok(max_seq)
+}
+
+fn bootstrap_document_lww_state(manager: &IndexManager, tenant_id: &str, ops: &[OpLogEntry]) {
+    if !contains_document_replication_ops(ops) {
+        return;
+    }
+    if manager.get_or_load(tenant_id).is_ok() {
+        return;
+    }
+    let _ = manager.create_tenant(tenant_id);
+}
+
+fn contains_document_replication_ops(ops: &[OpLogEntry]) -> bool {
+    ops.iter()
+        .any(|op| matches!(op.op_type.as_str(), "upsert" | "delete"))
+}
+
+/// TODO: Document apply_replication_op.
+async fn apply_replication_op(
+    manager: &IndexManager,
+    tenant_id: &str,
+    op_entry: &OpLogEntry,
+    incoming: (u64, String),
+    upserts: &mut Vec<flapjack::types::Document>,
+    deletes: &mut Vec<String>,
+    final_op_type: &mut HashMap<String, &str>,
+) {
+    match op_entry.op_type.as_str() {
+        "upsert" => {
+            apply_upsert_op(
+                manager,
+                tenant_id,
+                op_entry,
+                incoming,
+                upserts,
+                final_op_type,
+            );
+        }
+        "delete" => {
+            apply_delete_op(
+                manager,
+                tenant_id,
+                op_entry,
+                incoming,
+                deletes,
+                final_op_type,
+            );
+        }
+        "move_index" => {
+            log_op_error(apply_move_index_op(manager, tenant_id, op_entry).await);
+        }
+        "copy_index" => {
+            log_op_error(apply_copy_index_op(manager, tenant_id, op_entry).await);
+        }
+        "clear_index" => {
+            log_op_error(apply_clear_index_op(manager, tenant_id, op_entry).await);
+        }
+        "save_synonym" => apply_save_synonym_op(manager, tenant_id, op_entry),
+        "save_synonyms" => apply_save_synonyms_op(manager, tenant_id, op_entry),
+        "delete_synonym" => apply_delete_synonym_op(manager, tenant_id, op_entry),
+        "clear_synonyms" => apply_clear_synonyms_op(manager, tenant_id, op_entry),
+        "save_rule" => apply_save_rule_op(manager, tenant_id, op_entry),
+        "save_rules" => apply_save_rules_op(manager, tenant_id, op_entry),
+        "delete_rule" => apply_delete_rule_op(manager, tenant_id, op_entry),
+        "clear_rules" => apply_clear_rules_op(manager, tenant_id, op_entry),
+        _ => tracing::warn!(
+            "[REPL {}] unknown op_type {} at seq {}",
+            tenant_id,
+            op_entry.op_type,
+            op_entry.seq
+        ),
+    }
+}
+
+fn log_op_error(result: Result<(), String>) {
+    if let Err(error) = result {
+        tracing::warn!("{}", error);
+    }
 }
 
 /// POST /internal/replicate
@@ -158,35 +145,26 @@ pub async fn apply_ops_to_manager(
 pub async fn replicate_ops(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ReplicateOpsRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<ReplicateOpsResponse>, crate::error_response::HandlerError> {
     let tenant_id = req.tenant_id.clone();
 
-    match apply_ops_to_manager(&state.manager, &tenant_id, &req.ops).await {
-        Ok(max_seq) => {
-            tracing::info!(
-                "[REPL {}] applied {} ops (max_seq={})",
-                tenant_id,
-                req.ops.len(),
-                max_seq
-            );
-            (
-                StatusCode::OK,
-                Json(ReplicateOpsResponse {
-                    tenant_id,
-                    acked_seq: max_seq,
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("[REPL {}] failed to apply ops: {}", tenant_id, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e })),
-            )
-                .into_response()
-        }
-    }
+    // Preserve 400 semantics for malformed peer input before apply_ops_to_manager
+    // erases validation failures into a plain String for shared non-HTTP callers.
+    validate_index_name(&tenant_id).map_err(crate::error_response::HandlerError::from)?;
+
+    let max_seq = apply_ops_to_manager(&state.manager, &tenant_id, &req.ops).await?;
+
+    tracing::info!(
+        "[REPL {}] applied {} ops (max_seq={})",
+        tenant_id,
+        req.ops.len(),
+        max_seq
+    );
+
+    Ok(Json(ReplicateOpsResponse {
+        tenant_id,
+        acked_seq: max_seq,
+    }))
 }
 
 /// GET /internal/ops?tenant_id=X&since_seq=N
@@ -194,40 +172,52 @@ pub async fn replicate_ops(
 pub async fn get_ops(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GetOpsQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<GetOpsResponse>, crate::error_response::HandlerError> {
+    use crate::error_response::HandlerError;
+
     let tenant_id = query.tenant_id.clone();
+    validate_index_name(&tenant_id).map_err(HandlerError::from)?;
 
     // Get oplog for tenant
     let oplog = match state.manager.get_oplog(&tenant_id) {
         Some(ol) => ol,
         None => {
+            // move_index writes are logged under the destination stream after the move,
+            // which means the source tenant oplog path no longer exists. For anti-entropy
+            // catch-up, when source oplog is missing, search existing oplogs for a matching
+            // move_index(source=tenant_id) and return only ops up to that move boundary.
+            if let Some((ops, current_seq, moved_to)) =
+                find_moved_source_ops(&state, &tenant_id, query.since_seq)
+            {
+                tracing::info!(
+                    "[REPL {}] source oplog missing; serving {} moved-source ops from destination stream {} (since_seq={}, current_seq={})",
+                    tenant_id,
+                    ops.len(),
+                    moved_to,
+                    query.since_seq,
+                    current_seq
+                );
+                return Ok(Json(GetOpsResponse {
+                    tenant_id,
+                    ops,
+                    current_seq,
+                    oldest_retained_seq: None,
+                }));
+            }
+
             tracing::warn!("[REPL {}] oplog not found", tenant_id);
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": "Tenant not found"
-                })),
-            )
-                .into_response();
+            return Err(HandlerError::not_found("Tenant not found"));
         }
     };
 
     // Read ops since requested sequence
-    let ops = match oplog.read_since(query.since_seq) {
-        Ok(ops) => ops,
-        Err(e) => {
-            tracing::error!("[REPL {}] failed to read oplog: {}", tenant_id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("Failed to read oplog: {}", e)
-                })),
-            )
-                .into_response();
-        }
-    };
+    let ops = oplog.read_since(query.since_seq).map_err(|e| {
+        tracing::error!("[REPL {}] failed to read oplog: {}", tenant_id, e);
+        HandlerError::from(e)
+    })?;
 
     let current_seq = oplog.current_seq();
+    let oldest_retained_seq = oplog.oldest_seq();
 
     tracing::info!(
         "[REPL {}] serving {} ops (since_seq={}, current_seq={})",
@@ -237,13 +227,138 @@ pub async fn get_ops(
         current_seq
     );
 
-    let response = GetOpsResponse {
+    Ok(Json(GetOpsResponse {
         tenant_id,
         ops,
         current_seq,
-    };
+        oldest_retained_seq,
+    }))
+}
 
-    (StatusCode::OK, Json(response)).into_response()
+/// GET /internal/tenants
+/// Return visible tenant directory names for startup catch-up discovery.
+pub async fn list_tenants(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ListTenantsResponse>, crate::error_response::HandlerError> {
+    let mut tenants = crate::tenant_dirs::visible_tenant_dir_names(&state.manager.base_path)?;
+    tenants.sort();
+    Ok(Json(ListTenantsResponse { tenants }))
+}
+
+/// GET /internal/snapshot/:tenantId
+/// Export a tenant directory as gzipped snapshot bytes for startup gap recovery.
+pub async fn internal_snapshot(
+    State(state): State<Arc<AppState>>,
+    ValidatedIndexName(tenant_id): ValidatedIndexName,
+) -> Result<impl IntoResponse, crate::error_response::HandlerError> {
+    use crate::error_response::HandlerError;
+
+    let tenant_path = state.manager.base_path.join(&tenant_id);
+    if !tenant_path.exists() {
+        return Err(HandlerError::not_found("Tenant not found"));
+    }
+
+    let bytes = export_to_bytes(&tenant_path).map_err(|error| {
+        tracing::error!(
+            "[REPL {}] failed to export internal snapshot: {}",
+            tenant_id,
+            error
+        );
+        HandlerError::from(error)
+    })?;
+
+    Ok(([(header::CONTENT_TYPE, "application/gzip")], bytes))
+}
+
+/// Search all tenant oplogs for a `move_index` entry whose source matches `source_tenant`.
+///
+/// Used as a fallback when a source tenant's oplog no longer exists because the
+/// index was renamed. Returns ops from the destination stream up to (and including)
+/// the move boundary, so the replica can catch up without missing the move event.
+///
+/// # Arguments
+///
+/// * `state` - Application state providing access to the index manager.
+/// * `source_tenant` - Original tenant name before the move.
+/// * `since_seq` - Sequence number to read ops from.
+///
+/// # Returns
+///
+/// `Some((ops, current_seq, destination_tenant))` if a matching move was found,
+/// or `None` if no destination stream contains a relevant `move_index` entry.
+fn find_moved_source_ops(
+    state: &AppState,
+    source_tenant: &str,
+    since_seq: u64,
+) -> Option<(Vec<OpLogEntry>, u64, String)> {
+    let entries = std::fs::read_dir(&state.manager.base_path).ok()?;
+    let node_id = std::env::var("FLAPJACK_NODE_ID").unwrap_or_else(|_| "unknown".to_string());
+
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let candidate_tenant = entry.file_name().to_string_lossy().to_string();
+        if candidate_tenant == source_tenant || candidate_tenant.starts_with('.') {
+            continue;
+        }
+
+        let oplog_dir = entry.path().join("oplog");
+        if !oplog_dir.exists() {
+            continue;
+        }
+
+        let oplog = match OpLog::open(&oplog_dir, &candidate_tenant, &node_id) {
+            Ok(oplog) => oplog,
+            Err(e) => {
+                tracing::debug!(
+                    "[REPL {}] moved-source fallback skipping {}: failed to open oplog: {}",
+                    source_tenant,
+                    candidate_tenant,
+                    e
+                );
+                continue;
+            }
+        };
+
+        let mut ops = match oplog.read_since(since_seq) {
+            Ok(ops) => ops,
+            Err(e) => {
+                tracing::debug!(
+                    "[REPL {}] moved-source fallback skipping {}: failed to read oplog: {}",
+                    source_tenant,
+                    candidate_tenant,
+                    e
+                );
+                continue;
+            }
+        };
+
+        let Some(move_pos) = ops.iter().position(|op| {
+            op.op_type == "move_index"
+                && op
+                    .payload
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .map(|src| src == source_tenant)
+                    .unwrap_or(false)
+        }) else {
+            continue;
+        };
+
+        // Never return destination writes after the move boundary when serving
+        // source stream catch-up.
+        ops.truncate(move_pos + 1);
+        let current_seq = ops.last().map(|op| op.seq).unwrap_or(since_seq);
+        return Some((ops, current_seq, candidate_tenant));
+    }
+
+    None
 }
 
 /// GET /internal/status
@@ -338,1388 +453,38 @@ pub async fn cluster_status(State(state): State<Arc<AppState>>) -> impl IntoResp
         .into_response()
 }
 
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::*;
-    use flapjack::index::oplog::OpLogEntry;
-    use flapjack::IndexManager;
-    use tempfile::TempDir;
-
-    fn make_upsert_op(
-        seq: u64,
-        ts: u64,
-        node: &str,
-        tenant: &str,
-        id: &str,
-        name: &str,
-    ) -> OpLogEntry {
-        OpLogEntry {
-            seq,
-            timestamp_ms: ts,
-            node_id: node.to_string(),
-            tenant_id: tenant.to_string(),
-            op_type: "upsert".to_string(),
-            payload: serde_json::json!({
-                "objectID": id,
-                "body": {"_id": id, "name": name}
-            }),
-        }
-    }
-
-    fn make_delete_op(seq: u64, ts: u64, node: &str, tenant: &str, id: &str) -> OpLogEntry {
-        OpLogEntry {
-            seq,
-            timestamp_ms: ts,
-            node_id: node.to_string(),
-            tenant_id: tenant.to_string(),
-            op_type: "delete".to_string(),
-            payload: serde_json::json!({"objectID": id}),
-        }
-    }
-
-    /// Poll until a document exists in the index (up to ~2s).
-    /// Panics with a clear message if it never appears.
-    async fn wait_for_doc_exists(manager: &IndexManager, tenant: &str, doc_id: &str) {
-        for _ in 0..200 {
-            if let Ok(Some(_)) = manager.get_document(tenant, doc_id) {
-                return;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        }
-        panic!("{}[{}] never appeared in index after 2s", tenant, doc_id);
-    }
-
-    /// Poll until a document's text field equals the expected value (up to ~2s).
-    /// Panics with a clear diff message if it never matches.
-    async fn wait_for_field(
-        manager: &IndexManager,
-        tenant: &str,
-        doc_id: &str,
-        field: &str,
-        expected: &str,
-    ) {
-        for _ in 0..200 {
-            if let Ok(Some(doc)) = manager.get_document(tenant, doc_id) {
-                if matches!(doc.fields.get(field), Some(flapjack::types::FieldValue::Text(s)) if s == expected)
-                {
-                    return;
-                }
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        }
-        let got = manager
-            .get_document(tenant, doc_id)
-            .ok()
-            .flatten()
-            .and_then(|d| d.fields.get(field).cloned());
-        panic!(
-            "{}[{}].{} never became {:?}; last value: {:?}",
-            tenant, doc_id, field, expected, got
-        );
-    }
-
-    // ── Basic apply ──
-
-    #[tokio::test]
-    async fn apply_ops_upsert_creates_document() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-        let ops = vec![make_upsert_op(1, 1000, "node-a", "t1", "doc1", "Alice")];
-        let result = apply_ops_to_manager(&manager, "t1", &ops).await;
-        assert_eq!(result.unwrap(), 1);
-        // Write queue is async — poll until committed
-        wait_for_doc_exists(&manager, "t1", "doc1").await;
-    }
-
-    #[tokio::test]
-    async fn apply_ops_delete_removes_document() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-        // Insert first and confirm it's visible before testing deletion
-        let upsert = vec![make_upsert_op(1, 1000, "node-a", "t1", "doc1", "Alice")];
-        apply_ops_to_manager(&manager, "t1", &upsert).await.unwrap();
-        wait_for_doc_exists(&manager, "t1", "doc1").await;
-        // Now delete — delete_documents_sync_for_replication is synchronous
-        let del = vec![make_delete_op(2, 2000, "node-a", "t1", "doc1")];
-        apply_ops_to_manager(&manager, "t1", &del).await.unwrap();
-        let doc = manager.get_document("t1", "doc1").unwrap();
-        assert!(doc.is_none(), "doc1 should be gone after delete");
-    }
-
-    #[tokio::test]
-    async fn apply_ops_returns_max_seq() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-        let ops = vec![
-            make_upsert_op(3, 1000, "node-a", "t1", "d1", "Alice"),
-            make_upsert_op(7, 2000, "node-a", "t1", "d2", "Bob"),
-            make_upsert_op(5, 1500, "node-a", "t1", "d3", "Carol"),
-        ];
-        let result = apply_ops_to_manager(&manager, "t1", &ops).await.unwrap();
-        assert_eq!(result, 7, "should return max seq across all ops");
-    }
-
-    // ── LWW: newer timestamp wins ──
-
-    #[tokio::test]
-    async fn lww_newer_timestamp_overwrites_older() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // Apply op at ts=2000 first — poll until it's visible
-        let op_newer = vec![make_upsert_op(
-            1,
-            2000,
-            "node-a",
-            "t1",
-            "doc1",
-            "NewerAlice",
-        )];
-        apply_ops_to_manager(&manager, "t1", &op_newer)
-            .await
-            .unwrap();
-        wait_for_field(&manager, "t1", "doc1", "name", "NewerAlice").await;
-
-        // Apply op at ts=1000 (older) — REJECTED by LWW immediately, no async work
-        let op_older = vec![make_upsert_op(
-            2,
-            1000,
-            "node-b",
-            "t1",
-            "doc1",
-            "OlderAlice",
-        )];
-        apply_ops_to_manager(&manager, "t1", &op_older)
-            .await
-            .unwrap();
-
-        let doc = manager.get_document("t1", "doc1").unwrap().unwrap();
-        let name = doc.fields.get("name");
-        assert!(
-            matches!(name, Some(flapjack::types::FieldValue::Text(s)) if s == "NewerAlice"),
-            "newer write should win; got: {:?}",
-            doc.fields.get("name")
-        );
-    }
-
-    #[tokio::test]
-    async fn lww_older_upsert_does_not_overwrite_newer() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // Apply newer first, then try to apply older — both in one batch.
-        // ts=5000 "Final" wins; ts=1000 "Stale" is deduped away before queuing.
-        let ops = vec![
-            make_upsert_op(1, 5000, "node-a", "t1", "doc1", "Final"),
-            make_upsert_op(2, 1000, "node-b", "t1", "doc1", "Stale"),
-        ];
-        apply_ops_to_manager(&manager, "t1", &ops).await.unwrap();
-        wait_for_field(&manager, "t1", "doc1", "name", "Final").await;
-
-        let doc = manager.get_document("t1", "doc1").unwrap().unwrap();
-        let name = doc.fields.get("name");
-        assert!(
-            matches!(name, Some(flapjack::types::FieldValue::Text(s)) if s == "Final"),
-            "stale op should not overwrite newer; got: {:?}",
-            doc.fields.get("name")
-        );
-    }
-
-    // ── LWW: tie-break by node_id ──
-
-    #[tokio::test]
-    async fn lww_same_timestamp_higher_node_id_wins() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // Apply from "z-node" — poll until visible
-        let op_z = vec![make_upsert_op(1, 1000, "z-node", "t1", "doc1", "ZNode")];
-        apply_ops_to_manager(&manager, "t1", &op_z).await.unwrap();
-        wait_for_field(&manager, "t1", "doc1", "name", "ZNode").await;
-
-        // "a-node" at same ts=1000 — REJECTED (z > a lexicographically), no async work
-        let op_a = vec![make_upsert_op(2, 1000, "a-node", "t1", "doc1", "ANode")];
-        apply_ops_to_manager(&manager, "t1", &op_a).await.unwrap();
-
-        let doc = manager.get_document("t1", "doc1").unwrap().unwrap();
-        let name = doc.fields.get("name");
-        assert!(
-            matches!(name, Some(flapjack::types::FieldValue::Text(s)) if s == "ZNode"),
-            "z-node (higher lexicographic) should win tie-break; got: {:?}",
-            doc.fields.get("name")
-        );
-    }
-
-    // ── LWW: stale delete is rejected ──
-
-    #[tokio::test]
-    async fn lww_stale_delete_does_not_remove_newer_upsert() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // Write doc at ts=2000 — poll until visible
-        let upsert = vec![make_upsert_op(1, 2000, "node-a", "t1", "doc1", "Alice")];
-        apply_ops_to_manager(&manager, "t1", &upsert).await.unwrap();
-        wait_for_doc_exists(&manager, "t1", "doc1").await;
-
-        // Try to delete with stale ts=1000 — REJECTED immediately by LWW, no async work
-        let del = vec![make_delete_op(2, 1000, "node-b", "t1", "doc1")];
-        apply_ops_to_manager(&manager, "t1", &del).await.unwrap();
-
-        let doc = manager.get_document("t1", "doc1").unwrap();
-        assert!(doc.is_some(), "stale delete should not remove a newer doc");
-    }
-
-    // ── LWW: same-node ops always apply in sequence ──
-
-    #[tokio::test]
-    async fn lww_same_node_sequential_ops_always_apply() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // V1 first — poll until visible
-        let op1 = vec![make_upsert_op(1, 1000, "node-a", "t1", "doc1", "V1")];
-        apply_ops_to_manager(&manager, "t1", &op1).await.unwrap();
-        wait_for_field(&manager, "t1", "doc1", "name", "V1").await;
-
-        // V2 newer timestamp — accepted, poll until visible
-        let op2 = vec![make_upsert_op(2, 2000, "node-a", "t1", "doc1", "V2")];
-        apply_ops_to_manager(&manager, "t1", &op2).await.unwrap();
-        wait_for_field(&manager, "t1", "doc1", "name", "V2").await;
-
-        let doc = manager.get_document("t1", "doc1").unwrap().unwrap();
-        let name = doc.fields.get("name");
-        assert!(
-            matches!(name, Some(flapjack::types::FieldValue::Text(s)) if s == "V2"),
-            "sequential ops from same node should apply in order; got: {:?}",
-            doc.fields.get("name")
-        );
-    }
-
-    // ── LWW: primary write blocks stale replicated op ──
-    // This test validates the fix for the "known limitation" from session 23:
-    // primary-written docs must populate lww_map so stale replicated ops are rejected.
-
-    #[tokio::test]
-    async fn lww_primary_write_blocks_stale_replicated_op() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // Write a doc via the primary path (add_documents_sync — goes through write_queue)
-        let doc = flapjack::types::Document {
-            id: "doc1".to_string(),
-            fields: {
-                let mut m = std::collections::HashMap::new();
-                m.insert(
-                    "name".to_string(),
-                    flapjack::types::FieldValue::Text("Primary".to_string()),
-                );
-                m
-            },
-        };
-        manager.create_tenant("t1").unwrap();
-        manager.add_documents_sync("t1", vec![doc]).await.unwrap();
-
-        // Confirm lww_map was populated by the write_queue
-        let lww = manager.get_lww("t1", "doc1");
-        assert!(
-            lww.is_some(),
-            "primary write must populate lww_map; got None"
-        );
-        let (primary_ts, _) = lww.unwrap();
-        assert!(
-            primary_ts > 0,
-            "primary_ts should be a real system timestamp"
-        );
-
-        // Now try to replicate a stale op with ts=1 (much older than primary write).
-        // LWW rejects this before queuing — no async work, result is immediately visible.
-        let stale_op = vec![make_upsert_op(99, 1, "remote-node", "t1", "doc1", "Stale")];
-        apply_ops_to_manager(&manager, "t1", &stale_op)
-            .await
-            .unwrap();
-
-        // The stale replicated op must NOT overwrite the primary write
-        let fetched = manager.get_document("t1", "doc1").unwrap().unwrap();
-        let name = fetched.fields.get("name");
-        assert!(
-            matches!(name, Some(flapjack::types::FieldValue::Text(s)) if s == "Primary"),
-            "stale replicated op must not overwrite primary write; got: {:?}",
-            name
-        );
-    }
-
-    // ── LWW: primary delete blocks stale replicated upsert ──
-
-    #[tokio::test]
-    async fn lww_primary_delete_blocks_stale_replicated_upsert() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // First write the doc via primary path
-        let doc = flapjack::types::Document {
-            id: "doc1".to_string(),
-            fields: {
-                let mut m = std::collections::HashMap::new();
-                m.insert(
-                    "name".to_string(),
-                    flapjack::types::FieldValue::Text("Primary".to_string()),
-                );
-                m
-            },
-        };
-        manager.create_tenant("t1").unwrap();
-        manager.add_documents_sync("t1", vec![doc]).await.unwrap();
-
-        // Delete via primary path
-        manager
-            .delete_documents_sync("t1", vec!["doc1".to_string()])
-            .await
-            .unwrap();
-
-        // Confirm lww_map records the delete timestamp
-        let lww = manager.get_lww("t1", "doc1");
-        assert!(lww.is_some(), "primary delete must populate lww_map");
-
-        // Now try to replicate a stale upsert with ts=1 — REJECTED by LWW immediately.
-        // No async work queued; result is visible without waiting.
-        let stale_upsert = vec![make_upsert_op(
-            99,
-            1,
-            "remote-node",
-            "t1",
-            "doc1",
-            "StaleRevive",
-        )];
-        apply_ops_to_manager(&manager, "t1", &stale_upsert)
-            .await
-            .unwrap();
-
-        let doc = manager.get_document("t1", "doc1").unwrap();
-        assert!(
-            doc.is_none(),
-            "stale replicated upsert must not revive a primary-deleted doc"
-        );
-    }
-
-    // ── LWW: lww_map rebuilt from oplog on restart (P3) ──
-    // Without P3: after restart lww_map is empty → stale replicated ops bypass LWW
-    // With P3:    recover_from_oplog rebuilds lww_map → stale ops correctly rejected
-
-    #[tokio::test]
-    async fn lww_map_rebuilt_from_oplog_blocks_stale_op_after_restart() {
-        let tmp = TempDir::new().unwrap();
-        let base = tmp.path().to_path_buf();
-
-        // PHASE 1: Primary write — establishes LWW state in oplog
-        let primary_ts;
-        {
-            let manager = IndexManager::new(&base);
-            manager.create_tenant("t_restart").unwrap();
-            let doc = flapjack::types::Document {
-                id: "doc1".to_string(),
-                fields: {
-                    let mut m = std::collections::HashMap::new();
-                    m.insert(
-                        "name".to_string(),
-                        flapjack::types::FieldValue::Text("Original".to_string()),
-                    );
-                    m
-                },
-            };
-            manager
-                .add_documents_sync("t_restart", vec![doc])
-                .await
-                .unwrap();
-
-            // Capture oplog timestamp — this is what LWW must be rebuilt from
-            let oplog = manager.get_or_create_oplog("t_restart").unwrap();
-            let ops = oplog.read_since(0).unwrap();
-            let upsert_op = ops
-                .iter()
-                .find(|o| o.op_type == "upsert")
-                .expect("should have upsert in oplog after primary write");
-            primary_ts = upsert_op.timestamp_ms;
-            assert!(primary_ts > 0, "oplog should record a real timestamp");
-
-            manager.graceful_shutdown().await;
-        }
-
-        // PHASE 2: Restart (new IndexManager = fresh empty lww_map until P3 fix)
-        {
-            let manager = IndexManager::new(&base);
-
-            // Try to apply a stale replicated op (1ms before the primary write).
-            // With P3: lww_map rebuilt from oplog → REJECTED immediately.
-            // Without P3: would be accepted (queued async) — we poll briefly to detect that case.
-            let stale_op = vec![make_upsert_op(
-                99,
-                primary_ts.saturating_sub(1),
-                "remote-node",
-                "t_restart",
-                "doc1",
-                "StaleOverwrite",
-            )];
-            apply_ops_to_manager(&manager, "t_restart", &stale_op)
-                .await
-                .unwrap();
-
-            // Poll briefly — if P3 is broken the write queue would commit "StaleOverwrite"
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-            // P3: lww_map rebuilt from oplog → stale op rejected → "Original" survives
-            let fetched = manager.get_document("t_restart", "doc1").unwrap();
-            assert!(
-                fetched.is_some(),
-                "doc1 must exist (was written by primary)"
-            );
-            let name = fetched.unwrap().fields.get("name").cloned();
-            assert!(
-                matches!(&name, Some(flapjack::types::FieldValue::Text(s)) if s == "Original"),
-                "stale replicated op must not overwrite after restart; lww_map must be rebuilt from oplog. got: {:?}",
-                name
-            );
-
-            manager.graceful_shutdown().await;
-        }
-    }
-
-    // ── LWW: lww_map rebuilt for normal restart (no uncommitted ops) ──
-    // Covers the case where committed_seq is current (normal shutdown, not crash).
-    // recover_from_oplog must still rebuild lww_map even when there's nothing to replay.
-
-    #[tokio::test]
-    async fn lww_map_rebuilt_on_normal_restart_no_uncommitted_ops() {
-        let tmp = TempDir::new().unwrap();
-        let base = tmp.path().to_path_buf();
-
-        let primary_ts;
-        {
-            let manager = IndexManager::new(&base);
-            manager.create_tenant("t_normal_restart").unwrap();
-            let doc = flapjack::types::Document {
-                id: "docA".to_string(),
-                fields: {
-                    let mut m = std::collections::HashMap::new();
-                    m.insert(
-                        "name".to_string(),
-                        flapjack::types::FieldValue::Text("Persisted".to_string()),
-                    );
-                    m
-                },
-            };
-            manager
-                .add_documents_sync("t_normal_restart", vec![doc])
-                .await
-                .unwrap();
-
-            let oplog = manager.get_or_create_oplog("t_normal_restart").unwrap();
-            let ops = oplog.read_since(0).unwrap();
-            primary_ts = ops
-                .iter()
-                .find(|o| o.op_type == "upsert")
-                .map(|o| o.timestamp_ms)
-                .unwrap_or(0);
-            assert!(primary_ts > 0);
-
-            // Normal clean shutdown: committed_seq is updated, no uncommitted ops
-            manager.graceful_shutdown().await;
-        }
-
-        // Restart: committed_seq is current → no document replay needed.
-        // But lww_map must still be rebuilt so stale ops are rejected.
-        {
-            let manager = IndexManager::new(&base);
-
-            let stale_op = vec![make_upsert_op(
-                99,
-                primary_ts.saturating_sub(1),
-                "remote-node",
-                "t_normal_restart",
-                "docA",
-                "ShouldBeRejected",
-            )];
-            apply_ops_to_manager(&manager, "t_normal_restart", &stale_op)
-                .await
-                .unwrap();
-
-            // Stale upsert is rejected by LWW (P3 correct). If P3 were broken the write
-            // queue would commit "ShouldBeRejected" asynchronously — wait briefly to detect that.
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-            let fetched = manager.get_document("t_normal_restart", "docA").unwrap();
-            assert!(fetched.is_some());
-            let name = fetched.unwrap().fields.get("name").cloned();
-            assert!(
-                matches!(&name, Some(flapjack::types::FieldValue::Text(s)) if s == "Persisted"),
-                "stale op must be rejected even after clean shutdown restart; got: {:?}",
-                name
-            );
-
-            manager.graceful_shutdown().await;
-        }
-    }
-
-    // ── LWW: lww_map rebuild blocks stale DELETE after restart (P3) ──
-    // Variant of the P3 crash test but with a stale DELETE instead of a stale UPSERT.
-    // A stale replicated delete arriving after restart must NOT remove a newer primary write.
-
-    #[tokio::test]
-    async fn lww_map_rebuilt_from_oplog_blocks_stale_delete_after_restart() {
-        let tmp = TempDir::new().unwrap();
-        let base = tmp.path().to_path_buf();
-
-        let primary_ts;
-        {
-            let manager = IndexManager::new(&base);
-            manager.create_tenant("t_del_restart").unwrap();
-            let doc = flapjack::types::Document {
-                id: "doc1".to_string(),
-                fields: {
-                    let mut m = std::collections::HashMap::new();
-                    m.insert(
-                        "name".to_string(),
-                        flapjack::types::FieldValue::Text("ShouldSurvive".to_string()),
-                    );
-                    m
-                },
-            };
-            manager
-                .add_documents_sync("t_del_restart", vec![doc])
-                .await
-                .unwrap();
-
-            let oplog = manager.get_or_create_oplog("t_del_restart").unwrap();
-            let ops = oplog.read_since(0).unwrap();
-            primary_ts = ops
-                .iter()
-                .find(|o| o.op_type == "upsert")
-                .map(|o| o.timestamp_ms)
-                .expect("should have upsert in oplog");
-            assert!(primary_ts > 0);
-
-            manager.graceful_shutdown().await;
-        }
-
-        // Restart: lww_map is rebuilt from oplog → stale delete ts=primary_ts-1 must be rejected
-        {
-            let manager = IndexManager::new(&base);
-
-            let stale_delete = vec![make_delete_op(
-                99,
-                primary_ts.saturating_sub(1),
-                "remote-node",
-                "t_del_restart",
-                "doc1",
-            )];
-            apply_ops_to_manager(&manager, "t_del_restart", &stale_delete)
-                .await
-                .unwrap();
-
-            // Stale delete is rejected by LWW (P3 correct). If P3 were broken, the delete
-            // runs synchronously via delete_documents_sync_for_replication (also .awaited),
-            // so the outcome is committed before apply_ops_to_manager returns — no sleep needed.
-            let fetched = manager.get_document("t_del_restart", "doc1").unwrap();
-            assert!(
-                fetched.is_some(),
-                "stale delete must not remove doc after restart; lww_map must be rebuilt from oplog"
-            );
-
-            manager.graceful_shutdown().await;
-        }
-    }
-
-    // ── Batch ordering: upsert→delete→re-upsert in a single batch ──
-    // Regression test: apply_ops_to_manager used to split ops into separate
-    // upserts and deletes lists, applying all upserts first then all deletes.
-    // This caused a later re-upsert (ts=3000) to be overridden by an earlier
-    // delete (ts=2000) because the delete was applied after the upsert.
-
-    #[tokio::test]
-    async fn batch_upsert_delete_reupsert_same_doc_keeps_final_upsert() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // Single batch: create → delete → re-create the SAME doc
-        let ops = vec![
-            make_upsert_op(1, 1000, "node-a", "t1", "doc1", "Version1"),
-            make_delete_op(2, 2000, "node-a", "t1", "doc1"),
-            make_upsert_op(3, 3000, "node-a", "t1", "doc1", "Version3"),
-        ];
-        let result = apply_ops_to_manager(&manager, "t1", &ops).await;
-        assert_eq!(result.unwrap(), 3);
-
-        // Wait for write queue to commit — the ts=3000 re-upsert must win over the ts=2000 delete
-        wait_for_field(&manager, "t1", "doc1", "name", "Version3").await;
-    }
-
-    #[tokio::test]
-    async fn batch_upsert_then_delete_same_doc_deletes() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-
-        // Single batch: create → delete the SAME doc (delete is final)
-        let ops = vec![
-            make_upsert_op(1, 1000, "node-a", "t1", "doc1", "ToDelete"),
-            make_delete_op(2, 2000, "node-a", "t1", "doc1"),
-        ];
-        apply_ops_to_manager(&manager, "t1", &ops).await.unwrap();
-
-        // The ts=2000 delete wins: the upsert is filtered from the batch, and the delete
-        // runs synchronously via delete_documents_sync_for_replication. No sleep needed.
-        let doc = manager.get_document("t1", "doc1").unwrap();
-        assert!(
-            doc.is_none(),
-            "doc1 should be deleted — the ts=2000 delete is the final op"
-        );
-    }
-
-    // ── Unknown op type skipped gracefully ──
-
-    #[tokio::test]
-    async fn apply_ops_unknown_type_skipped() {
-        let tmp = TempDir::new().unwrap();
-        let manager = IndexManager::new(tmp.path());
-        let op = OpLogEntry {
-            seq: 1,
-            timestamp_ms: 1000,
-            node_id: "node-a".to_string(),
-            tenant_id: "t1".to_string(),
-            op_type: "noop_unknown".to_string(),
-            payload: serde_json::json!({}),
-        };
-        // Should not panic, just skip
-        let result = apply_ops_to_manager(&manager, "t1", &[op]).await;
-        assert_eq!(result.unwrap(), 1);
-    }
-
-    // ── /internal/storage endpoint tests ──
-
-    use crate::handlers::metrics::MetricsState;
-    use axum::body::Body;
-    use axum::http::Request;
-    use axum::routing::get;
-    use axum::Router;
-    use tower::ServiceExt;
-
-    fn make_storage_state(tmp: &TempDir) -> Arc<AppState> {
-        Arc::new(AppState {
-            manager: IndexManager::new(tmp.path()),
-            key_store: None,
-            replication_manager: None,
-            ssl_manager: None,
-            analytics_engine: None,
-            experiment_store: None,
-            metrics_state: Some(MetricsState::new()),
-            usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-            paused_indexes: crate::pause_registry::PausedIndexes::new(),
-            start_time: std::time::Instant::now(),
-            #[cfg(feature = "vector-search")]
-            embedder_store: std::sync::Arc::new(crate::embedder_store::EmbedderStore::new()),
-        })
-    }
-
-    #[tokio::test]
-    async fn storage_all_returns_tenant_list() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        state.manager.create_tenant("tenant_a").unwrap();
-        state.manager.create_tenant("tenant_b").unwrap();
-
-        let app = Router::new()
-            .route("/internal/storage", get(super::storage_all))
-            .with_state(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/internal/storage")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        let tenants = json["tenants"].as_array().unwrap();
-        assert_eq!(tenants.len(), 2, "should have 2 tenants");
-
-        let ids: Vec<&str> = tenants.iter().map(|t| t["id"].as_str().unwrap()).collect();
-        assert!(ids.contains(&"tenant_a"), "should contain tenant_a");
-        assert!(ids.contains(&"tenant_b"), "should contain tenant_b");
-
-        // Each tenant should have bytes field > 0 (tantivy creates meta files)
-        for t in tenants {
-            assert!(
-                t["bytes"].as_u64().unwrap() > 0,
-                "tenant {} should have non-zero bytes",
-                t["id"]
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn storage_index_returns_bytes_for_specific_tenant() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        state.manager.create_tenant("my_index").unwrap();
-
-        let app = Router::new()
-            .route("/internal/storage/:indexName", get(super::storage_index))
-            .with_state(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/internal/storage/my_index")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["index"].as_str().unwrap(), "my_index");
-        assert!(
-            json["bytes"].as_u64().unwrap() > 0,
-            "existing tenant should have non-zero bytes"
-        );
-    }
-
-    #[tokio::test]
-    async fn storage_index_returns_zero_for_nonexistent() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        let app = Router::new()
-            .route("/internal/storage/:indexName", get(super::storage_index))
-            .with_state(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/internal/storage/no_such_index")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["index"].as_str().unwrap(), "no_such_index");
-        assert_eq!(
-            json["bytes"].as_u64().unwrap(),
-            0,
-            "nonexistent tenant should have 0 bytes"
-        );
-    }
-
-    // ── doc_count in /internal/storage ──
-
-    #[tokio::test]
-    async fn storage_index_includes_doc_count() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        state.manager.create_tenant("dc_test").unwrap();
-        let docs = vec![
-            flapjack::types::Document {
-                id: "d1".to_string(),
-                fields: std::collections::HashMap::from([(
-                    "name".to_string(),
-                    flapjack::types::FieldValue::Text("Alice".to_string()),
-                )]),
-            },
-            flapjack::types::Document {
-                id: "d2".to_string(),
-                fields: std::collections::HashMap::from([(
-                    "name".to_string(),
-                    flapjack::types::FieldValue::Text("Bob".to_string()),
-                )]),
-            },
-        ];
-        state
-            .manager
-            .add_documents_sync("dc_test", docs)
-            .await
-            .unwrap();
-
-        let app = Router::new()
-            .route("/internal/storage/:indexName", get(super::storage_index))
-            .with_state(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/internal/storage/dc_test")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["doc_count"].as_u64().unwrap(), 2, "should have 2 docs");
-    }
-
-    #[tokio::test]
-    async fn storage_all_includes_doc_count() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        state.manager.create_tenant("t_dc").unwrap();
-        let docs = vec![flapjack::types::Document {
-            id: "d1".to_string(),
-            fields: std::collections::HashMap::from([(
-                "name".to_string(),
-                flapjack::types::FieldValue::Text("Alice".to_string()),
-            )]),
-        }];
-        state
-            .manager
-            .add_documents_sync("t_dc", docs)
-            .await
-            .unwrap();
-
-        let app = Router::new()
-            .route("/internal/storage", get(super::storage_all))
-            .with_state(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/internal/storage")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        let tenants = json["tenants"].as_array().unwrap();
-        let tenant = tenants.iter().find(|t| t["id"] == "t_dc").unwrap();
-        assert_eq!(
-            tenant["doc_count"].as_u64().unwrap(),
-            1,
-            "should have 1 doc"
-        );
-    }
-
-    // ── /internal/status enhancements ──
-
-    #[tokio::test]
-    async fn status_includes_storage_total_and_tenant_count() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        state.manager.create_tenant("s1").unwrap();
-        state.manager.create_tenant("s2").unwrap();
-
-        let app = Router::new()
-            .route("/internal/status", get(super::replication_status))
-            .with_state(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/internal/status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert!(
-            json["storage_total_bytes"].as_u64().is_some(),
-            "should have storage_total_bytes"
-        );
-        assert!(
-            json["storage_total_bytes"].as_u64().unwrap() > 0,
-            "total bytes should be > 0 with 2 tenants"
-        );
-        assert_eq!(
-            json["tenant_count"].as_u64().unwrap(),
-            2,
-            "should have 2 tenants loaded"
-        );
-    }
-
-    #[cfg(feature = "vector-search")]
-    #[tokio::test]
-    async fn test_internal_status_includes_vector_memory() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        // Add some vectors so memory > 0
-        let mut vi =
-            flapjack::vector::index::VectorIndex::new(3, flapjack::vector::MetricKind::Cos)
-                .unwrap();
-        vi.add("doc1", &[1.0, 0.0, 0.0]).unwrap();
-        vi.add("doc2", &[0.0, 1.0, 0.0]).unwrap();
-        state.manager.set_vector_index("vec_tenant", vi);
-
-        let app = Router::new()
-            .route("/internal/status", get(super::replication_status))
-            .with_state(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/internal/status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert!(
-            json["vector_memory_bytes"].is_number(),
-            "status response should include vector_memory_bytes field, got: {:?}",
-            json
-        );
-        assert!(
-            json["vector_memory_bytes"].as_u64().unwrap() > 0,
-            "vector_memory_bytes should be > 0 when vectors exist"
-        );
-    }
-
-    // ── Pause endpoint tests ──
-
-    fn make_pause_app(state: Arc<AppState>) -> Router {
-        Router::new()
-            .route(
-                "/internal/pause/:indexName",
-                axum::routing::post(super::pause_index),
-            )
-            .route(
-                "/internal/resume/:indexName",
-                axum::routing::post(super::resume_index),
-            )
-            .with_state(state)
-    }
-
-    #[tokio::test]
-    async fn test_pause_endpoint_returns_200() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-        let app = make_pause_app(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/pause/foo")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["index"], "foo");
-        assert_eq!(json["paused"], true);
-    }
-
-    #[tokio::test]
-    async fn test_pause_endpoint_unknown_index_still_200() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-        let app = make_pause_app(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/pause/nonexistent_index")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_pause_endpoint_marks_index_in_registry() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-        let app = make_pause_app(state.clone());
-
-        let _resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/pause/foo")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert!(
-            state.paused_indexes.is_paused("foo"),
-            "registry should show foo as paused after endpoint call"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_pause_endpoint_double_call_idempotent() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        // First call
-        let app1 = make_pause_app(state.clone());
-        let resp1 = app1
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/pause/foo")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp1.status(), StatusCode::OK);
-
-        // Second call (same index)
-        let app2 = make_pause_app(state);
-        let resp2 = app2
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/pause/foo")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp2.status(), StatusCode::OK);
-    }
-
-    // ── Resume endpoint tests ──
-
-    #[tokio::test]
-    async fn test_resume_endpoint_returns_200() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-        // Pause first so there's something to resume
-        state.paused_indexes.pause("foo");
-        let app = make_pause_app(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/resume/foo")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["index"], "foo");
-        assert_eq!(json["paused"], false);
-    }
-
-    #[tokio::test]
-    async fn test_resume_endpoint_unknown_index_still_200() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-        let app = make_pause_app(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/resume/never_paused")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_resume_endpoint_clears_pause_in_registry() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-        state.paused_indexes.pause("foo");
-        let app = make_pause_app(state.clone());
-
-        let _resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/resume/foo")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert!(
-            !state.paused_indexes.is_paused("foo"),
-            "foo should no longer be paused after resume endpoint"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_resume_endpoint_double_call_idempotent() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        // First resume (not paused — should still be 200)
-        let app1 = make_pause_app(state.clone());
-        let resp1 = app1
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/resume/foo")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp1.status(), StatusCode::OK);
-
-        // Second resume
-        let app2 = make_pause_app(state);
-        let resp2 = app2
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/resume/foo")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp2.status(), StatusCode::OK);
-    }
-
-    // ── Full cycle integration test (2I) ────────────────────────────────
-
-    #[tokio::test]
-    async fn test_full_pause_write_resume_cycle() {
-        let tmp = TempDir::new().unwrap();
-        let state = make_storage_state(&tmp);
-
-        // Build a combined router with pause/resume + write + search endpoints
-        fn make_cycle_app(state: Arc<AppState>) -> Router {
-            Router::new()
-                .route(
-                    "/internal/pause/:indexName",
-                    axum::routing::post(super::pause_index),
-                )
-                .route(
-                    "/internal/resume/:indexName",
-                    axum::routing::post(super::resume_index),
-                )
-                .route(
-                    "/1/indexes/:indexName/batch",
-                    axum::routing::post(crate::handlers::objects::add_documents),
-                )
-                .route(
-                    "/1/indexes/:indexName/query",
-                    axum::routing::post(crate::handlers::search::search),
-                )
-                .with_state(state)
-        }
-
-        // Step 1: Write before pause — should NOT be 503
-        let app = make_cycle_app(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/1/indexes/products/batch")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_ne!(
-            resp.status(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "step 1: write before pause should NOT return 503"
-        );
-
-        // Step 2: Pause "products"
-        let app = make_cycle_app(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/pause/products")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            resp.status(),
+/// POST /internal/rotate-admin-key
+/// Generate a new admin key, update the in-memory KeyStore and persist to disk.
+/// Returns the new plaintext key. Requires admin auth.
+pub async fn rotate_admin_key(
+    key_store: axum::Extension<Arc<crate::auth::KeyStore>>,
+) -> impl IntoResponse {
+    match key_store.rotate_admin_key() {
+        Ok(new_key) => (
             StatusCode::OK,
-            "step 2: pause should return 200"
-        );
-
-        // Step 3: Write while paused — should be 503
-        let app = make_cycle_app(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/1/indexes/products/batch")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "step 3: write while paused should return 503"
-        );
-        // Verify Retry-After header is present (required by 2B checklist)
-        assert_eq!(
-            resp.headers()
-                .get("Retry-After")
-                .and_then(|v| v.to_str().ok()),
-            Some("1"),
-            "step 3: 503 response should include Retry-After: 1 header"
-        );
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            json["error"], "index_paused",
-            "step 3: error code should be index_paused"
-        );
-
-        // Step 4: Search/read while paused — reads must NOT be blocked
-        let app = make_cycle_app(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/1/indexes/products/query")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(r#"{"query":""}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_ne!(
-            resp.status(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "step 4: search while paused must NOT return 503 — reads are never blocked"
-        );
-
-        // Step 5: Resume "products"
-        let app = make_cycle_app(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/resume/products")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::OK,
-            "step 5: resume should return 200"
-        );
-
-        // Step 6: Write after resume — should NOT be 503
-        let app = make_cycle_app(state.clone());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/1/indexes/products/batch")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_ne!(
-            resp.status(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "step 6: write after resume should NOT return 503"
-        );
+            Json(serde_json::json!({ "key": new_key, "message": "Admin key rotated" })),
+        )
+            .into_response(),
+        Err(e) => crate::error_response::json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to rotate admin key: {}", e),
+        ),
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+#[path = "internal_tests.rs"]
+mod tests;
 
 /// POST /internal/analytics-rollup
 ///
 /// Receive a pre-computed analytics rollup from a peer and store it in the
 /// global rollup cache. Part of Phase 4 (HA Analytics Tier 2).
 ///
-/// No authentication required — relies on network isolation for peer trust,
-/// same as the other /internal/* endpoints.
+/// Protected by auth middleware in normal operation: `/internal/*` routes
+/// require the admin key (see `required_acl_for_route`). In `--no-auth` local
+/// dev mode, these routes are intentionally open.
 pub async fn receive_analytics_rollup(
     Json(rollup): Json<crate::analytics_cluster::AnalyticsRollup>,
 ) -> impl IntoResponse {
@@ -1778,7 +543,7 @@ pub async fn storage_all(State(state): State<Arc<AppState>>) -> impl IntoRespons
 /// Returns disk usage and doc count for a specific tenant.
 pub async fn storage_index(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
 ) -> impl IntoResponse {
     let bytes = state.manager.tenant_storage_bytes(&index_name);
     let doc_count = state.manager.tenant_doc_count(&index_name).unwrap_or(0);
@@ -1814,7 +579,7 @@ pub async fn acme_challenge(
 /// Mark an index as paused — writes will be rejected with 503.
 pub async fn pause_index(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
 ) -> impl IntoResponse {
     state.paused_indexes.pause(&index_name);
     tracing::info!("[PAUSE] index '{}' paused", index_name);
@@ -1829,7 +594,7 @@ pub async fn pause_index(
 /// Clear the paused flag — writes resume normally.
 pub async fn resume_index(
     State(state): State<Arc<AppState>>,
-    Path(index_name): Path<String>,
+    ValidatedIndexName(index_name): ValidatedIndexName,
 ) -> impl IntoResponse {
     state.paused_indexes.resume(&index_name);
     tracing::info!("[PAUSE] index '{}' resumed", index_name);

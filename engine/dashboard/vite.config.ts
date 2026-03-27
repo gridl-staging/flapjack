@@ -56,6 +56,14 @@ export default defineConfig(({ command }) => ({
     host: instance.host,
     strictPort: true,
     port: DASHBOARD_PORT,
+    watch: {
+      // Playwright writes these directories continuously during runs; watching them can
+      // trigger reload churn that destabilizes browser-test sessions.
+      ignored: [
+        '**/playwright-report/**',
+        '**/test-results/**',
+      ],
+    },
     proxy: {
       '/1': BACKEND_TARGET,
       '/2': BACKEND_TARGET,

@@ -1,0 +1,74 @@
+# Single-node Flapjack with MinIO for S3 snapshot verification.
+#
+# Proves: snapshot upload, download, list, restore, scheduled backups,
+# and auto-restore from S3 on empty data directory.
+#
+# Usage:
+#   docker compose up -d --build
+#   ./test_snapshots.sh
+#   docker compose down -v
+
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks:
+      - fj-net
+
+  # Create the bucket on startup via the MinIO client
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/flapjack-snapshots &&
+        echo 'Bucket flapjack-snapshots created'
+      "
+    networks:
+      - fj-net
+
+  flapjack:
+    build:
+      context: ../../..
+      dockerfile: engine/Dockerfile
+    depends_on:
+      minio-setup:
+        condition: service_completed_successfully
+    environment:
+      FLAPJACK_DATA_DIR: /data
+      FLAPJACK_BIND_ADDR: "0.0.0.0:7700"
+      FLAPJACK_NO_AUTH: "1"
+      FLAPJACK_S3_BUCKET: flapjack-snapshots
+      FLAPJACK_S3_REGION: us-east-1
+      FLAPJACK_S3_ENDPOINT: "http://minio:9000"
+      FLAPJACK_SNAPSHOT_INTERVAL: "30"
+      FLAPJACK_SNAPSHOT_RETENTION: "10"
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      RUST_LOG: info
+    ports:
+      - "7700:7700"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7700/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - fj-net
+
+networks:
+  fj-net:

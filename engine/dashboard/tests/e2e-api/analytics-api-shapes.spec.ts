@@ -1,4 +1,5 @@
 import { test, expect } from '../fixtures/auth.fixture';
+import type { APIRequestContext } from '@playwright/test';
 import { API_BASE, API_HEADERS } from '../fixtures/local-instance';
 
 /**
@@ -9,7 +10,7 @@ import { API_BASE, API_HEADERS } from '../fixtures/local-instance';
  * see tests/e2e-ui/full/analytics*.spec.ts
  */
 
-async function skipIfNoServer({ request }: { request: any }) {
+async function skipIfNoServer({ request }: { request: APIRequestContext }) {
   try {
     const res = await request.get(`${API_BASE}/health`, { timeout: 3000 });
     if (!res.ok()) test.skip(true, 'Flapjack server not available');
@@ -26,7 +27,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       params: { index: 'test-index', startDate: '2026-01-01', endDate: '2026-12-31' },
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('count');
     expect(typeof body.count).toBe('number');
@@ -40,7 +41,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       params: { index: 'test-index', startDate: '2026-01-01', endDate: '2026-12-31', limit: '5' },
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('searches');
     expect(Array.isArray(body.searches)).toBe(true);
@@ -51,10 +52,17 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       params: { index: 'test-index', startDate: '2026-01-01', endDate: '2026-12-31' },
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('rate');
-    expect(typeof body.rate).toBe('number');
+    if (body.rate !== null) {
+      expect(typeof body.rate).toBe('number');
+    }
+    expect(typeof body.count).toBe('number');
+    expect(typeof body.noResults).toBe('number');
+    if (body.dates !== undefined) {
+      expect(Array.isArray(body.dates)).toBe(true);
+    }
   });
 
   test('GET /2/clicks/clickThroughRate returns expected shape', async ({ request }) => {
@@ -62,7 +70,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       params: { index: 'test-index', startDate: '2026-01-01', endDate: '2026-12-31' },
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('rate');
     expect(body).toHaveProperty('clickCount');
@@ -74,7 +82,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       params: { index: 'test-index', startDate: '2026-01-01', endDate: '2026-12-31' },
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('count');
     expect(typeof body.count).toBe('number');
@@ -85,7 +93,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       params: { index: 'test-index', startDate: '2026-01-01', endDate: '2026-12-31' },
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('filters');
     expect(Array.isArray(body.filters)).toBe(true);
@@ -96,7 +104,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       params: { index: 'test-index', startDate: '2026-01-01', endDate: '2026-12-31' },
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('hits');
     expect(Array.isArray(body.hits)).toBe(true);
@@ -107,7 +115,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       params: { index: 'movies' },
       headers: API_HEADERS,
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('enabled');
     expect(body).toHaveProperty('hasData');
@@ -132,7 +140,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
         }],
       },
     });
-    expect([200, 201, 202].includes(res.status())).toBeTruthy();
+    expect([200, 201, 202]).toContain(res.status());
   });
 
   test('POST /1/events rejects events without required fields', async ({ request }) => {
@@ -144,7 +152,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
         }],
       },
     });
-    expect([400, 422].includes(res.status())).toBeTruthy();
+    expect([400, 422]).toContain(res.status());
   });
 
   test('search with clickAnalytics=true returns queryID', async ({ request }) => {
@@ -158,14 +166,14 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
         ],
       },
     });
-    expect(batchRes.ok()).toBeTruthy();
+    expect([200, 202]).toContain(batchRes.status());
 
     await expect(async () => {
       const pollRes = await request.post(`${API_BASE}/1/indexes/${indexName}/query`, {
         headers: API_HEADERS,
         data: { query: '' },
       });
-      expect(pollRes.ok()).toBeTruthy();
+      expect(pollRes.status()).toBe(200);
       const body = await pollRes.json();
       expect(body.nbHits).toBeGreaterThanOrEqual(1);
     }).toPass({ timeout: 15000 });
@@ -174,7 +182,7 @@ test.describe('Analytics API Response Shapes (no browser)', () => {
       headers: API_HEADERS,
       data: { query: 'test', clickAnalytics: true },
     });
-    expect(searchRes.ok()).toBeTruthy();
+    expect(searchRes.status()).toBe(200);
     const body = await searchRes.json();
     expect(body).toHaveProperty('queryID');
     expect(typeof body.queryID).toBe('string');

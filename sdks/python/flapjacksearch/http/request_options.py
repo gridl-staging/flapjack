@@ -1,3 +1,5 @@
+"""
+"""
 from copy import deepcopy
 from sys import version_info
 from typing import Any, Dict, Optional, Union
@@ -13,6 +15,7 @@ else:
 
 
 class RequestOptions:
+    """TODO: Document RequestOptions."""
     def __init__(
         self,
         config: BaseConfig,
