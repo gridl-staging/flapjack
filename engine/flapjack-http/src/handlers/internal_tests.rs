@@ -2197,7 +2197,7 @@ async fn cluster_status_standalone_returns_disabled_with_empty_peers() {
         "standalone node must report replication_enabled=false"
     );
     assert!(
-        body["peers"].as_array().map_or(false, |p| p.is_empty()),
+        body["peers"].as_array().is_some_and(|p| p.is_empty()),
         "standalone node must return empty peers array"
     );
     assert!(
