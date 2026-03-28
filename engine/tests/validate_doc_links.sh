@@ -14,7 +14,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-DOCS="README.md PRIORITIES.md ROADMAP.md engine/README.md engine/docs/HIGHEST_LEVEL.md engine/docs2/FEATURES.md engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md"
+DOCS="README.md PRIORITIES.md ROADMAP.md engine/README.md engine/docs/HIGHEST_LEVEL.md engine/docs2/FEATURES.md engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md engine/docs2/3_IMPLEMENTATION/OPERATIONS.md engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md"
 FAILURE_LOG=$(mktemp "${TMPDIR:-/tmp}/flapjack-link-failures.XXXXXX")
 COUNT_LOG=$(mktemp "${TMPDIR:-/tmp}/flapjack-link-counts.XXXXXX")
 
