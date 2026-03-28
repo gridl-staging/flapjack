@@ -1,0 +1,293 @@
+{
+  "requests": [
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000041",
+        "name": "Logitech MX Master 3S Edition 2",
+        "description": "Premium wireless mouse with MagSpeed scroll, ergonomic shape, 8K DPI sensor. Deterministic benchmark variant 2.",
+        "brand": "Jabra",
+        "category": "Audio",
+        "subcategory": "Performance",
+        "price": 128.75,
+        "rating": 5,
+        "reviewCount": 6785,
+        "inStock": true,
+        "tags": [
+          "wireless",
+          "ergonomic",
+          "productivity",
+          "student",
+          "gaming",
+          "series-55"
+        ],
+        "color": "Champagne",
+        "releaseYear": 2028,
+        "_geoloc": {
+          "lat": 46.52825,
+          "lng": 6.63815
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000042",
+        "name": "CalDigit TS4 Thunderbolt Dock Edition 2",
+        "description": "Thunderbolt 4 docking station with 18 ports, 98W laptop charging, dual 6K display. Deterministic benchmark variant 2.",
+        "brand": "TP-Link",
+        "category": "Monitors",
+        "subcategory": "Budget",
+        "price": 322.5,
+        "rating": 4.3,
+        "reviewCount": 4181,
+        "inStock": true,
+        "tags": [
+          "thunderbolt",
+          "docking-station",
+          "professional",
+          "battery-life",
+          "rgb",
+          "series-57"
+        ],
+        "color": "Midnight Blue",
+        "releaseYear": 2026,
+        "_geoloc": {
+          "lat": 37.3843,
+          "lng": -122.0857
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000043",
+        "name": "Anker USB-C Hub 8-in-1 Edition 2",
+        "description": "Compact USB-C hub with HDMI 4K, ethernet, SD card reader, USB-A ports. Deterministic benchmark variant 2.",
+        "brand": "ASUS",
+        "category": "Storage",
+        "subcategory": "Desktop",
+        "price": 43.5,
+        "rating": 4.3,
+        "reviewCount": 11765,
+        "inStock": true,
+        "tags": [
+          "usb-c",
+          "portable",
+          "budget",
+          "noise-cancelling",
+          "multi-device",
+          "series-59"
+        ],
+        "color": "Ocean Blue",
+        "releaseYear": 2025,
+        "_geoloc": {
+          "lat": 22.4027,
+          "lng": 114.1185
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000044",
+        "name": "Apple Magic Trackpad Edition 2",
+        "description": "Multi-touch trackpad with Force Touch, wireless, rechargeable via Lightning. Deterministic benchmark variant 2.",
+        "brand": "Bose",
+        "category": "Audio",
+        "subcategory": "Student",
+        "price": 222.5,
+        "rating": 4.8,
+        "reviewCount": 5481,
+        "inStock": true,
+        "tags": [
+          "wireless",
+          "apple",
+          "trackpad",
+          "office",
+          "noise-cancelling",
+          "series-61"
+        ],
+        "color": "Amber",
+        "releaseYear": 2025,
+        "_geoloc": {
+          "lat": 37.33085,
+          "lng": -122.00765
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000045",
+        "name": "LG UltraFine 5K Edition 2",
+        "description": "27-inch 5K IPS display with Thunderbolt 3, P3 wide color gamut, built-in speakers. Deterministic benchmark variant 2.",
+        "brand": "LG",
+        "category": "Monitors",
+        "subcategory": "Noise Cancelling",
+        "price": 1286.25,
+        "rating": 4.2,
+        "reviewCount": 4853,
+        "inStock": true,
+        "tags": [
+          "5k",
+          "thunderbolt",
+          "color-accurate",
+          "conference",
+          "productivity",
+          "series-63"
+        ],
+        "color": "Silver",
+        "releaseYear": 2023,
+        "_geoloc": {
+          "lat": 37.57055,
+          "lng": 126.9717
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000046",
+        "name": "Samsung Odyssey G9 Edition 2",
+        "description": "49-inch ultrawide curved gaming monitor, 240Hz, 1ms, DQHD resolution, HDR1000. Deterministic benchmark variant 2.",
+        "brand": "Belkin",
+        "category": "Storage",
+        "subcategory": "Performance",
+        "price": 1371.25,
+        "rating": 4.6,
+        "reviewCount": 5348,
+        "inStock": true,
+        "tags": [
+          "ultrawide",
+          "gaming",
+          "curved",
+          "high-refresh",
+          "series-65"
+        ],
+        "color": "Sapphire",
+        "releaseYear": 2023,
+        "_geoloc": {
+          "lat": 37.5602,
+          "lng": 126.9825
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000047",
+        "name": "Dell UltraSharp U2723QE Edition 2",
+        "description": "27-inch 4K USB-C hub monitor with IPS Black, 98% DCI-P3, KVM switch. Deterministic benchmark variant 2.",
+        "brand": "Sonos",
+        "category": "Audio",
+        "subcategory": "Budget",
+        "price": 585,
+        "rating": 5,
+        "reviewCount": 5365,
+        "inStock": true,
+        "tags": [
+          "4k",
+          "usb-c",
+          "color-accurate",
+          "hub-monitor",
+          "touchscreen",
+          "rgb",
+          "series-67"
+        ],
+        "color": "Titan Gray",
+        "releaseYear": 2021,
+        "_geoloc": {
+          "lat": 32.7785,
+          "lng": -96.80015
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000048",
+        "name": "ASUS ProArt PA279CRV Edition 2",
+        "description": "27-inch 4K creator monitor with Calman-verified color, USB-C 96W, HDR400. Deterministic benchmark variant 2.",
+        "brand": "Dell",
+        "category": "Monitors",
+        "subcategory": "Desktop",
+        "price": 600,
+        "rating": 4.3,
+        "reviewCount": 4859,
+        "inStock": true,
+        "tags": [
+          "4k",
+          "creator",
+          "color-accurate",
+          "hybrid-work",
+          "multi-device",
+          "series-69"
+        ],
+        "color": "Crimson",
+        "releaseYear": 2030,
+        "_geoloc": {
+          "lat": 25.02445,
+          "lng": 121.57305
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000049",
+        "name": "Samsung Galaxy Buds3 Pro Edition 2",
+        "description": "Samsung wireless earbuds with ANC, 360 Audio, blade design, IP57 water resistance. Deterministic benchmark variant 2.",
+        "brand": "Google",
+        "category": "Storage",
+        "subcategory": "Student",
+        "price": 193.75,
+        "rating": 4.5,
+        "reviewCount": 5666,
+        "inStock": true,
+        "tags": [
+          "wireless",
+          "noise-cancelling",
+          "android",
+          "multi-device",
+          "series-71"
+        ],
+        "color": "Platinum",
+        "releaseYear": 2029,
+        "_geoloc": {
+          "lat": 37.56605,
+          "lng": 126.978
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000050",
+        "name": "Razer BlackWidow V4 Pro Edition 2",
+        "description": "Mechanical gaming keyboard with Green switches, Chroma RGB, command dial, wrist rest. Deterministic benchmark variant 2.",
+        "brand": "MSI",
+        "category": "Audio",
+        "subcategory": "Noise Cancelling",
+        "price": 258.75,
+        "rating": 4,
+        "reviewCount": 5492,
+        "inStock": true,
+        "tags": [
+          "gaming",
+          "mechanical",
+          "rgb",
+          "bluetooth",
+          "productivity",
+          "series-73"
+        ],
+        "color": "Matte Black",
+        "releaseYear": 2028,
+        "_geoloc": {
+          "lat": 1.35975,
+          "lng": 103.81215
+        }
+      }
+    }
+  ]
+}

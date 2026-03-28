@@ -1,0 +1,582 @@
+{
+  "requests": [
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000021",
+        "name": "Samsung Odyssey G9 Edition 1",
+        "description": "49-inch ultrawide curved gaming monitor, 240Hz, 1ms, DQHD resolution, HDR1000. Deterministic benchmark variant 1.",
+        "brand": "Corsair",
+        "category": "Networking",
+        "subcategory": "Professional",
+        "price": 1392.5,
+        "rating": 4.3,
+        "reviewCount": 4023,
+        "inStock": true,
+        "tags": [
+          "ultrawide",
+          "gaming",
+          "curved",
+          "high-refresh",
+          "compact",
+          "portable",
+          "series-40"
+        ],
+        "color": "Rose Gold",
+        "releaseYear": 2029,
+        "_geoloc": {
+          "lat": 37.5719,
+          "lng": 126.98205
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000022",
+        "name": "Dell UltraSharp U2723QE Edition 1",
+        "description": "27-inch 4K USB-C hub monitor with IPS Black, 98% DCI-P3, KVM switch. Deterministic benchmark variant 1.",
+        "brand": "Netgear",
+        "category": "Laptops",
+        "subcategory": "Mechanical",
+        "price": 606.25,
+        "rating": 4.8,
+        "reviewCount": 4040,
+        "inStock": false,
+        "tags": [
+          "4k",
+          "usb-c",
+          "color-accurate",
+          "hub-monitor",
+          "ergonomic",
+          "series-42"
+        ],
+        "color": "Sand",
+        "releaseYear": 2027,
+        "_geoloc": {
+          "lat": 32.77175,
+          "lng": -96.8006
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000023",
+        "name": "ASUS ProArt PA279CRV Edition 1",
+        "description": "27-inch 4K creator monitor with Calman-verified color, USB-C 96W, HDR400. Deterministic benchmark variant 1.",
+        "brand": "HP",
+        "category": "Accessories",
+        "subcategory": "Streaming",
+        "price": 621.25,
+        "rating": 4.1,
+        "reviewCount": 3534,
+        "inStock": true,
+        "tags": [
+          "4k",
+          "creator",
+          "color-accurate",
+          "lightweight",
+          "series-44"
+        ],
+        "color": "Graphite",
+        "releaseYear": 2027,
+        "_geoloc": {
+          "lat": 25.03615,
+          "lng": 121.5726
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000024",
+        "name": "Samsung Galaxy Buds3 Pro Edition 1",
+        "description": "Samsung wireless earbuds with ANC, 360 Audio, blade design, IP57 water resistance. Deterministic benchmark variant 1.",
+        "brand": "Logitech",
+        "category": "Networking",
+        "subcategory": "Ultrabook",
+        "price": 215,
+        "rating": 4.2,
+        "reviewCount": 4341,
+        "inStock": true,
+        "tags": [
+          "wireless",
+          "noise-cancelling",
+          "android",
+          "high-performance",
+          "series-46"
+        ],
+        "color": "Emerald",
+        "releaseYear": 2026,
+        "_geoloc": {
+          "lat": 37.5593,
+          "lng": 126.97755
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000025",
+        "name": "Razer BlackWidow V4 Pro Edition 1",
+        "description": "Mechanical gaming keyboard with Green switches, Chroma RGB, command dial, wrist rest. Deterministic benchmark variant 1.",
+        "brand": "Panasonic",
+        "category": "Laptops",
+        "subcategory": "Flagship",
+        "price": 280,
+        "rating": 4.6,
+        "reviewCount": 4167,
+        "inStock": false,
+        "tags": [
+          "gaming",
+          "mechanical",
+          "rgb",
+          "usb-c",
+          "ergonomic",
+          "series-48"
+        ],
+        "color": "Space Black",
+        "releaseYear": 2025,
+        "_geoloc": {
+          "lat": 1.353,
+          "lng": 103.8117
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000026",
+        "name": "MacBook Pro 16\" Edition 2",
+        "description": "Apple laptop with M3 Pro chip, 18GB RAM, 512GB SSD. Stunning Liquid Retina XDR display. Deterministic benchmark variant 2.",
+        "brand": "TP-Link",
+        "category": "Audio",
+        "subcategory": "Performance",
+        "price": 2592.5,
+        "rating": 4.6,
+        "reviewCount": 2572,
+        "inStock": true,
+        "tags": [
+          "professional",
+          "creative",
+          "portable",
+          "student",
+          "gaming",
+          "series-25"
+        ],
+        "color": "Matte Black",
+        "releaseYear": 2025,
+        "_geoloc": {
+          "lat": 37.33265,
+          "lng": -122.01755
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000027",
+        "name": "Dell XPS 15 Edition 2",
+        "description": "Premium Windows laptop with Intel Core i7, 16GB RAM, OLED display for professionals. Deterministic benchmark variant 2.",
+        "brand": "ASUS",
+        "category": "Monitors",
+        "subcategory": "Budget",
+        "price": 1786.25,
+        "rating": 4.7,
+        "reviewCount": 2367,
+        "inStock": true,
+        "tags": [
+          "professional",
+          "business",
+          "portable",
+          "battery-life",
+          "rgb",
+          "series-27"
+        ],
+        "color": "Lime",
+        "releaseYear": 2024,
+        "_geoloc": {
+          "lat": 32.78255,
+          "lng": -96.79475
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000028",
+        "name": "ThinkPad X1 Carbon Edition 2",
+        "description": "Lenovo business ultrabook. Legendary keyboard, MIL-STD tested durability, all-day battery. Deterministic benchmark variant 2.",
+        "brand": "Bose",
+        "category": "Storage",
+        "subcategory": "Desktop",
+        "price": 1721.25,
+        "rating": 4.2,
+        "reviewCount": 2348,
+        "inStock": true,
+        "tags": [
+          "business",
+          "ultralight",
+          "durable",
+          "noise-cancelling",
+          "multi-device",
+          "series-29"
+        ],
+        "color": "Forest Green",
+        "releaseYear": 2023,
+        "_geoloc": {
+          "lat": 35.6717,
+          "lng": 139.6449
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000029",
+        "name": "ASUS ROG Zephyrus G16 Edition 2",
+        "description": "Gaming laptop with RTX 4070, 240Hz display, per-key RGB keyboard for competitive gaming. Deterministic benchmark variant 2.",
+        "brand": "LG",
+        "category": "Audio",
+        "subcategory": "Student",
+        "price": 1865,
+        "rating": 4.3,
+        "reviewCount": 2231,
+        "inStock": true,
+        "tags": [
+          "gaming",
+          "high-performance",
+          "rgb",
+          "office",
+          "noise-cancelling",
+          "series-31"
+        ],
+        "color": "Champagne",
+        "releaseYear": 2022,
+        "_geoloc": {
+          "lat": 25.0366,
+          "lng": 121.5708
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000030",
+        "name": "HP Chromebook Plus Edition 2",
+        "description": "Affordable Chromebook with Google AI features, 8GB RAM, 128GB storage for students. Deterministic benchmark variant 2.",
+        "brand": "Belkin",
+        "category": "Monitors",
+        "subcategory": "Noise Cancelling",
+        "price": 400,
+        "rating": 4.3,
+        "reviewCount": 2237,
+        "inStock": true,
+        "tags": [
+          "budget",
+          "student",
+          "chromeos",
+          "conference",
+          "productivity",
+          "series-33"
+        ],
+        "color": "Midnight Blue",
+        "releaseYear": 2030,
+        "_geoloc": {
+          "lat": 37.37935,
+          "lng": -122.08615
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000031",
+        "name": "iPad Pro 12.9\" Edition 2",
+        "description": "Apple tablet with M2 chip, Liquid Retina XDR, Face ID, Apple Pencil 2 support. Deterministic benchmark variant 2.",
+        "brand": "Sonos",
+        "category": "Storage",
+        "subcategory": "Performance",
+        "price": 1043.75,
+        "rating": 4.6,
+        "reviewCount": 4178,
+        "inStock": true,
+        "tags": [
+          "professional",
+          "creative",
+          "stylus",
+          "gaming",
+          "series-35"
+        ],
+        "color": "Ocean Blue",
+        "releaseYear": 2029,
+        "_geoloc": {
+          "lat": 37.33625,
+          "lng": -122.00045
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000032",
+        "name": "Samsung Galaxy Tab S9 Ultra Edition 2",
+        "description": "Large 14.6\" AMOLED Android tablet with S Pen, Snapdragon 8 Gen 2, DeX mode. Deterministic benchmark variant 2.",
+        "brand": "Dell",
+        "category": "Audio",
+        "subcategory": "Budget",
+        "price": 1228.75,
+        "rating": 4.6,
+        "reviewCount": 2912,
+        "inStock": true,
+        "tags": [
+          "professional",
+          "android",
+          "stylus",
+          "touchscreen",
+          "rgb",
+          "series-37"
+        ],
+        "color": "Amber",
+        "releaseYear": 2028,
+        "_geoloc": {
+          "lat": 37.5575,
+          "lng": 126.9789
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000033",
+        "name": "Microsoft Surface Pro 10 Edition 2",
+        "description": "Windows 2-in-1 tablet with Intel Core Ultra, kickstand, detachable keyboard. Deterministic benchmark variant 2.",
+        "brand": "Google",
+        "category": "Monitors",
+        "subcategory": "Desktop",
+        "price": 1122.5,
+        "rating": 4.6,
+        "reviewCount": 2909,
+        "inStock": true,
+        "tags": [
+          "business",
+          "2-in-1",
+          "windows",
+          "hybrid-work",
+          "multi-device",
+          "series-39"
+        ],
+        "color": "Silver",
+        "releaseYear": 2027,
+        "_geoloc": {
+          "lat": 47.6053,
+          "lng": -122.33885
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000034",
+        "name": "Amazon Fire HD 10 Edition 2",
+        "description": "Budget tablet for media consumption, 10.1\" display, Alexa built-in. Deterministic benchmark variant 2.",
+        "brand": "MSI",
+        "category": "Storage",
+        "subcategory": "Student",
+        "price": 147.5,
+        "rating": 3.8,
+        "reviewCount": 7046,
+        "inStock": true,
+        "tags": [
+          "budget",
+          "media",
+          "alexa",
+          "multi-device",
+          "noise-cancelling",
+          "series-41"
+        ],
+        "color": "Sapphire",
+        "releaseYear": 2025,
+        "_geoloc": {
+          "lat": 47.6134,
+          "lng": -122.32805
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000035",
+        "name": "Sony WH-1000XM5 Edition 2",
+        "description": "Premium wireless noise-cancelling headphones with 30-hour battery and LDAC support. Deterministic benchmark variant 2.",
+        "brand": "OnePlus",
+        "category": "Audio",
+        "subcategory": "Noise Cancelling",
+        "price": 442.5,
+        "rating": 4.8,
+        "reviewCount": 6131,
+        "inStock": true,
+        "tags": [
+          "wireless",
+          "noise-cancelling",
+          "premium",
+          "bluetooth",
+          "productivity",
+          "series-43"
+        ],
+        "color": "Titan Gray",
+        "releaseYear": 2025,
+        "_geoloc": {
+          "lat": 35.67305,
+          "lng": 139.6467
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000036",
+        "name": "AirPods Pro 2 Edition 2",
+        "description": "Apple wireless earbuds with adaptive noise cancellation, spatial audio, USB-C. Deterministic benchmark variant 2.",
+        "brand": "SteelSeries",
+        "category": "Monitors",
+        "subcategory": "Performance",
+        "price": 236.25,
+        "rating": 5,
+        "reviewCount": 8503,
+        "inStock": true,
+        "tags": [
+          "wireless",
+          "noise-cancelling",
+          "apple",
+          "oled",
+          "gaming",
+          "series-45"
+        ],
+        "color": "Crimson",
+        "releaseYear": 2024,
+        "_geoloc": {
+          "lat": 37.33985,
+          "lng": -122.0018
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000037",
+        "name": "Bose QuietComfort Ultra Earbuds Edition 2",
+        "description": "Wireless earbuds with world-class noise cancellation and immersive spatial audio. Deterministic benchmark variant 2.",
+        "brand": "Kingston",
+        "category": "Storage",
+        "subcategory": "Budget",
+        "price": 371.25,
+        "rating": 4.3,
+        "reviewCount": 4209,
+        "inStock": true,
+        "tags": [
+          "wireless",
+          "noise-cancelling",
+          "premium",
+          "productivity",
+          "rgb",
+          "series-47"
+        ],
+        "color": "Platinum",
+        "releaseYear": 2023,
+        "_geoloc": {
+          "lat": 42.3547,
+          "lng": -71.05935
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000038",
+        "name": "JBL Charge 5 Edition 2",
+        "description": "Portable Bluetooth speaker with IP67 waterproofing, 20-hour battery, powerbank feature. Deterministic benchmark variant 2.",
+        "brand": "Samsung",
+        "category": "Audio",
+        "subcategory": "Desktop",
+        "price": 145,
+        "rating": 4.8,
+        "reviewCount": 5470,
+        "inStock": true,
+        "tags": [
+          "portable",
+          "waterproof",
+          "bluetooth",
+          "business",
+          "multi-device",
+          "series-49"
+        ],
+        "color": "Matte Black",
+        "releaseYear": 2021,
+        "_geoloc": {
+          "lat": 40.7155,
+          "lng": -74.0141
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000039",
+        "name": "Sonos Era 300 Edition 2",
+        "description": "Spatial audio smart speaker with Dolby Atmos, voice assistant, multi-room support. Deterministic benchmark variant 2.",
+        "brand": "Razer",
+        "category": "Monitors",
+        "subcategory": "Student",
+        "price": 500,
+        "rating": 4,
+        "reviewCount": 3842,
+        "inStock": true,
+        "tags": [
+          "smart-home",
+          "spatial-audio",
+          "premium",
+          "budget-friendly",
+          "noise-cancelling",
+          "series-51"
+        ],
+        "color": "Lime",
+        "releaseYear": 2030,
+        "_geoloc": {
+          "lat": 33.67695,
+          "lng": -117.8238
+        }
+      }
+    },
+    {
+      "action": "addObject",
+      "body": {
+        "objectID": "bench-000040",
+        "name": "Logitech MX Keys S Edition 2",
+        "description": "Wireless keyboard with smart backlighting, multi-device support, quiet typing. Deterministic benchmark variant 2.",
+        "brand": "Huawei",
+        "category": "Storage",
+        "subcategory": "Noise Cancelling",
+        "price": 53.75,
+        "rating": 4.6,
+        "reviewCount": 5315,
+        "inStock": true,
+        "tags": [
+          "wireless",
+          "ergonomic",
+          "multi-device",
+          "rgb",
+          "productivity",
+          "series-53"
+        ],
+        "color": "Forest Green",
+        "releaseYear": 2029,
+        "_geoloc": {
+          "lat": 46.52015,
+          "lng": 6.62735
+        }
+      }
+    }
+  ]
+}
