@@ -1,6 +1,8 @@
 name: CI
 
-# Runs on both the public flapjack repo and the private flapjack_dev (staging) repo
+# CI runs on the public staging and prod repos only. The private dev repo
+# (gridl-dev/flapjack_dev) must never run CI — it burns paid Actions minutes.
+# Use `debbie sync staging` to push changes to the public repo where CI is free.
 on:
   push:
     branches: [main]
@@ -9,7 +11,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Check if we're in a known repo — allow both public and dev/staging
+  # Guard: only run on recognized public repos. The private dev repo is
+  # intentionally excluded — CI belongs on staging/prod where Actions is free.
   check-repo:
     runs-on: ubuntu-latest
     outputs:
@@ -17,7 +20,7 @@ jobs:
     steps:
       - id: check
         run: |
-          if [ "${{ github.repository }}" = "gridl-hq/flapjack" ] || [ "${{ github.repository }}" = "gridl-dev/flapjack_dev" ] || [ "${{ github.repository }}" = "gridl-staging/flapjack" ]; then
+          if [ "${{ github.repository }}" = "gridl-hq/flapjack" ] || [ "${{ github.repository }}" = "gridl-staging/flapjack" ]; then
             echo "is-public-repo=true" >> $GITHUB_OUTPUT
           else
             echo "is-public-repo=false" >> $GITHUB_OUTPUT

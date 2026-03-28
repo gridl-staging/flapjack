@@ -6,6 +6,8 @@ SCENARIO_DIR="$ROOT_DIR/scenarios"
 SEARCH_SCENARIO="$SCENARIO_DIR/search-throughput.js"
 WRITE_SCENARIO="$SCENARIO_DIR/write-throughput.js"
 MIXED_SCENARIO="$SCENARIO_DIR/mixed-workload.js"
+MIXED_SOAK_SCENARIO="$SCENARIO_DIR/mixed-soak.js"
+WRITE_SOAK_SCENARIO="$SCENARIO_DIR/write-soak.js"
 THROUGHPUT_HELPER="$ROOT_DIR/lib/throughput.js"
 SEED_SCRIPT="$ROOT_DIR/seed-loadtest-data.sh"
 
@@ -40,9 +42,11 @@ require_absent() {
 require_file "$SEARCH_SCENARIO"
 require_file "$WRITE_SCENARIO"
 require_file "$MIXED_SCENARIO"
+require_file "$MIXED_SOAK_SCENARIO"
+require_file "$WRITE_SOAK_SCENARIO"
 require_file "$SEED_SCRIPT"
 
-for scenario_path in "$SEARCH_SCENARIO" "$WRITE_SCENARIO" "$MIXED_SCENARIO"; do
+for scenario_path in "$SEARCH_SCENARIO" "$WRITE_SCENARIO" "$MIXED_SCENARIO" "$MIXED_SOAK_SCENARIO" "$WRITE_SOAK_SCENARIO"; do
   require_import "$scenario_path" "lib/config.js"
   require_import "$scenario_path" "lib/http.js"
   require_import "$scenario_path" "k6/execution"
@@ -85,6 +89,16 @@ grep -q 'sharedLoadtestConfig.readIndexName' "$MIXED_SCENARIO" || \
   fail "mixed-workload.js must include read traffic on sharedLoadtestConfig.readIndexName"
 grep -q 'sharedLoadtestConfig.writeIndexName' "$MIXED_SCENARIO" || \
   fail "mixed-workload.js must include write traffic on sharedLoadtestConfig.writeIndexName"
+grep -q 'sharedLoadtestConfig.readIndexName' "$MIXED_SOAK_SCENARIO" || \
+  fail "mixed-soak.js must include read traffic on sharedLoadtestConfig.readIndexName"
+grep -q 'sharedLoadtestConfig.writeIndexName' "$MIXED_SOAK_SCENARIO" || \
+  fail "mixed-soak.js must include write traffic on sharedLoadtestConfig.writeIndexName"
+grep -q 'sharedLoadtestConfig.writeIndexName' "$WRITE_SOAK_SCENARIO" || \
+  fail "write-soak.js must target sharedLoadtestConfig.writeIndexName"
+grep -q 'sharedLoadtestConfig.soakDuration' "$MIXED_SOAK_SCENARIO" || \
+  fail "mixed-soak.js must source its duration from sharedLoadtestConfig.soakDuration"
+grep -q 'sharedLoadtestConfig.soakDuration' "$WRITE_SOAK_SCENARIO" || \
+  fail "write-soak.js must source its duration from sharedLoadtestConfig.soakDuration"
 
 grep -Eq 'scenarios[[:space:]]*:' "$MIXED_SCENARIO" || \
   fail "mixed-workload.js must export options.scenarios"
@@ -103,11 +117,19 @@ grep -q 'exec.scenario.iterationInTest' "$WRITE_SCENARIO" || \
   fail "write-throughput.js must use exec.scenario.iterationInTest for deterministic payload selection"
 grep -q 'exec.scenario.iterationInTest' "$MIXED_SCENARIO" || \
   fail "mixed-workload.js must use exec.scenario.iterationInTest for deterministic selection"
+grep -q 'exec.scenario.iterationInTest' "$MIXED_SOAK_SCENARIO" || \
+  fail "mixed-soak.js must use exec.scenario.iterationInTest for deterministic selection"
+grep -q 'exec.scenario.iterationInTest' "$WRITE_SOAK_SCENARIO" || \
+  fail "write-soak.js must use exec.scenario.iterationInTest for deterministic selection"
 
 grep -Fq 'recordWriteHttpStatusCode(' "$WRITE_SCENARIO" || \
   fail "write-throughput.js must record write HTTP status codes for 4xx/5xx thresholds"
 grep -Fq 'recordWriteHttpStatusCode(' "$MIXED_SCENARIO" || \
   fail "mixed-workload.js must record write HTTP status codes for 4xx/5xx thresholds"
+grep -Fq 'recordWriteHttpStatusCode(' "$MIXED_SOAK_SCENARIO" || \
+  fail "mixed-soak.js must record write HTTP status codes for 4xx/5xx thresholds"
+grep -Fq 'recordWriteHttpStatusCode(' "$WRITE_SOAK_SCENARIO" || \
+  fail "write-soak.js must record write HTTP status codes for 4xx/5xx thresholds"
 
 for seeded_field in brand category subcategory color tags price inStock releaseYear; do
   grep -q "$seeded_field" "$SEED_SCRIPT" || \

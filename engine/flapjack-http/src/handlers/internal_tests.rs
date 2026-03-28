@@ -2164,3 +2164,142 @@ fn contains_document_replication_ops_detects_upsert_and_delete() {
     assert!(contains_document_replication_ops(&[delete]));
     assert!(!contains_document_replication_ops(&[save_rule]));
 }
+
+// ── Cluster status endpoint tests ──
+
+/// GET /internal/cluster/status without a ReplicationManager (standalone mode)
+/// should return replication_enabled=false, empty peers, and a node_id.
+#[tokio::test]
+async fn cluster_status_standalone_returns_disabled_with_empty_peers() {
+    let tmp = TempDir::new().unwrap();
+    // Default TestStateBuilder has replication_manager: None → standalone mode.
+    let state = TestStateBuilder::new(&tmp).build_shared();
+
+    let app = Router::new()
+        .route("/internal/cluster/status", get(super::cluster_status))
+        .with_state(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/internal/cluster/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = crate::test_helpers::body_json(resp).await;
+
+    assert_eq!(
+        body["replication_enabled"], false,
+        "standalone node must report replication_enabled=false"
+    );
+    assert!(
+        body["peers"].as_array().map_or(false, |p| p.is_empty()),
+        "standalone node must return empty peers array"
+    );
+    assert!(
+        body["node_id"].is_string(),
+        "standalone response must include node_id"
+    );
+    // Standalone response must NOT include HA-specific aggregate fields.
+    assert!(
+        body.get("peers_total").is_none(),
+        "standalone response must not include peers_total"
+    );
+    assert!(
+        body.get("peers_healthy").is_none(),
+        "standalone response must not include peers_healthy"
+    );
+}
+
+/// GET /internal/cluster/status with a ReplicationManager (HA mode) should return
+/// replication_enabled=true, peer counts, and a populated peers array with
+/// the correct shape per peer.
+#[tokio::test]
+async fn cluster_status_ha_returns_peer_list_with_correct_shape() {
+    let tmp = TempDir::new().unwrap();
+    let mut app_state = TestStateBuilder::new(&tmp).build();
+
+    // Create a ReplicationManager with two configured peers.
+    let node_config = flapjack_replication::config::NodeConfig {
+        node_id: "test-node-a".to_string(),
+        bind_addr: "127.0.0.1:7700".to_string(),
+        peers: vec![
+            flapjack_replication::config::PeerConfig {
+                node_id: "test-node-b".to_string(),
+                addr: "http://test-node-b:7700".to_string(),
+            },
+            flapjack_replication::config::PeerConfig {
+                node_id: "test-node-c".to_string(),
+                addr: "http://test-node-c:7700".to_string(),
+            },
+        ],
+    };
+    let repl_mgr = flapjack_replication::manager::ReplicationManager::new(node_config, None);
+    app_state.replication_manager = Some(repl_mgr);
+
+    let state = Arc::new(app_state);
+    let app = Router::new()
+        .route("/internal/cluster/status", get(super::cluster_status))
+        .with_state(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/internal/cluster/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = crate::test_helpers::body_json(resp).await;
+
+    // Top-level HA fields.
+    assert_eq!(
+        body["replication_enabled"], true,
+        "HA node must report replication_enabled=true"
+    );
+    assert_eq!(body["node_id"], "test-node-a");
+    assert_eq!(
+        body["peers_total"], 2,
+        "peers_total must match configured peer count"
+    );
+    // Neither peer has ever been contacted, so peers_healthy should be 0.
+    assert_eq!(
+        body["peers_healthy"], 0,
+        "never-contacted peers should not count as healthy"
+    );
+
+    // Peer array shape validation.
+    let peers = body["peers"]
+        .as_array()
+        .expect("HA response must include peers array");
+    assert_eq!(peers.len(), 2);
+
+    // Each peer must have the expected fields.
+    for peer in peers {
+        assert!(peer["peer_id"].is_string(), "peer must include peer_id");
+        assert!(peer["addr"].is_string(), "peer must include addr");
+        assert!(peer["status"].is_string(), "peer must include status");
+        // Never-contacted peers should have status "never_contacted"
+        // and null last_success_secs_ago.
+        assert_eq!(
+            peer["status"], "never_contacted",
+            "peers that have never been probed should be never_contacted"
+        );
+        assert!(
+            peer["last_success_secs_ago"].is_null(),
+            "never-contacted peers should have null last_success_secs_ago"
+        );
+    }
+
+    // Verify specific peer identities.
+    let peer_ids: Vec<&str> = peers.iter().filter_map(|p| p["peer_id"].as_str()).collect();
+    assert!(peer_ids.contains(&"test-node-b"));
+    assert!(peer_ids.contains(&"test-node-c"));
+}

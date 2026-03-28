@@ -29,7 +29,7 @@ done
 require_text "(^|[[:space:]])(bash[[:space:]]+)?\\./run\\.sh([[:space:]]|$)" \
   "README must document full-suite runner usage with run.sh"
 
-for scenario in smoke.js search-throughput.js write-throughput.js mixed-workload.js spike.js memory-pressure.js; do
+for scenario in smoke.js search-throughput.js write-throughput.js mixed-workload.js spike.js mixed-soak.js write-soak.js memory-pressure.js; do
   require_text "k6[[:space:]]+(run|inspect)[[:space:]].*scenarios/${scenario}" \
     "README must include a direct k6 command for scenarios/${scenario}"
 done
@@ -40,6 +40,7 @@ for loadtest_var in \
   FLAPJACK_LOADTEST_API_KEY \
   FLAPJACK_LOADTEST_READ_INDEX \
   FLAPJACK_LOADTEST_WRITE_INDEX \
+  FLAPJACK_LOADTEST_SOAK_DURATION \
   FLAPJACK_LOADTEST_TASK_MAX_ATTEMPTS \
   FLAPJACK_LOADTEST_TASK_POLL_INTERVAL_SECONDS; do
   require_text "\\b${loadtest_var}\\b" "README must document shared config variable ${loadtest_var}"
@@ -54,6 +55,8 @@ require_text "seed-loadtest-data\\.sh" \
   "README must document seed-loadtest-data.sh as the prerequisite seeding/reset step for direct scenario runs"
 require_text "running, seeded server" \
   "README must state that direct scenario commands assume a running, seeded server"
+require_text "soak_proof\\.sh" \
+  "README must document soak_proof.sh as the reusable soak proof entrypoint"
 
 require_text "memory-pressure\\.js" \
   "README must describe memory-pressure scenario execution"

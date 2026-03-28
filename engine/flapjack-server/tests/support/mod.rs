@@ -3,7 +3,7 @@
 use assert_cmd::Command;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Stdio};
 use std::sync::mpsc;
@@ -178,6 +178,11 @@ impl RunningServer {
         Self::spawn_auto_port(data_dir, true)
     }
 
+    pub(crate) fn spawn_no_auth_fixed_port(data_dir: &str) -> Self {
+        let bind_addr = allocate_ephemeral_bind_addr();
+        Self::spawn_fixed_bind_addr(data_dir, true, &bind_addr)
+    }
+
     pub(crate) fn spawn_auth_auto_port(data_dir: &str) -> Self {
         Self::spawn_auto_port(data_dir, false)
     }
@@ -185,6 +190,14 @@ impl RunningServer {
     fn spawn_auto_port(data_dir: &str, no_auth: bool) -> Self {
         let (child, bind_addr) = Self::start_auto_port_process(data_dir, no_auth);
         Self { child, bind_addr }
+    }
+
+    fn spawn_fixed_bind_addr(data_dir: &str, no_auth: bool, bind_addr: &str) -> Self {
+        let child = Self::start_fixed_bind_addr_process(data_dir, no_auth, bind_addr);
+        Self {
+            child,
+            bind_addr: bind_addr.to_string(),
+        }
     }
 
     fn start_auto_port_process(data_dir: &str, no_auth: bool) -> (Child, String) {
@@ -197,21 +210,24 @@ impl RunningServer {
         (child, bind_addr)
     }
 
+    fn start_fixed_bind_addr_process(data_dir: &str, no_auth: bool, bind_addr: &str) -> Child {
+        let child = spawn_flapjack_process(
+            data_dir,
+            no_auth,
+            Some(bind_addr),
+            Stdio::null(),
+            Stdio::null(),
+        );
+        wait_for_health(bind_addr, AUTO_PORT_HEALTH_TIMEOUT);
+        child
+    }
+
     pub(crate) fn bind_addr(&self) -> &str {
         &self.bind_addr
     }
 
     pub(crate) fn add_documents_batch(&self, index_name: &str, payload: Value) -> i64 {
-        let path = format!("/1/indexes/{index_name}/batch");
-        let response = http_json_request(self.bind_addr(), "POST", &path, &payload);
-        let status_ok = response.status == 200 || response.status == 202;
-        assert!(
-            status_ok,
-            "batch write should succeed, got status {}, body: {}",
-            response.status, response.body
-        );
-
-        extract_task_id_from_body(&response.body)
+        add_documents_batch_at(self.bind_addr(), index_name, payload)
     }
 
     /// TODO: Document RunningServer.wait_for_task_published.
@@ -221,52 +237,7 @@ impl RunningServer {
         task_id: i64,
         timeout: Duration,
     ) -> Value {
-        let path = format!("/1/indexes/{index_name}/task/{task_id}");
-        let started_at = Instant::now();
-        let mut last_body = Value::Null;
-
-        loop {
-            assert!(
-                started_at.elapsed() <= timeout,
-                "timed out waiting for task {task_id} to publish after {:?}, last body: {}",
-                timeout,
-                last_body
-            );
-
-            let response = match http_request(self.bind_addr(), "GET", &path, None) {
-                Ok(response) => response,
-                // Crash/restart tests can briefly observe socket-level EAGAIN/timeout/refused
-                // while the task-polling loop is still within its overall retry window.
-                Err(error) if is_transient_task_poll_transport_error(&error) => {
-                    last_body = serde_json::json!({ "transientTransportError": error });
-                    thread::sleep(Duration::from_millis(25));
-                    continue;
-                }
-                Err(error) => panic!("task polling request should succeed: {error}"),
-            };
-            assert_eq!(
-                response.status, 200,
-                "task polling should return HTTP 200, got {} for task {} with body {}",
-                response.status, task_id, response.body
-            );
-
-            let body: Value = serde_json::from_str(&response.body).unwrap_or_else(|error| {
-                panic!(
-                    "task response must be valid JSON for task {}: {} ({})",
-                    task_id, response.body, error
-                )
-            });
-            match classify_task_poll_response(task_id, &body) {
-                TaskPollOutcome::Published => return body,
-                TaskPollOutcome::Pending => last_body = body,
-                TaskPollOutcome::TerminalFailure(message) => {
-                    panic!(
-                        "task {task_id} reached terminal failure state: {message}. body: {body}"
-                    );
-                }
-            }
-            thread::sleep(Duration::from_millis(25));
-        }
+        wait_for_task_published_at(self.bind_addr(), index_name, task_id, timeout)
     }
 
     pub(crate) fn search(&self, index_name: &str, payload: Value) -> Value {
@@ -285,6 +256,14 @@ impl RunningServer {
         let (child, bind_addr) = Self::start_auto_port_process(data_dir, true);
         self.child = child;
         self.bind_addr = bind_addr;
+    }
+
+    pub(crate) fn kill_and_restart_no_auth_same_bind_addr(&mut self, data_dir: &str) {
+        self.kill_child();
+        // Reusing the same bind address keeps background writers pointed at a stable
+        // endpoint while the test proves restart behavior under active traffic.
+        thread::sleep(Duration::from_millis(100));
+        self.child = Self::start_fixed_bind_addr_process(data_dir, true, &self.bind_addr);
     }
 
     fn kill_child(&mut self) {
@@ -311,19 +290,106 @@ pub(crate) fn spawn_flapjack_auto_port_process(
     stdout: Stdio,
     stderr: Stdio,
 ) -> Child {
+    spawn_flapjack_process(data_dir, no_auth, None, stdout, stderr)
+}
+
+pub(crate) fn add_documents_batch_at(bind_addr: &str, index_name: &str, payload: Value) -> i64 {
+    let path = format!("/1/indexes/{index_name}/batch");
+    let response = http_json_request(bind_addr, "POST", &path, &payload);
+    let status_ok = response.status == 200 || response.status == 202;
+    assert!(
+        status_ok,
+        "batch write should succeed, got status {}, body: {}",
+        response.status, response.body
+    );
+
+    extract_task_id_from_body(&response.body)
+}
+
+pub(crate) fn wait_for_task_published_at(
+    bind_addr: &str,
+    index_name: &str,
+    task_id: i64,
+    timeout: Duration,
+) -> Value {
+    let path = format!("/1/indexes/{index_name}/task/{task_id}");
+    let started_at = Instant::now();
+    let mut last_body = Value::Null;
+
+    loop {
+        assert!(
+            started_at.elapsed() <= timeout,
+            "timed out waiting for task {task_id} to publish after {:?}, last body: {}",
+            timeout,
+            last_body
+        );
+
+        let response = match http_request(bind_addr, "GET", &path, None) {
+            Ok(response) => response,
+            // Crash/restart tests can briefly observe socket-level EAGAIN/timeout/refused
+            // while the task-polling loop is still within its overall retry window.
+            Err(error) if is_transient_task_poll_transport_error(&error) => {
+                last_body = serde_json::json!({ "transientTransportError": error });
+                thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            Err(error) => panic!("task polling request should succeed: {error}"),
+        };
+        assert_eq!(
+            response.status, 200,
+            "task polling should return HTTP 200, got {} for task {} with body {}",
+            response.status, task_id, response.body
+        );
+
+        let body: Value = serde_json::from_str(&response.body).unwrap_or_else(|error| {
+            panic!(
+                "task response must be valid JSON for task {}: {} ({})",
+                task_id, response.body, error
+            )
+        });
+        match classify_task_poll_response(task_id, &body) {
+            TaskPollOutcome::Published => return body,
+            TaskPollOutcome::Pending => last_body = body,
+            TaskPollOutcome::TerminalFailure(message) => {
+                panic!("task {task_id} reached terminal failure state: {message}. body: {body}");
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn spawn_flapjack_process(
+    data_dir: &str,
+    no_auth: bool,
+    bind_addr: Option<&str>,
+    stdout: Stdio,
+    stderr: Stdio,
+) -> Child {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_flapjack"));
     if no_auth {
         command.arg("--no-auth");
     }
     strip_flapjack_ambient_env_from_process_command(&mut command);
+    if let Some(bind_addr) = bind_addr {
+        command.arg("--bind-addr").arg(bind_addr);
+    } else {
+        command.arg("--auto-port");
+    }
     command
-        .arg("--auto-port")
         .arg("--data-dir")
         .arg(data_dir)
         .stdout(stdout)
         .stderr(stderr)
         .spawn()
         .expect("failed to spawn flapjack process")
+}
+
+fn allocate_ephemeral_bind_addr() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to reserve local test port");
+    let bind_addr = listener
+        .local_addr()
+        .expect("reserved local test port must expose an address");
+    format!("127.0.0.1:{}", bind_addr.port())
 }
 
 /// TODO: Document wait_for_startup_bind_addr.

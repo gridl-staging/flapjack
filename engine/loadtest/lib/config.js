@@ -5,6 +5,7 @@ const DEFAULT_CONFIG = {
   benchmarkIndexName: "benchmark_100k",
   appId: "flapjack",
   apiKey: "",
+  soakDuration: "4h",
   taskPollMaxAttempts: 20000,
   taskPollIntervalSeconds: 0.01,
 };
@@ -39,6 +40,7 @@ export const sharedLoadtestConfig = Object.freeze({
   benchmarkIndexName: readEnvValue("FLAPJACK_LOADTEST_BENCHMARK_INDEX", DEFAULT_CONFIG.benchmarkIndexName),
   appId: readEnvValue("FLAPJACK_LOADTEST_APP_ID", DEFAULT_CONFIG.appId),
   apiKey: readEnvValue("FLAPJACK_LOADTEST_API_KEY", DEFAULT_CONFIG.apiKey),
+  soakDuration: readEnvValue("FLAPJACK_LOADTEST_SOAK_DURATION", DEFAULT_CONFIG.soakDuration),
   taskPollMaxAttempts: Math.floor(
     readPositiveNumber("FLAPJACK_LOADTEST_TASK_MAX_ATTEMPTS", DEFAULT_CONFIG.taskPollMaxAttempts),
   ),

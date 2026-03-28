@@ -19,6 +19,7 @@ Set these variables when overriding defaults:
 - `FLAPJACK_LOADTEST_API_KEY`
 - `FLAPJACK_LOADTEST_READ_INDEX`
 - `FLAPJACK_LOADTEST_WRITE_INDEX`
+- `FLAPJACK_LOADTEST_SOAK_DURATION`
 - `FLAPJACK_LOADTEST_TASK_MAX_ATTEMPTS`
 - `FLAPJACK_LOADTEST_TASK_POLL_INTERVAL_SECONDS`
 
@@ -56,8 +57,8 @@ These direct `k6 run` commands assume `FLAPJACK_LOADTEST_BASE_URL` already point
 - `write-throughput.js`: exercises write-index batch throughput.
 - `mixed-workload.js`: runs concurrent read and write pressure.
 - `spike.js`: applies short burst traffic and recovery.
-- `mixed-soak.js`: 4-hour steady mixed read/write soak profile for longer confidence runs.
-- `write-soak.js`: 4-hour write-heavy overload profile that should observe intentional `429` backpressure.
+- `mixed-soak.js`: steady mixed read/write soak profile for longer confidence runs (default `sharedLoadtestConfig.soakDuration = 4h`).
+- `write-soak.js`: write-heavy overload soak profile that should observe intentional `429` backpressure (default `sharedLoadtestConfig.soakDuration = 4h`).
 - `memory-pressure.js`: validates behavior when the runner restarts with alternate memory settings.
 
 ## Results and Interpretation
@@ -65,7 +66,7 @@ These direct `k6 run` commands assume `FLAPJACK_LOADTEST_BASE_URL` already point
 For each scenario, the runner writes:
 
 - k6 stdout summary: `<scenario>.stdout.txt`
-- k6 JSON output: `<scenario>.json`
+- k6 JSON output: `<scenario>.json` for `run.sh`, gzipped `<scenario>.json.gz` for `soak_proof.sh`
 
 Use stdout summaries for quick pass/fail checks and JSON outputs for detailed trend analysis and tooling.
 
@@ -98,7 +99,21 @@ Suggested commands:
 ```bash
 k6 run scenarios/mixed-soak.js
 k6 run scenarios/write-soak.js
+bash engine/loadtest/soak_proof.sh --scenario mixed-soak
+bash engine/loadtest/soak_proof.sh --scenario write-soak
 ```
+
+`soak_proof.sh` owns the repeatable Stage 3 proof flow for one soak scenario:
+
+- starts a fresh local release binary on the configured base URL
+- reseeds the read/write indices with the shared loadtest contract
+- captures k6 stdout + JSON plus periodic RSS/heap samples
+- gives each soak run its own k6 REST API address so parallel proofs do not fight over `localhost:6565`
+- restarts the same server on the same data dir after the soak
+- records post-soak and post-restart index-consistency checks
+
+Override `FLAPJACK_LOADTEST_SOAK_DURATION` when you want a shorter or longer run
+without editing the scenario files.
 
 Suggested evidence to capture alongside those runs:
 

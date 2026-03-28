@@ -1,13 +1,12 @@
 name: Nightly Tests
 
-# Comprehensive test suite that runs every night on the public repo.
-# Keep the legacy dev repo allowlist during the repo-transition window so the
-# same workflow file can still be exercised before that repo is retired.
-# This runs ALL tests with ALL configurations including:
-# - All Rust tests (not just fast subset)
-# - Dashboard integration tests with Algolia
-# - All SDK tests across all supported versions
-# - All integration tests
+# Comprehensive nightly test suite — runs on public repos only (staging/prod).
+# The private dev repo (gridl-dev/flapjack_dev) is excluded because GitHub
+# Actions minutes cost money on private repos. Use `debbie sync staging` to
+# push changes where nightly CI runs for free.
+#
+# Covers: all Rust tests, dashboard integration with Algolia, all SDK versions,
+# all integration tests.
 
 on:
   schedule:
@@ -19,8 +18,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Check if we're in an allowed repo. Retain the legacy dev repo name here on
-  # purpose until the repo-transition cleanup is fully complete.
+  # Guard: only run on recognized public repos. The private dev repo is
+  # intentionally excluded — CI belongs on staging/prod where Actions is free.
   check-repo:
     runs-on: ubuntu-latest
     outputs:
@@ -28,7 +27,7 @@ jobs:
     steps:
       - id: check
         run: |
-          if [ "${{ github.repository }}" = "gridl-hq/flapjack" ] || [ "${{ github.repository }}" = "gridl-dev/flapjack_dev" ]; then
+          if [ "${{ github.repository }}" = "gridl-hq/flapjack" ] || [ "${{ github.repository }}" = "gridl-staging/flapjack" ]; then
             echo "is-public-repo=true" >> $GITHUB_OUTPUT
           else
             echo "is-public-repo=false" >> $GITHUB_OUTPUT

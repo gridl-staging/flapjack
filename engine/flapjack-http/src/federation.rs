@@ -299,7 +299,9 @@ mod tests {
         assert_eq!(response.estimated_total_hits, 0);
     }
 
-    /// TODO: Document single_index_preserves_original_rank_order.
+    /// Single-index merge must preserve original rank order and produce
+    /// monotonically decreasing scores — ensures RRF is a no-op for the
+    /// trivial single-query case.
     #[test]
     fn single_index_preserves_original_rank_order() {
         let candidates = vec![
@@ -319,6 +321,14 @@ mod tests {
         );
 
         assert_eq!(ids(&response), vec!["p1", "p2", "p3"]);
+        // Scores must decrease monotonically for later ranks in a single-index merge.
+        for window in response.hits.windows(2) {
+            assert!(
+                window[0].federation.weighted_ranking_score
+                    >= window[1].federation.weighted_ranking_score,
+                "scores should decrease or stay equal with increasing rank"
+            );
+        }
     }
 
     /// TODO: Document duplicate_index_and_object_id_sum_scores_but_cross_index_duplicates_stay_distinct.
@@ -392,6 +402,133 @@ mod tests {
             assert!(!hit.federation.index_name.is_empty());
             assert!(hit.federation.weighted_ranking_score.is_finite());
         }
+    }
+
+    /// Offset past the end of all candidates returns an empty hits array
+    /// without panicking — verifies the `.min(total_hits)` guard in pagination.
+    #[test]
+    fn offset_beyond_total_hits_returns_empty_hits() {
+        let candidates = vec![
+            candidate("products", "p1", 0, 0, 1.0),
+            candidate("products", "p2", 0, 1, 1.0),
+        ];
+
+        let response = merge_federated_results(
+            candidates,
+            vec![2],
+            FederationConfig {
+                offset: 100,
+                limit: 20,
+                merge_facets: None,
+            },
+        );
+
+        // Hits should be empty because offset exceeds candidate count.
+        assert!(
+            response.hits.is_empty(),
+            "offset past end must yield zero hits"
+        );
+        // estimated_total_hits is the sum of per-query nbHits, independent of pagination.
+        assert_eq!(response.estimated_total_hits, 2);
+        assert_eq!(response.offset, 100);
+        assert_eq!(response.limit, 20);
+    }
+
+    /// A query with weight=0.0 contributes zero RRF score, so its hits should
+    /// rank below all non-zero-weight hits of the same depth.
+    #[test]
+    fn zero_weight_query_contributes_no_ranking_influence() {
+        let candidates = vec![
+            // Normal-weight query at position 0
+            candidate("products", "p1", 0, 0, 1.0),
+            // Zero-weight query at position 1
+            candidate("articles", "a1", 1, 0, 0.0),
+        ];
+
+        let response = merge_federated_results(
+            candidates,
+            vec![1, 1],
+            FederationConfig {
+                offset: 0,
+                limit: 20,
+                merge_facets: None,
+            },
+        );
+
+        assert_eq!(ids(&response), vec!["p1", "a1"]);
+        // The zero-weight hit should have a weighted score of exactly 0.
+        let zero_hit = &response.hits[1];
+        assert_eq!(
+            zero_hit.federation.weighted_ranking_score, 0.0,
+            "zero-weight query should produce zero weighted score"
+        );
+        // The normal hit should have a positive score.
+        let normal_hit = &response.hits[0];
+        assert!(
+            normal_hit.federation.weighted_ranking_score > 0.0,
+            "normal-weight query should have positive weighted score"
+        );
+    }
+
+    /// When a hit value is not a JSON object (e.g. a scalar string), the merge
+    /// should preserve it under the `_raw` key instead of dropping it silently.
+    #[test]
+    fn non_object_hit_preserved_under_raw_key() {
+        let non_object_candidate = FederationCandidate {
+            hit: json!("just a string value"),
+            index_name: "products".to_string(),
+            queries_position: 0,
+            rank_in_index: 0,
+            weight: 1.0,
+        };
+
+        let response = merge_federated_results(
+            vec![non_object_candidate],
+            vec![1],
+            FederationConfig {
+                offset: 0,
+                limit: 20,
+                merge_facets: None,
+            },
+        );
+
+        assert_eq!(response.hits.len(), 1);
+        let hit = &response.hits[0];
+        // Non-object hits get wrapped in `_raw` to prevent silent data loss.
+        assert_eq!(
+            hit.document.get("_raw"),
+            Some(&json!("just a string value")),
+            "non-object hit must be preserved under _raw key"
+        );
+        assert_eq!(hit.federation.index_name, "products");
+    }
+
+    /// Large offset combined with small limit should still work correctly,
+    /// returning only the narrow window from the ranked results.
+    #[test]
+    fn large_offset_with_small_limit_returns_correct_window() {
+        // Create 10 candidates across 2 indexes.
+        let mut candidates = Vec::new();
+        for i in 0..5 {
+            candidates.push(candidate("alpha", &format!("a{i}"), 0, i, 1.0));
+            candidates.push(candidate("beta", &format!("b{i}"), 1, i, 1.0));
+        }
+
+        let response = merge_federated_results(
+            candidates,
+            vec![5, 5],
+            FederationConfig {
+                offset: 8,
+                limit: 1,
+                merge_facets: None,
+            },
+        );
+
+        // 10 total candidates, offset 8, limit 1 → should return exactly 1 hit.
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(response.estimated_total_hits, 10);
+        assert_eq!(response.offset, 8);
+        assert_eq!(response.limit, 1);
     }
 
     /// TODO: Document federation_candidate_serde_uses_camel_case_contract.

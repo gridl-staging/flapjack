@@ -31,6 +31,7 @@ load_shared_loadtest_config() {
   FLAPJACK_APP_ID="$(jq -r '.appId' <<<"$config_json")"
   FLAPJACK_API_KEY="$(jq -r '.apiKey' <<<"$config_json")"
   FLAPJACK_BENCHMARK_INDEX="$(jq -r '.benchmarkIndexName' <<<"$config_json")"
+  FLAPJACK_SOAK_DURATION="$(jq -r '.soakDuration' <<<"$config_json")"
   FLAPJACK_TASK_MAX_ATTEMPTS="$(jq -r '.taskPollMaxAttempts' <<<"$config_json")"
   FLAPJACK_TASK_POLL_INTERVAL_SECONDS="$(jq -r '.taskPollIntervalSeconds' <<<"$config_json")"
 }
@@ -94,14 +95,28 @@ loadtest_list_indexes_response() {
   loadtest_http_request GET "/1/indexes" "" "200"
 }
 
-loadtest_get_index_doc_count() {
+loadtest_get_index_item_json() {
   local index_name="$1"
   local response
+  local item
 
   response="$(loadtest_list_indexes_response)"
-  jq -r --arg name "$index_name" \
-    '(.items // []) | map(select(.name == $name)) | .[0].entries // 0' \
-    <<<"$response"
+  item="$(jq -cer --arg name "$index_name" '(.items // []) | map(select(.name == $name)) | .[0]' <<<"$response")" || {
+    echo "FAIL: index ${index_name} not found in /1/indexes response."
+    exit 1
+  }
+
+  printf '%s' "$item"
+}
+
+loadtest_get_index_doc_count() {
+  local index_name="$1"
+  loadtest_get_index_item_json "$index_name" | jq -r '.entries // 0'
+}
+
+loadtest_get_index_pending_task_count() {
+  local index_name="$1"
+  loadtest_get_index_item_json "$index_name" | jq -r '.numberOfPendingTasks // 0'
 }
 
 loadtest_index_exists() {

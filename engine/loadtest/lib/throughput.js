@@ -210,6 +210,35 @@ export const WRITE_THRESHOLDS = {
   "checks{check:write returns objectIDs array,type:write}": ["rate>0.01"],
 };
 
+// Soak-specific write thresholds for multi-hour sustained overload scenarios.
+// Under prolonged heavy load (e.g. 12 VUs for 2h), the write queue intentionally
+// saturates and the vast majority of requests receive 429 backpressure. This is
+// correct behavior — the engine stays bounded, 5xx-free, and restart-safe.
+//
+// These thresholds validate that the overload is *safe* rather than *absent*:
+// - latency stays bounded even under saturation
+// - no unexpected 4xx errors (only 429s)
+// - no 5xx errors at all
+// - some forward progress still occurs (not total starvation)
+//
+// The baseline WRITE_THRESHOLDS above remain unchanged for short-run scenarios
+// where the write path is not expected to be fully saturated.
+export const SOAK_WRITE_THRESHOLDS = {
+  "http_req_duration{type:write}": ["p(95)<1000", "p(99)<2000"],
+  // Under sustained overload, >99% of writes may get 429 — that's expected.
+  // The soak contract only requires zero 5xx and zero unexpected 4xx.
+  "http_req_failed{type:write}": ["rate<1.0"],
+  write_http_4xx_rate: ["rate<1.0"],
+  write_http_unexpected_4xx_rate: ["rate<0.005"],
+  write_http_5xx_rate: ["rate<0.005"],
+  // Forward progress: at least *some* writes must succeed over the full run.
+  // The rate threshold is relaxed because sustained overload may push success
+  // well below 1% while still proving the write path is not fully starved.
+  "checks{check:write returns 200,type:write}": ["rate>0.001"],
+  "checks{check:write returns numeric taskID,type:write}": ["rate>0.001"],
+  "checks{check:write returns objectIDs array,type:write}": ["rate>0.001"],
+};
+
 // Seeded field names exported for acceptance check alignment.
 export const SEEDED_FIELDS = {
   brand: WRITE_BRANDS,

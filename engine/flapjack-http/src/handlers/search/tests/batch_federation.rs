@@ -501,3 +501,152 @@ async fn batch_search_federation_still_enforces_per_query_index_permissions() {
         })
     );
 }
+
+/// Empty-string queries across multiple indexes should return all indexed documents
+/// (the federation equivalent of a "browse all" query).
+#[tokio::test]
+async fn batch_search_federation_empty_query_returns_all_documents() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_basic_search_state(&tmp);
+    create_index_with_docs(
+        &state,
+        "fed_empty_alpha",
+        vec![vec![("title", "alpha one")], vec![("title", "alpha two")]],
+    )
+    .await;
+    create_index_with_docs(&state, "fed_empty_beta", vec![vec![("title", "beta one")]]).await;
+    let app = batch_router(state);
+
+    let response = post_batch_search(
+        &app,
+        json!({
+            "federation": {},
+            "requests": [
+                {"indexName": "fed_empty_alpha", "query": ""},
+                {"indexName": "fed_empty_beta", "query": ""}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+
+    let hits = body["hits"]
+        .as_array()
+        .expect("federated response must include hits array");
+    // All 3 documents should appear in the merged result.
+    assert_eq!(
+        hits.len(),
+        3,
+        "empty query federation should return all documents from all indexes"
+    );
+    assert_eq!(body["estimatedTotalHits"], 3);
+}
+
+/// Single-index federation should produce a valid federated response shape
+/// (flat hits array, no results array) with the same documents as a non-federated
+/// query against that index.
+#[tokio::test]
+async fn batch_search_federation_single_index_matches_non_federated_results() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_basic_search_state(&tmp);
+    create_index_with_docs(
+        &state,
+        "fed_single_compat",
+        vec![
+            vec![("title", "compat shoe one")],
+            vec![("title", "compat shoe two")],
+        ],
+    )
+    .await;
+    let app = batch_router(state);
+
+    // Federated single-index query.
+    let fed_response = post_batch_search(
+        &app,
+        json!({
+            "federation": {},
+            "requests": [
+                {"indexName": "fed_single_compat", "query": "shoe"}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(fed_response.status(), StatusCode::OK);
+    let fed_body = body_json(fed_response).await;
+
+    // Non-federated query against the same index.
+    let legacy_response = post_batch_search(
+        &app,
+        json!({
+            "requests": [
+                {"indexName": "fed_single_compat", "query": "shoe"}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(legacy_response.status(), StatusCode::OK);
+    let legacy_body = body_json(legacy_response).await;
+
+    // Both should return the same documents (by objectID).
+    let fed_hits = fed_body["hits"]
+        .as_array()
+        .expect("federated response must include hits");
+    let legacy_hits = legacy_body["results"][0]["hits"]
+        .as_array()
+        .expect("legacy response must include results[0].hits");
+
+    let mut fed_ids: Vec<String> = fed_hits
+        .iter()
+        .filter_map(|h| h["objectID"].as_str().map(String::from))
+        .collect();
+    let mut legacy_ids: Vec<String> = legacy_hits
+        .iter()
+        .filter_map(|h| h["objectID"].as_str().map(String::from))
+        .collect();
+    fed_ids.sort();
+    legacy_ids.sort();
+
+    assert_eq!(
+        fed_ids, legacy_ids,
+        "single-index federation must return same documents as non-federated query"
+    );
+}
+
+/// Federation with offset=0, limit=0 should return zero hits but still compute
+/// estimatedTotalHits correctly.
+#[tokio::test]
+async fn batch_search_federation_limit_zero_returns_count_only() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_basic_search_state(&tmp);
+    create_index_with_docs(
+        &state,
+        "fed_limit_zero",
+        vec![vec![("title", "shoe one")], vec![("title", "shoe two")]],
+    )
+    .await;
+    let app = batch_router(state);
+
+    let response = post_batch_search(
+        &app,
+        json!({
+            "federation": {"offset": 0, "limit": 0},
+            "requests": [
+                {"indexName": "fed_limit_zero", "query": "shoe"}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+
+    let hits = body["hits"]
+        .as_array()
+        .expect("federated response must include hits array");
+    assert!(hits.is_empty(), "limit=0 should return zero hits");
+    // estimatedTotalHits should still reflect the actual match count.
+    assert_eq!(
+        body["estimatedTotalHits"], 2,
+        "estimatedTotalHits should still be computed with limit=0"
+    );
+}

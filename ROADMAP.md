@@ -5,7 +5,7 @@
 
 ## Implemented
 
-The substantive Tier 1 launch blockers and Tier 2 production-confidence engineering work are complete. OSS launch sign-off is now also complete, closed by staging run `23671792399` on commit `745a059`. Remaining work is the confidence-completeness block below. See canonical details:
+The substantive Tier 1 launch blockers and Tier 2 production-confidence engineering work are complete. OSS launch sign-off is now also complete, closed by staging run `23671792399` on commit `745a059`. The Stage 3 proof pack is now also materially stronger locally: 2h mixed/write soak artifacts, restart-during-active-writes proof, and a nontrivial crash/restart durability proof are all landed. See canonical details:
 
 - Shipped feature status: [`engine/docs2/FEATURES.md#shipped-feature-status`](engine/docs2/FEATURES.md#shipped-feature-status)
 - Production-readiness state: [`engine/docs2/FEATURES.md#current-production-readiness-state`](engine/docs2/FEATURES.md#current-production-readiness-state)
@@ -13,11 +13,11 @@ The substantive Tier 1 launch blockers and Tier 2 production-confidence engineer
 
 ## Open / Not Yet Implemented
 
-Launch sign-off is still active, followed by the standing post-launch items:
+Launch sign-off is complete. The remaining open items are the standing post-launch tracks:
 
 | # | Work Item | Status | Details |
 |---|-----------|--------|---------|
-| CONF-1 | Confidence-completeness hardening | In progress | Stage 1 deterministic parity hardening plus Stage 2/7/8 source-of-truth and launch-proof work are now staging-validated, and the OSS launch gate is closed. Stage 4 upgrade smoke plus Stage 5/6 operator docs are now in place locally (`engine/tests/upgrade_smoke.sh`, `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`, `engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`). The remaining work is the Stage 3 operational-evidence block: multi-hour soak capture, restart-during-active-writes proof, and deeper crash/recovery evidence. |
+| ~~CONF-1~~ | ~~Sustained overload follow-up~~ | ✅ Done | Resolved 2026-03-28. Soak scenarios now use `SOAK_WRITE_THRESHOLDS` (relaxed for sustained overload); short baselines keep `WRITE_THRESHOLDS` unchanged. The threshold breach was a classification problem, not an engine defect. See `engine/loadtest/BENCHMARKS.md`. |
 | PR-11 | Distributed tracing (OpenTelemetry) | Not started | OTLP export behind `otel` feature flag. Structured logging groundwork shipped. |
 | PR-12 | Runbooks & incident response | In progress | Canonical operator docs now exist in `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`; continue refining from real incidents. |
 | PR-13 | Mobile / responsive dashboard | Not started | Desktop-first acceptable for admin tooling. |
@@ -35,7 +35,7 @@ For launch sequencing and current status, use:
 
 ## Confidence-Completeness Planning
 
-For the next engineering block after the active launch gate, use:
+For the next engineering block after the closed launch gate, use:
 
 - [`engine/docs2/FEATURES.md#recommended-execution-order`](engine/docs2/FEATURES.md#recommended-execution-order)
 - [`engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md`](engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md)

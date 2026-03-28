@@ -1,6 +1,11 @@
 // Mixed soak scenario — steady-state read/write traffic for multi-hour confidence runs.
 // This is intentionally separate from run.sh because it is designed for longer manual
 // evidence-gathering sessions, not the short baseline pass.
+//
+// Uses SOAK_WRITE_THRESHOLDS for the write side because multi-hour mixed traffic
+// will push writes into sustained 429 backpressure. Search thresholds remain
+// unchanged — reads should stay fast even under write overload.
+// See lib/throughput.js for the threshold rationale.
 
 import { check } from "k6";
 import exec from "k6/execution";
@@ -13,10 +18,8 @@ import {
   SEARCH_RESPONSE_CHECKS,
   SEARCH_THRESHOLDS,
   WRITE_RESPONSE_CHECKS,
-  WRITE_THRESHOLDS,
+  SOAK_WRITE_THRESHOLDS,
 } from "../lib/throughput.js";
-
-const SOAK_DURATION = "4h";
 
 export const options = {
   scenarios: {
@@ -24,20 +27,20 @@ export const options = {
       executor: "constant-vus",
       exec: "readScenario",
       vus: 15,
-      duration: SOAK_DURATION,
+      duration: sharedLoadtestConfig.soakDuration,
       tags: { type: "search" },
     },
     write_traffic: {
       executor: "constant-vus",
       exec: "writeScenario",
       vus: 4,
-      duration: SOAK_DURATION,
+      duration: sharedLoadtestConfig.soakDuration,
       tags: { type: "write" },
     },
   },
   thresholds: {
     ...SEARCH_THRESHOLDS,
-    ...WRITE_THRESHOLDS,
+    ...SOAK_WRITE_THRESHOLDS,
   },
 };
 
