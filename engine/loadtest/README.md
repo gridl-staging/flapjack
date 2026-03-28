@@ -42,6 +42,8 @@ k6 run scenarios/search-throughput.js
 k6 run scenarios/write-throughput.js
 k6 run scenarios/mixed-workload.js
 k6 run scenarios/spike.js
+k6 run scenarios/mixed-soak.js
+k6 run scenarios/write-soak.js
 k6 inspect scenarios/memory-pressure.js
 ```
 
@@ -54,6 +56,8 @@ These direct `k6 run` commands assume `FLAPJACK_LOADTEST_BASE_URL` already point
 - `write-throughput.js`: exercises write-index batch throughput.
 - `mixed-workload.js`: runs concurrent read and write pressure.
 - `spike.js`: applies short burst traffic and recovery.
+- `mixed-soak.js`: 4-hour steady mixed read/write soak profile for longer confidence runs.
+- `write-soak.js`: 4-hour write-heavy overload profile that should observe intentional `429` backpressure.
 - `memory-pressure.js`: validates behavior when the runner restarts with alternate memory settings.
 
 ## Results and Interpretation
@@ -83,6 +87,25 @@ The current write-path pass criteria are:
 
 This suite is a short-run baseline, not a multi-hour soak test. For the current
 evidence summary and its limits, see [BENCHMARKS.md](BENCHMARKS.md).
+
+## Soak Scenario Designs
+
+These scenarios are checked in for Stage 3 confidence-completeness work but are
+not part of the default `./run.sh` baseline because they are intentionally long-running.
+
+Suggested commands:
+
+```bash
+k6 run scenarios/mixed-soak.js
+k6 run scenarios/write-soak.js
+```
+
+Suggested evidence to capture alongside those runs:
+
+- k6 stdout + JSON summaries for latency drift over time
+- periodic server RSS or equivalent memory sampling from the host
+- one server restart after the soak to confirm clean recovery
+- one post-soak search consistency check on both the read and write indices
 
 ## Memory-Pressure Restart Contract
 
