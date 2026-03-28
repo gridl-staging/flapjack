@@ -286,6 +286,7 @@ CI-runnable scripts that verify documentation accuracy and API completeness agai
 | `engine/tests/readme_api_smoke.sh` | Starts a clean server, executes every API curl example from the root README, asserts correct responses |
 | `engine/tests/validate_doc_links.sh` | Checks all internal markdown links in the current public routing docs (`README.md`, `PRIORITIES.md`, `ROADMAP.md`, `engine/README.md`, `engine/docs/HIGHEST_LEVEL.md`, `engine/docs2/FEATURES.md`, and `engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md`) resolve to real files |
 | `engine/tests/integration_smoke.sh` | Comprehensive 513-line API integration test: 13 categories (health, index CRUD, doc CRUD, search variants, settings, synonyms, rules, analytics, API keys, dashboard, multi-index, browse, task status). Added by mar22_pm_3. |
+| `engine/tests/upgrade_smoke.sh` | Starts an older binary on a temp data dir, seeds data, then upgrades that same dir to a newer binary and re-verifies health/readiness/search/write/dashboard |
 
 ---
 
@@ -293,7 +294,7 @@ CI-runnable scripts that verify documentation accuracy and API completeness agai
 
 Production-readiness checklist organized by priority tier. Tier 1 items were launch blockers, Tier 2 items are required for production confidence, Tier 3 items can be iterated on post-launch.
 
-The substantive Tier 1 and Tier 2 engineering work is complete, and the OSS launch gate is now closed by staging run `23671792399`. The next confidence-completeness block is the post-launch operational work in Stages 3-6: soak/load interpretation, failure-mode proof, upgrade/rollback guidance, runbooks, and security confidence. Use [`1_STRATEGY/HIGHEST_PRIORITY.md`](1_STRATEGY/HIGHEST_PRIORITY.md) for the live priority narrative.
+The substantive Tier 1 and Tier 2 engineering work is complete, and the OSS launch gate is now closed by staging run `23671792399`. Stage 4-6 now have real operator surfaces locally: `engine/tests/upgrade_smoke.sh`, `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`, and `engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`. The main remaining confidence-completeness work is Stage 3 sustained-behavior and deeper failure-mode evidence. Use [`1_STRATEGY/HIGHEST_PRIORITY.md`](1_STRATEGY/HIGHEST_PRIORITY.md) for the live priority narrative.
 
 **Last updated: 2026-03-27**
 
@@ -329,12 +330,12 @@ Important for long-term operational maturity. Can iterate after initial release.
 | # | Work Item | Status | Description |
 |---|-----------|--------|-------------|
 | PR-11 | Distributed tracing (OpenTelemetry) | 🔴 Not started | Cross-request trace propagation for multi-node debugging. Structured logging groundwork is already shipped (`tracing` + JSON log mode), but OTEL export/propagation remains deferred and unshipped. |
-| PR-12 | Runbooks & incident response | 🔴 Not started | Documented troubleshooting for common failure modes. Build iteratively from real production incidents. |
+| PR-12 | Runbooks & incident response | 🟡 In progress (2026-03-28) | Canonical operator docs now live in [`engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`](3_IMPLEMENTATION/OPERATIONS.md): startup/readiness/disk-memory/snapshot/replication/admin-key runbooks, observability guarantees, upgrade smoke, and rollback guidance. Continue refining these from real incidents and future release cycles. |
 | PR-13 | Mobile / responsive dashboard | 🔴 Not started | Admin dashboard responsive design for tablets/phones. Low priority — desktop-first is acceptable for admin tooling. |
 
 ### Recommended Execution Order
 
-**Current focus: post-launch confidence completeness.** The major Tier 1 and Tier 2 engineering tracks are complete, and the OSS launch gate is closed. The next work block is soak/load interpretation, failure-mode proof, upgrade/rollback guidance, runbooks, and security confidence.
+**Current focus: remaining Stage 3 confidence evidence.** The major Tier 1 and Tier 2 engineering tracks are complete, and the OSS launch gate is closed. Stage 4/5/6 operator docs and upgrade proof now exist; the next work block is multi-hour soak capture plus the remaining failure-depth proofs.
 
 **Pre-launch (P0):**
 1. ~~Post-merge regression validation~~ — ✅ Done (mar22_1). OpenAPI spec regenerated, Rust test suite validated, README API smoke and doc link validation scripts created.
@@ -346,7 +347,7 @@ Important for long-term operational maturity. Can iterate after initial release.
 
 **Post-launch (Tier 3 hardening):**
 1. **PR-11: OpenTelemetry** — OTLP export behind `otel` feature flag. Groundwork shipped.
-2. **PR-12: Runbooks & incident response** — build from real production incidents.
+2. **PR-12: Runbooks & incident response** — now in progress via `OPERATIONS.md`; keep refining from real production incidents.
 3. **PR-13: Mobile / responsive dashboard** — low priority, desktop-first acceptable.
 
 ### Completed Work Archive
@@ -386,6 +387,7 @@ Important for long-term operational maturity. Can iterate after initial release.
 | 2026-03-25 | mar25_pm_11: live linux systemd VPS validation | Attempted VPS validation of systemd deployment path. Fixed `util/ec2_dev/ssh.sh` with key fallback to `~/.ssh`. Refactored `engine/_dev/s/lib/local-instance.sh` to use safe KEY=value parsing instead of shell sourcing — adds helper functions for config loading, hostname extraction, loopback detection, and inline comment stripping. Locally verified systemd artifact consistency (`flapjack.service`/`env.example`/README alignment, `/health` + `/health/ready` route contracts). VPS host reachability timed out at that time; this failed attempt was later superseded by the 2026-03-26 successful live verification. Branch: `mattman/mar25_pm_11_live_linux_systemd_vps_validation`. |
 | 2026-03-25 | mar25_pm_13: live VPS systemd validation (second attempt) | Re-attempted VPS validation; SSH still timing out to `44.202.224.48`. Code review posthoc stages cleaned up analytics test doc comments (`analytics_tests.rs`: replaced TODO stubs with meaningful descriptions), refactored `hybrid.rs` (removed `#[allow(dead_code)]` suppressions, simplified `build_fused_document` and `requested_hybrid_params` with idiomatic Rust), and refactored `search_compat.rs` (extracted `search_with_legacy_options` helper, cleaned doc comments). This failed attempt was later superseded by the 2026-03-26 successful live verification. Branch: `mattman/mar25_pm_13_live_vps_systemd_validation`. |
 | 2026-03-25 | mar25_pm_14: Rust code quality audit + leaky test fix | Fixed the intermittent nextest leak in integration test local helpers (`engine/tests/common/state.rs` and `engine/tests/common/http.rs`): proper server shutdown and resource cleanup to eliminate leaked child processes/file descriptors. Fixed 2 clippy warnings (feature-gated `dead_code` in `hybrid.rs` — resolved by pm_13's posthoc refactor removing the suppressions entirely). Fixed 6 `cargo fmt` diffs (leading blank lines in `dictionaries.rs`, `metrics.rs`, `notifications.rs`, `rollup_broadcaster.rs`, `router_tests.rs`, `startup_catchup.rs`). Additional cleanup in `language.rs`, `decompound.rs`, `stopwords/mod.rs`, `write_queue/` modules. Nextest now reports 0 leaky, 0 failed. `cargo clippy --workspace` clean. `cargo fmt --check` clean. Branch: `mattman/mar25_pm_14_rust_quality_leaky_test`. |
+| 2026-03-28 | mar28: Stage 4-6 confidence-completeness ops/security pass | Added `engine/tests/upgrade_smoke.sh` and proved upgrade handoff from the gate-closing staging commit `745a059` to the current binary on the same data dir. Added canonical operator docs in [`engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`](3_IMPLEMENTATION/OPERATIONS.md) and scoped hardening guidance in [`engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`](3_IMPLEMENTATION/SECURITY_BASELINE.md). Also tightened the MinIO snapshot harness to match its no-auth compose stack and fail fast when a stray local `flapjack` owns `127.0.0.1:7700`. |
 | 2026-03-26 | mar25_pm_12: Playwright port hardening + wrapper green proof | Fixed port contention between Playwright smoke and full e2e runs within `./s/test --all`. Added port-release wait step in `engine/_dev/s/test` wrapper and `--wait-port-free` mode in `engine/dashboard/scripts/playwright-webserver.mjs`. New vitest coverage for port-wait logic. JSDoc cleanup in `local-instance-config.ts`. Produced an authoritative green exact-HEAD wrapper proof at commit `a220e66c`, with all 14 sections passed. Resolves launch blocker #1 (PR-1). Branch: `mattman/mar25_pm_12_playwright_port_wrapper_proof`. |
 | 2026-03-26 | stage_04: VPS systemd proof reconciliation | Published a redacted maintained evidence summary in the dev repo from the live Stage 3 run/review, updated launch status ledgers to remove stale VPS blocker language, and added the explicit Linux binary prerequisite in `engine/examples/systemd/README.md`. |
 | 2026-03-26 | mar26_am_1: HA cluster dashboard | New Cluster page in React dashboard (`engine/dashboard/src/pages/Cluster.tsx`) showing live peer health with status badges (healthy/stale/unhealthy/circuit_open/never_contacted), auto-refreshing every 5s via `useClusterStatus` hook. Standalone mode shows configuration guidance. Added to sidebar nav and router. Full TDD coverage (`Cluster.test.tsx`, `useClusterStatus.test.ts`). Operator spec at `engine/dashboard/tests/specs/cluster.md`. Branch: `mattman/mar26_am_1_ha_cluster_dashboard`. |

@@ -5,6 +5,10 @@ variables in the shipped Flapjack server stack.
 
 - For deployment flow, host setup, and infrastructure runbooks, see
   [DEPLOYMENT.md](./DEPLOYMENT.md).
+- For release/rollback discipline and operator triage, see
+  [OPERATIONS.md](./OPERATIONS.md).
+- For the public hardening baseline, see
+  [SECURITY_BASELINE.md](./SECURITY_BASELINE.md).
 - For feature-level status and roadmap context, see [FEATURES.md](../FEATURES.md).
 
 ## Verified Example Paths
@@ -16,8 +20,12 @@ variables in the shipped Flapjack server stack.
 
 Not verified by these harnesses:
 
-- Systemd runtime behavior on a real Linux VPS.
 - Production AWS S3 compatibility beyond the repo's MinIO harness.
+
+Verified separately from the harnesses above:
+
+- Systemd runtime behavior on a real Linux VPS (completed on 2026-03-26; see
+  `FEATURES.md` and `engine/examples/systemd/README.md`).
 
 ## Scope Notes
 

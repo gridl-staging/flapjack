@@ -12,7 +12,10 @@ cd "$(dirname "$0")"
 
 API="${FLAPJACK_API:-http://localhost:7700}"
 IDX="test_s3_snap"
-HDR=(-H "Content-Type: application/json" -H "x-algolia-api-key: test")
+# The compose example runs with FLAPJACK_NO_AUTH=1, so this harness should not
+# send partial auth headers that can accidentally exercise auth parsing instead
+# of the snapshot flow itself.
+HDR=(-H "Content-Type: application/json")
 
 pass() { echo "  PASS: $1"; }
 fail() { echo "  FAIL: $1"; exit 1; }
@@ -28,6 +31,16 @@ wait_healthy() {
         elapsed=$((elapsed + 2))
     done
     fail "Flapjack not healthy after ${max_wait}s"
+}
+
+ensure_no_local_flapjack_conflict() {
+    if ! command -v lsof >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if lsof -nP -iTCP:7700 -sTCP:LISTEN 2>/dev/null | grep -Fq '/engine/target/debug/flapjack'; then
+        fail "localhost:7700 is owned by a local flapjack process; stop it before running the compose snapshot proof"
+    fi
 }
 
 wait_for_hits() {
@@ -58,6 +71,8 @@ except Exception:
 echo "=== S3 Snapshot Verification ==="
 echo "API: $API"
 echo ""
+
+ensure_no_local_flapjack_conflict
 
 # ── Wait for health ──────────────────────────────────────────────────────────
 echo "--- Waiting for Flapjack health ---"

@@ -4,6 +4,8 @@ This document is the maintained deployment entry point for the open-source
 Flapjack repo.
 
 For authoritative env-var names/defaults, see [OPS_CONFIGURATION.md](./OPS_CONFIGURATION.md).
+For upgrade/rollback and operator runbooks, see [OPERATIONS.md](./OPERATIONS.md).
+For the public hardening baseline, see [SECURITY_BASELINE.md](./SECURITY_BASELINE.md).
 For launch-blocker status, see [../1_STRATEGY/HIGHEST_PRIORITY.md](../1_STRATEGY/HIGHEST_PRIORITY.md).
 For shipped/readiness status, see [../FEATURES.md](../FEATURES.md).
 
@@ -34,9 +36,9 @@ The reusable Linux/systemd templates live in:
 - `engine/examples/systemd/env.example`
 - `engine/examples/systemd/README.md`
 
-Important status note: the repo ships these files, but the remaining launch
-blocker is still real Linux/VPS end-to-end verification of that documented
-systemd path.
+Important status note: this documented Linux/systemd path was live-verified on
+2026-03-26. The templates and README remain the canonical single-node
+deployment surface for production-style hosts.
 
 ## Verified example topologies
 
@@ -57,7 +59,8 @@ What is and is not proven:
 
 - repo-local templates and docs exist
 - service layout and env-file pattern are documented
-- actual Linux/VPS end-to-end validation is still pending
+- live Linux/VPS end-to-end validation completed on 2026-03-26
+- this does not by itself create a long-term historical upgrade matrix
 
 ### 3-node HA cluster
 
@@ -118,5 +121,6 @@ these probes are verified in that topology.
 ## Documentation rule
 
 When deployment behavior changes, update the corresponding example README or
-proof script first, then update higher-level status docs. Avoid duplicating
-detailed deployment instructions across multiple docs.
+proof script first, then update [OPERATIONS.md](./OPERATIONS.md) if the operator
+workflow changed, and only then update higher-level status docs. Avoid
+duplicating detailed deployment instructions across multiple docs.

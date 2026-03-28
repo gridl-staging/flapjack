@@ -1,6 +1,6 @@
 # Highest Priority: Open-Source Launch Readiness
 
-**Updated: 2026-03-27 (OSS launch gate closed on run `23671792399`; next priority is confidence completeness Stages 3-6)**
+**Updated: 2026-03-28 (OSS launch gate closed on run `23671792399`; Stage 4-6 docs/proof landed locally; Stage 3 is the main remaining confidence block)**
 
 ## Mission
 
@@ -43,10 +43,9 @@ Gate-closing rerun [`23671792399`](https://github.com/gridl-staging/flapjack/act
 
 ## Next Up After Launch Sign-Off
 
-1. **Stage 3: soak/load/failure handling** — sustained traffic, overload/backpressure interpretation, crash/restart, restore, and replication catch-up proof.
-2. **Stage 4: upgrade/rollback discipline** — explicit upgrade smoke, rollback semantics, and pre-release proof structure.
-3. **Stage 5: runbooks/supportability** — startup, readiness, disk/memory pressure, restore, replication, and key-rotation operator flows.
-4. **Stage 6: security confidence** — scoped public-deployment hardening review and explicit bounds on current security claims.
+1. **Stage 3: soak/load/failure handling** — sustained traffic evidence is still the main missing proof block.
+2. **Failure-mode depth** — restart-during-active-writes and a more nontrivial crash/restart dataset are still not closed.
+3. **Stage 4/5/6 follow-through** — the docs/proof surfaces now exist (`engine/tests/upgrade_smoke.sh`, `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`, `engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`), but they should keep being refined from real incidents and future release cycles.
 
 ## Deterministic Parity Progress
 
@@ -69,6 +68,14 @@ Debbie identity-rewrite verification is now also complete for this staging tree:
 - staging README badges/releases URLs point at `gridl-staging/flapjack`
 - staging install commands point at `https://staging.flapjack.foo`
 - `.github/workflows/ci.yml` intentionally keeps the three-repo guard unchanged and is correctly excluded from rewrite transforms
+
+## Stage 4-6 Progress
+
+The operator-facing Stage 4-6 surfaces are now materially stronger locally:
+
+- `engine/tests/upgrade_smoke.sh` now proves a data directory written by the gate-closing staging commit `745a059` can be opened by the current binary, with health/readiness/search/write/dashboard all re-verified after upgrade.
+- `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md` is now the canonical operator doc for upgrade smoke, rollback semantics, runbooks, and observability guarantees.
+- `engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md` now captures the scoped public hardening baseline, verified auth/admin/restrictSources proofs, and the explicit boundary to the still-deferred deeper OWASP pass.
 
 ## Recently Resolved Launch Blockers
 

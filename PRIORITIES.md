@@ -1,17 +1,17 @@
 # Flapjack — Priorities
 
-**Last updated:** 2026-03-27
+**Last updated:** 2026-03-28
 
 Canonical priority details are maintained in [`engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md`](engine/docs2/1_STRATEGY/HIGHEST_PRIORITY.md).
 
 ## Current Priority
 
-**Complete confidence completeness after the now-green OSS launch gate.** Gate-closing evidence: staging run `23671792399` on commit `745a059` completed `success`.
+**Complete the remaining Stage 3 confidence evidence after the now-green OSS launch gate.** Gate-closing evidence: staging run `23671792399` on commit `745a059` completed `success`. Stages 4-6 now have proof-backed docs and a real upgrade smoke locally.
 
-1. **Stage 3: soak/load/failure handling** — convert current burst evidence into stronger sustained-behavior and recovery proof.
-2. **Stage 4: upgrade/rollback discipline** — define upgrade smoke, rollback semantics, and release proof structure.
-3. **Stage 5: runbooks/supportability** — make the most important operator workflows explicit and easier to follow safely.
-4. **Stage 6: security confidence** — document the current hardening baseline and the next scoped security pass.
+1. **Stage 3: soak/load/failure handling** — capture the multi-hour soak artifact and close the remaining recovery-depth gaps.
+2. **Failure-mode depth** — add proof for restart during active writes and crash/restart recovery with a more nontrivial dataset.
+3. **Runbooks iteration** — refine the new `OPERATIONS.md` runbooks from real incidents instead of only green-path proof surfaces.
+4. **Security depth** — keep the new `SECURITY_BASELINE.md` honest and scoped while the deeper OWASP-style pass remains deferred.
 
 Identity rewrite verification is complete: the staged tree still rewrites README/release/install links to `gridl-staging/flapjack` and `staging.flapjack.foo`, while `.github/workflows/ci.yml` intentionally keeps the three-repo guard unchanged.
 

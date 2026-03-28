@@ -1,6 +1,6 @@
 # Flapjack — Roadmap
 
-**Last updated:** 2026-03-27
+**Last updated:** 2026-03-28
 **Status ledger policy:** This file is a routing page only. Canonical product status is maintained in [`engine/docs2/FEATURES.md`](engine/docs2/FEATURES.md).
 
 ## Implemented
@@ -17,9 +17,9 @@ Launch sign-off is still active, followed by the standing post-launch items:
 
 | # | Work Item | Status | Details |
 |---|-----------|--------|---------|
-| CONF-1 | Confidence-completeness hardening | In progress | Stage 1 deterministic parity hardening plus Stage 2/7/8 source-of-truth and launch-proof work are now staging-validated, and the OSS launch gate is closed. Remaining confidence-completeness work is the heavier operational block: soak/load interpretation, failure-mode proof, upgrade/rollback guidance, runbooks, and security confidence. |
+| CONF-1 | Confidence-completeness hardening | In progress | Stage 1 deterministic parity hardening plus Stage 2/7/8 source-of-truth and launch-proof work are now staging-validated, and the OSS launch gate is closed. Stage 4 upgrade smoke plus Stage 5/6 operator docs are now in place locally (`engine/tests/upgrade_smoke.sh`, `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`, `engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`). The remaining work is the Stage 3 operational-evidence block: multi-hour soak capture, restart-during-active-writes proof, and deeper crash/recovery evidence. |
 | PR-11 | Distributed tracing (OpenTelemetry) | Not started | OTLP export behind `otel` feature flag. Structured logging groundwork shipped. |
-| PR-12 | Runbooks & incident response | Not started | Build from real production incidents. |
+| PR-12 | Runbooks & incident response | In progress | Canonical operator docs now exist in `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`; continue refining from real incidents. |
 | PR-13 | Mobile / responsive dashboard | Not started | Desktop-first acceptable for admin tooling. |
 | — | OWASP full deep pass | Not started | Required before multi-tenant SaaS, not for OSS launch. |
 

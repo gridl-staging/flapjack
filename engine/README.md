@@ -22,6 +22,8 @@ Self-hosted, Algolia-compatible search engine. Drop-in replacement for Algolia's
 | Shipped features and readiness state | [`docs2/FEATURES.md`](docs2/FEATURES.md) |
 | Runtime configuration (env vars + defaults) | [`docs2/3_IMPLEMENTATION/OPS_CONFIGURATION.md`](docs2/3_IMPLEMENTATION/OPS_CONFIGURATION.md) |
 | Deployment paths (single-node, Docker, systemd) | [`docs2/3_IMPLEMENTATION/DEPLOYMENT.md`](docs2/3_IMPLEMENTATION/DEPLOYMENT.md) |
+| Runbooks, upgrade/rollback, observability contract | [`docs2/3_IMPLEMENTATION/OPERATIONS.md`](docs2/3_IMPLEMENTATION/OPERATIONS.md) |
+| Public hardening baseline | [`docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`](docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md) |
 | HA cluster proof and test harness | [`examples/ha-cluster/README.md`](examples/ha-cluster/README.md) |
 | Architecture overview and crate map | [`docs2/3_IMPLEMENTATION/ARCHITECTURE.md`](docs2/3_IMPLEMENTATION/ARCHITECTURE.md) |
 | Test strategy and command reference | [`docs2/1_STRATEGY/TESTING.md`](docs2/1_STRATEGY/TESTING.md) |

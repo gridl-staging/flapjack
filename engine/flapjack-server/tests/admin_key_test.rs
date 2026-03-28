@@ -11,18 +11,22 @@ use support::{
 #[test]
 fn env_var_key_overrides_existing_keys_json() {
     let tmp = TempDir::new("fj_test_env_override");
+    let admin_key_path = tmp.root().join(".admin_key");
 
-    let output1 = flapjack_cmd()
+    let _output1 = flapjack_cmd()
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
         .timeout(std::time::Duration::from_secs(3))
         .output()
         .expect("failed to run");
-    let stdout1 = String::from_utf8_lossy(&output1.stdout);
+
+    let first_admin_key = std::fs::read_to_string(&admin_key_path)
+        .expect("first start should persist the generated admin key to .admin_key");
     assert!(
-        stdout1.contains("Admin API Key:"),
-        "First start must show auto-generated key"
+        first_admin_key.trim().starts_with("fj_admin_"),
+        "first start should generate an fj_admin_ key, got: {}",
+        first_admin_key.trim()
     );
 
     let keys_json_before = std::fs::read_to_string(tmp.root().join("keys.json"))
@@ -30,7 +34,7 @@ fn env_var_key_overrides_existing_keys_json() {
     let hash_before = extract_admin_key_hash_from_json(&keys_json_before);
 
     let custom_key = "rotated_key_abcdef0123456789";
-    let output2 = flapjack_cmd()
+    let _output2 = flapjack_cmd()
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_ADMIN_KEY", custom_key)
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
@@ -38,12 +42,12 @@ fn env_var_key_overrides_existing_keys_json() {
         .timeout(std::time::Duration::from_secs(3))
         .output()
         .expect("failed to run");
-    let stdout2 = String::from_utf8_lossy(&output2.stdout);
-
-    assert!(
-        stdout2.contains("Flapjack"),
-        "Should start with overridden key, got: {}",
-        stdout2
+    let persisted_admin_key = std::fs::read_to_string(&admin_key_path)
+        .expect("override start should rewrite .admin_key with the provided key");
+    assert_eq!(
+        persisted_admin_key.trim(),
+        custom_key,
+        "FLAPJACK_ADMIN_KEY should become the persisted admin key"
     );
 
     let keys_json_after = std::fs::read_to_string(tmp.root().join("keys.json")).unwrap();
