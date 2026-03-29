@@ -11,6 +11,7 @@ use crate::error_response::HandlerError;
 use crate::extractors::{validate_index_http, ValidatedIndexName};
 use flapjack::index::rules::{Rule, RuleStore};
 
+/// Retrieve a query rule by its object ID from the specified index.
 #[utoipa::path(
     get,
     path = "/1/indexes/{indexName}/rules/{objectID}",
@@ -50,6 +51,7 @@ pub async fn get_rule(
         .map(Json)
 }
 
+/// Save or update a single query rule in the specified index.
 #[utoipa::path(
     put,
     path = "/1/indexes/{indexName}/rules/{objectID}",
@@ -108,6 +110,7 @@ pub async fn save_rule(
     })))
 }
 
+/// Delete a query rule from the specified index by its object ID.
 #[utoipa::path(
     delete,
     path = "/1/indexes/{indexName}/rules/{objectID}",
@@ -164,6 +167,7 @@ pub async fn delete_rule(
     })))
 }
 
+/// Batch create or update multiple query rules in the specified index.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/rules/batch",
@@ -273,6 +277,7 @@ fn forward_rules_to_replicas(
     Ok(())
 }
 
+/// Remove all query rules from the specified index.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/rules/clear",
@@ -328,6 +333,7 @@ fn default_hits_per_page() -> usize {
     20
 }
 
+/// Search for query rules in the specified index with optional filtering.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/rules/search",

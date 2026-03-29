@@ -89,6 +89,7 @@ pub async fn list_configs(State(state): State<Arc<AppState>>) -> impl IntoRespon
     }
 }
 
+/// Create a new query suggestions configuration and schedule the initial index build.
 #[utoipa::path(
     post,
     path = "/1/configs",
@@ -158,6 +159,7 @@ pub async fn get_config(
     }
 }
 
+/// Update an existing query suggestions configuration.
 #[utoipa::path(put, path = "/1/configs/{indexName}", tag = "query-suggestions",
     params(("indexName" = String, Path, description = "Index name")),
     request_body = QsConfig,
@@ -279,6 +281,7 @@ pub async fn get_logs(
     Json(json!(logs)).into_response()
 }
 
+/// Manually trigger a query suggestions index build for the specified configuration.
 #[utoipa::path(post, path = "/1/configs/{indexName}/build", tag = "query-suggestions",
     params(("indexName" = String, Path, description = "Index name")),
     responses(

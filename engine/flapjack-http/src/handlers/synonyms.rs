@@ -11,6 +11,7 @@ use crate::error_response::HandlerError;
 use crate::extractors::{validate_index_http, ValidatedIndexName};
 use flapjack::index::synonyms::{Synonym, SynonymStore};
 
+/// Retrieve a synonym entry by its object ID from the specified index.
 #[utoipa::path(
     get,
     path = "/1/indexes/{indexName}/synonyms/{objectID}",
@@ -54,6 +55,7 @@ pub async fn get_synonym(
         .map(Json)
 }
 
+/// Save or update a single synonym entry in the specified index.
 #[utoipa::path(
     put,
     path = "/1/indexes/{indexName}/synonyms/{objectID}",
@@ -116,6 +118,7 @@ pub async fn save_synonym(
     })))
 }
 
+/// Delete a synonym entry from the specified index by its object ID.
 #[utoipa::path(
     delete,
     path = "/1/indexes/{indexName}/synonyms/{objectID}",
@@ -176,6 +179,7 @@ pub async fn delete_synonym(
     })))
 }
 
+/// Batch create or update multiple synonym entries in the specified index.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/synonyms/batch",
@@ -253,6 +257,7 @@ pub async fn save_synonyms(
     })))
 }
 
+/// Remove all synonym entries from the specified index.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/synonyms/clear",
@@ -315,6 +320,7 @@ fn default_hits_per_page() -> usize {
     20
 }
 
+/// Search for synonym entries in the specified index with optional filtering.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/synonyms/search",

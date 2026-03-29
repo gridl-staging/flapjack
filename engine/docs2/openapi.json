@@ -101,7 +101,7 @@
         "tags": [
           "query-suggestions"
         ],
-        "summary": "TODO: Document create_config.",
+        "summary": "Create a new query suggestions configuration and schedule the initial index build.",
         "operationId": "create_config",
         "requestBody": {
           "content": {
@@ -184,7 +184,7 @@
         "tags": [
           "query-suggestions"
         ],
-        "summary": "TODO: Document update_config.",
+        "summary": "Update an existing query suggestions configuration.",
         "operationId": "update_config",
         "parameters": [
           {
@@ -281,7 +281,7 @@
         "tags": [
           "query-suggestions"
         ],
-        "summary": "TODO: Document trigger_build.",
+        "summary": "Manually trigger a query suggestions index build for the specified configuration.",
         "operationId": "trigger_build",
         "parameters": [
           {
@@ -804,7 +804,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "TODO: Document add_record_auto_id.",
+        "summary": "Add a record to the specified index with an auto-generated object ID.",
         "operationId": "add_record_auto_id",
         "parameters": [
           {
@@ -1539,7 +1539,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "TODO: Document save_rules.",
+        "summary": "Batch create or update multiple query rules in the specified index.",
         "operationId": "save_rules",
         "parameters": [
           {
@@ -1586,7 +1586,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "TODO: Document clear_rules.",
+        "summary": "Remove all query rules from the specified index.",
         "operationId": "clear_rules",
         "parameters": [
           {
@@ -1621,7 +1621,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "TODO: Document search_rules.",
+        "summary": "Search for query rules in the specified index with optional filtering.",
         "operationId": "search_rules",
         "parameters": [
           {
@@ -1665,7 +1665,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "TODO: Document get_rule.",
+        "summary": "Retrieve a query rule by its object ID from the specified index.",
         "operationId": "get_rule",
         "parameters": [
           {
@@ -1710,7 +1710,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "TODO: Document save_rule.",
+        "summary": "Save or update a single query rule in the specified index.",
         "operationId": "save_rule",
         "parameters": [
           {
@@ -1761,7 +1761,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "TODO: Document delete_rule.",
+        "summary": "Delete a query rule from the specified index by its object ID.",
         "operationId": "delete_rule",
         "parameters": [
           {
@@ -1892,7 +1892,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "TODO: Document set_settings.",
+        "summary": "Update the settings for the specified index.",
         "operationId": "set_settings",
         "parameters": [
           {
@@ -2022,7 +2022,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "TODO: Document save_synonyms.",
+        "summary": "Batch create or update multiple synonym entries in the specified index.",
         "operationId": "save_synonyms",
         "parameters": [
           {
@@ -2069,7 +2069,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "TODO: Document clear_synonyms.",
+        "summary": "Remove all synonym entries from the specified index.",
         "operationId": "clear_synonyms",
         "parameters": [
           {
@@ -2104,7 +2104,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "TODO: Document search_synonyms.",
+        "summary": "Search for synonym entries in the specified index with optional filtering.",
         "operationId": "search_synonyms",
         "parameters": [
           {
@@ -2148,7 +2148,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "TODO: Document get_synonym.",
+        "summary": "Retrieve a synonym entry by its object ID from the specified index.",
         "operationId": "get_synonym",
         "parameters": [
           {
@@ -2193,7 +2193,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "TODO: Document save_synonym.",
+        "summary": "Save or update a single synonym entry in the specified index.",
         "operationId": "save_synonym",
         "parameters": [
           {
@@ -2244,7 +2244,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "TODO: Document delete_synonym.",
+        "summary": "Delete a synonym entry from the specified index by its object ID.",
         "operationId": "delete_synonym",
         "parameters": [
           {
@@ -2385,7 +2385,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "TODO: Document put_object.",
+        "summary": "Add or replace a record in the specified index.",
         "operationId": "put_object",
         "parameters": [
           {
@@ -2441,7 +2441,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "TODO: Document delete_object.",
+        "summary": "Delete a record from the specified index by its object ID.",
         "operationId": "delete_object",
         "parameters": [
           {
@@ -2490,7 +2490,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "TODO: Document partial_update_object.",
+        "summary": "Partially update a record in the specified index by merging fields.",
         "operationId": "partial_update_object",
         "parameters": [
           {
@@ -2578,7 +2578,7 @@
         "tags": [
           "keys"
         ],
-        "summary": "TODO: Document create_key.",
+        "summary": "Create a new API key with specified ACL permissions and restrictions.",
         "operationId": "create_key",
         "requestBody": {
           "description": "Key configuration",
@@ -3401,7 +3401,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "TODO: Document create_experiment.",
+        "summary": "Create a new A/B test experiment with traffic splitting between a main index and variant.",
         "operationId": "create_experiment",
         "requestBody": {
           "description": "A/B test creation payload",
@@ -3636,7 +3636,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "TODO: Document conclude_experiment.",
+        "summary": "Conclude a running experiment by selecting a winner and promoting the winning configuration.",
         "operationId": "conclude_experiment",
         "parameters": [
           {

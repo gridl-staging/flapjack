@@ -230,6 +230,7 @@ pub(super) fn parse_bool_query_param(
         .map(|value| value.unwrap_or(false))
 }
 
+/// Update the settings for the specified index.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/settings",

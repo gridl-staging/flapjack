@@ -221,6 +221,7 @@ fn concluded_experiment_response(
     })
 }
 
+/// Create a new A/B test experiment with traffic splitting between a main index and variant.
 #[utoipa::path(
     post,
     path = "/2/abtests",
@@ -669,6 +670,7 @@ pub async fn stop_experiment(
     }
 }
 
+/// Conclude a running experiment by selecting a winner and promoting the winning configuration.
 #[utoipa::path(
     post,
     path = "/2/abtests/{id}/conclude",

@@ -96,6 +96,7 @@ pub struct GenerateSecuredKeyResponse {
     pub secured_api_key: String,
 }
 
+/// Create a new API key with specified ACL permissions and restrictions.
 #[utoipa::path(
     post,
     path = "/1/keys",
@@ -795,6 +796,7 @@ mod tests {
     }
 
     // T3.1: Without middleware, text/plain content-type is rejected by Json<> extractor
+    /// Create a new API key with specified ACL permissions and restrictions.text_plain_rejected_without_middleware.
     #[tokio::test]
     async fn create_key_text_plain_rejected_without_middleware() {
         let tmp = TempDir::new().unwrap();
@@ -822,6 +824,7 @@ mod tests {
     }
 
     // T3.2: With middleware, text/plain is normalized to application/json and accepted
+    /// Create a new API key with specified ACL permissions and restrictions.text_plain_accepted_with_middleware.
     #[tokio::test]
     async fn create_key_text_plain_accepted_with_middleware() {
         let tmp = TempDir::new().unwrap();
@@ -848,6 +851,7 @@ mod tests {
     }
 
     // T3.3: With middleware, charset variant is normalized and accepted
+    /// Create a new API key with specified ACL permissions and restrictions.charset_content_type_accepted_with_middleware.
     #[tokio::test]
     async fn create_key_charset_content_type_accepted_with_middleware() {
         let tmp = TempDir::new().unwrap();
@@ -874,6 +878,7 @@ mod tests {
     }
 
     // T3.4: With middleware, missing content-type is normalized and accepted
+    /// Create a new API key with specified ACL permissions and restrictions.no_content_type_accepted_with_middleware.
     #[tokio::test]
     async fn create_key_no_content_type_accepted_with_middleware() {
         let tmp = TempDir::new().unwrap();
@@ -1002,6 +1007,7 @@ mod tests {
         );
     }
 
+    /// Create a new API key with specified ACL permissions and restrictions.rejects_malformed_restrict_sources.
     #[tokio::test]
     async fn create_key_rejects_malformed_restrict_sources() {
         let tmp = TempDir::new().unwrap();

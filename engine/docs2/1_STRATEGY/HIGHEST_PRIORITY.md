@@ -45,7 +45,7 @@ Gate-closing rerun [`23671792399`](https://github.com/gridl-staging/flapjack/act
 
 1. ~~**Stage 3 evidence interpretation**~~ — ✅ Resolved (2026-03-28). The 2h soak threshold breach was a classification problem, not an engine defect. Soak scenarios now use `SOAK_WRITE_THRESHOLDS` (relaxed for sustained overload) while short baselines keep `WRITE_THRESHOLDS` unchanged. See `engine/loadtest/BENCHMARKS.md` for the full rationale.
 2. **Stage 4/5/6 follow-through** — the docs/proof surfaces now exist (`engine/tests/upgrade_smoke.sh`, `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`, `engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`), but they should keep being refined from real incidents and future release cycles.
-3. **Post-launch hardening** — OpenTelemetry, incident-response maturity, and the deeper OWASP-style pass remain the main longer-range gaps after the current proof pack.
+3. **Post-launch hardening** — incident-response maturity and the deeper OWASP-style pass remain the main longer-range gaps. OpenTelemetry shipped (PR-11).
 
 ## Deterministic Parity Progress
 
@@ -103,7 +103,7 @@ The sustained-behavior proof gap is no longer theoretical:
 
 ## Post-Launch
 
-- OpenTelemetry distributed tracing (PR-11) — groundwork shipped, OTLP export remaining
+- OpenTelemetry distributed tracing (PR-11) — ✅ Done (2026-03-28). OTLP gRPC export shipped behind `otel` feature flag.
 - Runbooks & incident response (PR-12) — build from real production incidents
 - Mobile/responsive dashboard (PR-13) — low priority, desktop-first acceptable
 - OWASP full deep pass — needed before multi-tenant SaaS, not for open-source launch

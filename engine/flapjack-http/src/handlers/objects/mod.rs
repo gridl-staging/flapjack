@@ -357,6 +357,7 @@ pub async fn get_object(
     }
 }
 
+/// Delete a record from the specified index by its object ID.
 #[utoipa::path(
     delete,
     path = "/1/indexes/{indexName}/{objectID}",
@@ -407,6 +408,7 @@ pub async fn delete_object(
     }))
 }
 
+/// Add or replace a record in the specified index.
 #[utoipa::path(
     put,
     path = "/1/indexes/{indexName}/{objectID}",
@@ -644,6 +646,7 @@ pub async fn delete_by_query(
     })))
 }
 
+/// Add a record to the specified index with an auto-generated object ID.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}",
@@ -713,6 +716,7 @@ pub async fn add_record_auto_id(
     ))
 }
 
+/// Partially update a record in the specified index by merging fields.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/{objectID}/partial",
