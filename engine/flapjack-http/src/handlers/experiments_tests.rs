@@ -3650,7 +3650,7 @@ fn index_settings_path(tmp: &TempDir, index_name: &str) -> PathBuf {
 }
 
 fn load_index_settings(tmp: &TempDir, index_name: &str) -> IndexSettings {
-    IndexSettings::load(&index_settings_path(tmp, index_name)).unwrap()
+    IndexSettings::load(index_settings_path(tmp, index_name)).unwrap()
 }
 
 fn create_index_with_custom_ranking(

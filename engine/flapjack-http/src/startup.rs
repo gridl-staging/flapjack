@@ -682,6 +682,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "otel")]
     fn capture_log_output(action: impl FnOnce()) -> String {
         let writer = TestWriter::new();
         let subscriber =
