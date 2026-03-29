@@ -20,7 +20,6 @@ emit_query_catalog_json() {
   node "$SEARCH_HELPER" --catalog --index-name "$index_name"
 }
 
-# TODO: Document validate_query_catalog_json.
 validate_query_catalog_json() {
   local catalog_json="$1"
   jq -e '
@@ -59,7 +58,6 @@ verify_benchmark_index_ready() {
   BENCHMARK_DOC_COUNT="$doc_count"
 }
 
-# TODO: Document run_single_search_request.
 run_single_search_request() {
   local index_path="$1"
   local request_json="$2"
@@ -94,7 +92,6 @@ run_single_search_request() {
   echo $((finished_ms - started_ms))
 }
 
-# TODO: Document run_query_benchmark.
 run_query_benchmark() {
   local index_name="$1"
   local catalog_json="$2"
@@ -172,7 +169,6 @@ print_summary_table() {
   echo "================================"
 }
 
-# TODO: Document main.
 main() {
   [[ -f "$LOADTEST_HELPERS" ]] || fail "missing $LOADTEST_HELPERS"
   [[ -f "$SEARCH_HELPER" ]] || fail "missing $SEARCH_HELPER"

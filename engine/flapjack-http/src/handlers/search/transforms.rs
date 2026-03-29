@@ -76,7 +76,8 @@ pub(super) fn apply_reranking_and_transforms(
     }
 }
 
-/// TODO: Document apply_ctr_reranking.
+/// Applies click-through-rate re-ranking when `enableReRanking` is active, fetching
+/// click counts from the analytics engine and adjusting document order by CTR signals.
 fn apply_ctr_reranking(
     state: &Arc<AppState>,
     req: &SearchRequest,
@@ -136,7 +137,8 @@ fn apply_ctr_reranking(
     );
 }
 
-/// TODO: Document apply_click_counts.
+/// Fetches per-object click counts from analytics and delegates to CTR re-ranking,
+/// optionally scoped to documents matching `reRankingApplyFilter`.
 fn apply_click_counts(
     analytics_engine: &flapjack::analytics::AnalyticsQueryEngine,
     effective_index: &str,
@@ -173,7 +175,8 @@ fn apply_click_counts(
     }
 }
 
-/// TODO: Document apply_ctr_with_filter.
+/// Partitions documents by an optional filter, applies CTR re-ranking only to matching
+/// documents, then appends non-matching documents to preserve their original order.
 fn apply_ctr_with_filter(
     documents: Vec<ScoredDocument>,
     click_counts: &HashMap<String, u64>,
@@ -212,7 +215,8 @@ fn apply_ctr_with_filter(
     }
 }
 
-/// TODO: Document apply_geo_filtering.
+/// Filters and sorts results by geographic proximity, computing per-document distances
+/// from the geo center and paginating the geo-filtered result set.
 fn apply_geo_filtering(
     req: &SearchRequest,
     params: &PreparedSearchParams,
@@ -271,7 +275,8 @@ fn apply_geo_filtering(
     (geo_distances, automatic_radius)
 }
 
-/// TODO: Document compute_automatic_radius.
+/// Computes an automatic geo radius when `aroundRadius` is not explicitly set,
+/// using a density heuristic (first 1000 results) and `minimumAroundRadius` floor.
 fn compute_automatic_radius(
     geo_docs: &mut Vec<(ScoredDocument, Option<f64>)>,
     geo_params: &flapjack::query::geo::GeoParams,
@@ -299,7 +304,7 @@ fn compute_automatic_radius(
     Some(effective)
 }
 
-/// TODO: Document sort_around_results.
+/// Sorts geo search results by distance from the `aroundLatLng` point.
 fn sort_around_results(
     geo_docs: &mut [(ScoredDocument, Option<f64>)],
     geo_params: &flapjack::query::geo::GeoParams,
@@ -331,7 +336,8 @@ fn sort_geo_docs_by_distance(geo_docs: &mut [(ScoredDocument, Option<f64>)]) {
     });
 }
 
-/// TODO: Document recompute_facets_after_distinct.
+/// Recomputes facet counts from the de-duplicated document set when
+/// `facetingAfterDistinct` is enabled and distinct grouping is active.
 fn recompute_facets_after_distinct(
     req: &SearchRequest,
     params: &PreparedSearchParams,

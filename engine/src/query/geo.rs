@@ -79,7 +79,8 @@ pub struct AroundPrecisionConfig {
 }
 
 impl AroundPrecisionConfig {
-    /// TODO: Document AroundPrecisionConfig.bucket_distance.
+    /// Quantize a raw distance into a bucket using either a fixed precision or
+    /// the configured range thresholds (falling back to 10m minimum).
     pub fn bucket_distance(&self, distance_m: f64) -> u64 {
         let dist = distance_m as u64;
         if let Some(fixed) = self.fixed {
@@ -130,7 +131,9 @@ impl GeoParams {
         !self.bounding_boxes.is_empty() || !self.polygons.is_empty() || self.around.is_some()
     }
 
-    /// TODO: Document GeoParams.filter_point.
+    /// Test whether a (lat, lng) point passes the configured geo constraints:
+    /// bounding-box containment, polygon containment, or within-radius of the
+    /// `aroundLatLng` center.
     pub fn filter_point(&self, lat: f64, lng: f64) -> bool {
         if !self.bounding_boxes.is_empty() {
             return self
@@ -475,5 +478,24 @@ mod tests {
             minimum_around_radius: None,
         };
         assert!(params.filter_point(35.0, -75.0));
+    }
+
+    #[test]
+    fn filter_point_doc_mentions_polygon_constraints() {
+        let source = include_str!("geo.rs");
+        let before_fn = source
+            .split("pub fn filter_point(&self, lat: f64, lng: f64) -> bool")
+            .next()
+            .unwrap_or_default();
+        let doc_window = before_fn
+            .lines()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            doc_window.contains("polygon"),
+            "GeoParams::filter_point docs must mention polygon-based filtering"
+        );
     }
 }

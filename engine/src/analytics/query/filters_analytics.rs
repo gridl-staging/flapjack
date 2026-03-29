@@ -1,7 +1,8 @@
 use super::*;
 
 impl super::AnalyticsQueryEngine {
-    /// TODO: Document AnalyticsQueryEngine.top_filters.
+    /// Return the most frequently used filter values for the given index and date range,
+    /// ordered by occurrence count descending.
     pub async fn top_filters(
         &self,
         index_name: &str,

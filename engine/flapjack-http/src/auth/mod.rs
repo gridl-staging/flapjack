@@ -262,7 +262,8 @@ enum ApiKeyRestrictSource<'a> {
     RefererPattern(&'a str),
 }
 
-/// TODO: Document is_valid_api_key_referer_pattern.
+/// Validates a referer pattern for use in API key `restrictSources`.
+/// Accepts `*`, simple leading/trailing globs with a valid hostname or IP, and http(s) URLs.
 fn is_valid_api_key_referer_pattern(pattern: &str) -> bool {
     let pattern = pattern.trim();
     if pattern == "*" {
@@ -289,7 +290,8 @@ fn is_valid_api_key_referer_pattern(pattern: &str) -> bool {
             || host.parse::<IpAddr>().is_ok())
 }
 
-/// TODO: Document parse_api_key_restrict_source.
+/// Parses a restrict-source entry as either a CIDR/IP network or a referer glob pattern.
+/// Returns `Err` if the entry is neither a valid network address nor a valid referer pattern.
 fn parse_api_key_restrict_source(source: &str) -> Result<Option<ApiKeyRestrictSource<'_>>, String> {
     let source = source.trim();
     if source.is_empty() {
@@ -307,7 +309,8 @@ fn parse_api_key_restrict_source(source: &str) -> Result<Option<ApiKeyRestrictSo
     Err(source.to_string())
 }
 
-/// TODO: Document referer_host.
+/// Extracts the hostname from a URL or referer string, stripping scheme, port, path,
+/// query, and fragment. Handles IPv6 bracket notation (`[::1]:8080`).
 fn referer_host(referer: &str) -> Option<&str> {
     // Strip scheme
     let after_scheme = referer
@@ -522,7 +525,8 @@ fn validate_restrict_sources_iter<'a>(
     Ok(())
 }
 
-/// TODO: Document matches_restrict_sources_iter.
+/// Tests whether a client IP matches any CIDR/IP entry in a restrict-sources iterator.
+/// Returns `true` if the iterator is empty (no restrictions) or contains a matching network.
 fn matches_restrict_sources_iter<'a>(sources: impl Iterator<Item = &'a str>, ip: IpAddr) -> bool {
     let mut saw_source = false;
     let mut saw_match = false;
@@ -548,7 +552,8 @@ pub(super) fn restrict_sources_match(restrict_sources: &str, ip: IpAddr) -> bool
     matches_restrict_sources_iter(restrict_sources.split(','), ip)
 }
 
-/// TODO: Document api_key_restrict_sources_match.
+/// Checks whether a client IP or referer matches any entry in an API key's
+/// `restrictSources` list, which may contain both CIDR networks and referer glob patterns.
 pub(super) fn api_key_restrict_sources_match(
     entries: &[String],
     client_ip: Option<IpAddr>,

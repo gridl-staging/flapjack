@@ -1,7 +1,4 @@
 /**
- * @module Stub summary for engine/dashboard/local-instance-config.ts.
- */
-/**
  * Local instance configuration for development and testing.
  * Reads port/host settings from flapjack.local.conf for per-clone isolation.
  */
@@ -287,9 +284,6 @@ function normalizeTrackedDataDir(rawPath: string | undefined): string | null {
   }
 }
 
-/**
- * TODO: Document findTrackedBackendDataDir.
- */
 export function findTrackedBackendDataDir(
   backendBaseUrl: string,
   stateDir: string = MULTI_INSTANCE_STATE_DIR,
@@ -364,9 +358,6 @@ export function resolveAdminKey(
   );
 }
 
-/**
- * TODO: Document getLocalInstanceConfig.
- */
 export function getLocalInstanceConfig(): LocalInstanceConfig {
   const { fileValues, loadedFromFile } = readLocalConfigValues();
   const host = pickConfiguredValue(fileValues.FJ_HOST, process.env.FJ_HOST) || DEFAULTS.host;

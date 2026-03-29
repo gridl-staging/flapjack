@@ -222,7 +222,7 @@ impl ReplicationManager {
         self.discover_tenants_from_peers_internal(true).await
     }
 
-    /// TODO: Document ReplicationManager.discover_tenants_from_peers_internal.
+    /// Merge unique tenant IDs from available peers and optionally require one successful response.
     async fn discover_tenants_from_peers_internal(
         &self,
         require_success: bool,
@@ -472,8 +472,6 @@ mod tests {
         let manager = ReplicationManager::new(config, None);
         assert!(manager.peer_statuses().is_empty());
     }
-
-    /// TODO: Document test_health_probe_handle_starts_and_stops.
     #[tokio::test]
     async fn test_health_probe_handle_starts_and_stops() {
         let config = NodeConfig {

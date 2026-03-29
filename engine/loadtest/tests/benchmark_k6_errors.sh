@@ -47,7 +47,6 @@ make_sourceable_script() {
   chmod +x "$dest"
 }
 
-# TODO: Document write_fixture_helpers.
 write_fixture_helpers() {
   local dest="$1"
   cat > "$dest" <<'HELPERS'
@@ -77,7 +76,6 @@ HELPERS
   chmod +x "$dest"
 }
 
-# TODO: Document run_main_with_fixture.
 run_main_with_fixture() {
   local sourceable_script="$1"
   local helper_script="$2"
@@ -98,7 +96,6 @@ run_main_with_fixture() {
   ' bash "$sourceable_script" "$helper_script"
 }
 
-# TODO: Document test_missing_index_fails.
 test_missing_index_fails() {
   local tmp_dir
   tmp_dir="$(mktemp -d)"
@@ -120,7 +117,6 @@ test_missing_index_fails() {
   rm -rf "$tmp_dir"
 }
 
-# TODO: Document test_zero_doc_index_fails.
 test_zero_doc_index_fails() {
   local tmp_dir
   tmp_dir="$(mktemp -d)"
@@ -157,7 +153,6 @@ assert_exit_code() {
   fi
 }
 
-# TODO: Document test_smoke_threshold_breach_exits_99.
 test_smoke_threshold_breach_exits_99() {
   local tmp_dir
   tmp_dir="$(mktemp -d)"

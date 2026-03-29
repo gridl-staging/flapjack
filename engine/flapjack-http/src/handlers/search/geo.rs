@@ -4,7 +4,7 @@ use crate::dto::SearchRequest;
 
 use flapjack::types::FieldValue;
 
-/// TODO: Document extract_single_geoloc.
+/// Extracts a `(lat, lng)` pair from a `FieldValue` geo object.
 pub(super) fn extract_single_geoloc(value: &FieldValue) -> Option<(f64, f64)> {
     match value {
         FieldValue::Object(map) => {
@@ -33,7 +33,8 @@ pub(super) fn extract_all_geolocs(geoloc: Option<&FieldValue>) -> Vec<(f64, f64)
     }
 }
 
-/// TODO: Document best_geoloc_for_filter.
+/// Selects the best geo point from a document's `_geoloc` array: the point closest
+/// to the `aroundLatLng` center that also passes the geo filter, or the first passing point.
 pub(super) fn best_geoloc_for_filter(
     points: &[(f64, f64)],
     geo_params: &flapjack::query::geo::GeoParams,
@@ -59,7 +60,8 @@ pub(super) fn best_geoloc_for_filter(
     }
 }
 
-/// TODO: Document apply_rule_geo_overrides.
+/// Applies query-rule-injected geo parameters (`aroundLatLng`, `aroundRadius`) on top
+/// of the request's geo params, clearing bounding box/polygon filters when a rule center is set.
 pub(super) fn apply_rule_geo_overrides(
     mut geo_params: flapjack::query::geo::GeoParams,
     rule_around_lat_lng: Option<&str>,
@@ -122,7 +124,7 @@ pub(super) fn parse_client_ip_for_geo(user_ip: Option<&str>) -> Option<std::net:
     user_ip.and_then(|raw_ip| raw_ip.parse::<std::net::IpAddr>().ok())
 }
 
-/// TODO: Document resolve_geoip_lookup_ip.
+/// Resolves the client IP to use for GeoIP-based `aroundLatLng` auto-detection.
 pub(super) fn resolve_geoip_lookup_ip(req: &SearchRequest) -> Option<std::net::IpAddr> {
     if !should_resolve_around_lat_lng_via_ip(req) {
         return None;
@@ -151,7 +153,7 @@ pub(super) fn resolve_geoip_reader(
     Some(reader)
 }
 
-/// TODO: Document resolve_around_lat_lng_via_ip.
+/// Sets `aroundLatLng` on the request by looking up the client IP via GeoIP.
 pub(super) fn resolve_around_lat_lng_via_ip(
     req: &mut SearchRequest,
     geoip_reader: &Option<Arc<crate::geoip::GeoIpReader>>,

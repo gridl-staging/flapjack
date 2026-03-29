@@ -152,7 +152,7 @@ pub struct SearchAppliedRule {
     pub object_id: String,
 }
 
-/// TODO: Document SearchResponse.
+/// Algolia-compatible search response returned by query endpoints.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {

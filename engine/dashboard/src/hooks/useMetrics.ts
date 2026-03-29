@@ -27,9 +27,6 @@ function getApiKeyFingerprint(apiKey: string | null | undefined) {
   return `authenticated:${apiKey.length}:${(hash >>> 0).toString(16)}`;
 }
 
-/**
- * TODO: Document usePrometheusMetrics.
- */
 export function usePrometheusMetrics() {
   const appId = useAuth((state) => state.appId);
   const apiKey = useAuth((state) => state.apiKey);

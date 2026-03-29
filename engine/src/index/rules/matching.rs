@@ -75,7 +75,8 @@ impl Rule {
         HashMap::new()
     }
 
-    /// TODO: Document Rule.matches_condition.
+    /// Test a single rule condition against the query. Dispatches to context matching
+    /// (string membership) or pattern matching depending on the condition's anchoring mode.
     fn matches_condition(
         &self,
         query_text: &str,
@@ -113,7 +114,9 @@ impl Rule {
         true
     }
 
-    /// TODO: Document Rule.matches_pattern.
+    /// Match a rule pattern against the query text using the condition's anchoring
+    /// (Is, StartsWith, EndsWith, Contains). Tokenizes both sides, then delegates
+    /// to `match_pattern_tokens_with_placeholders`.
     fn matches_pattern(
         &self,
         query_text: &str,
@@ -174,7 +177,9 @@ impl Rule {
         }
     }
 
-    /// TODO: Document Rule.matches_pattern_with_alternatives.
+    /// Re-run pattern matching with synonym-expanded alternatives for the query text.
+    /// Falls back to this path when the primary `matches_pattern` fails and synonyms
+    /// are available.
     fn matches_pattern_with_alternatives(
         &self,
         query_text: &str,
@@ -290,7 +295,8 @@ pub(super) enum PatternToken {
     FacetCapture(String),
 }
 
-/// TODO: Document parse_pattern_tokens.
+/// Split a rule pattern string into literal tokens and `{facet:attrName}` placeholder
+/// tokens. Returns `None` if the pattern is empty after tokenization.
 pub(super) fn parse_pattern_tokens(pattern: &str) -> Vec<PatternToken> {
     let mut tokens = Vec::new();
     let mut remaining = pattern;
@@ -325,7 +331,9 @@ pub(super) fn parse_pattern_tokens(pattern: &str) -> Vec<PatternToken> {
     tokens
 }
 
-/// TODO: Document match_pattern_tokens_with_placeholders.
+/// Match pattern tokens (literals and facet placeholders) against query tokens,
+/// respecting the anchoring mode. Placeholders consume exactly one query token.
+/// Returns `true` if all pattern tokens are satisfied.
 pub(super) fn match_pattern_tokens_with_placeholders(
     query_tokens: &[String],
     pattern_tokens: &[PatternToken],
@@ -365,7 +373,8 @@ pub(super) fn match_pattern_tokens_with_placeholders(
     }
 }
 
-/// TODO: Document extract_facet_captures.
+/// After a successful pattern match, re-run matching to extract the query tokens
+/// consumed by `{facet:attrName}` placeholders, returning `{attr_name → captured_value}`.
 pub(super) fn extract_facet_captures(
     query_text: &str,
     pattern: &str,
@@ -428,7 +437,8 @@ pub(super) fn extract_facet_captures(
     captures
 }
 
-/// TODO: Document tokenize_for_rule_matching.
+/// Lowercase and split text into tokens for rule matching. Uses the same Unicode
+/// segmentation as search queries so pattern tokens align with query tokens.
 pub(super) fn tokenize_for_rule_matching(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -458,7 +468,8 @@ fn token_sequence_matches_at(tokens: &[String], target: &[String], start: usize)
         .all(|(token, target_token)| token == target_token)
 }
 
-/// TODO: Document remove_token_sequence.
+/// Remove a contiguous sequence of tokens from query text, collapsing surrounding
+/// whitespace. Used to strip the matched pattern from the query after a rule fires.
 fn remove_token_sequence(tokens: Vec<String>, target: &[String]) -> Vec<String> {
     if tokens.is_empty() || target.is_empty() {
         return tokens;
@@ -479,7 +490,8 @@ fn remove_token_sequence(tokens: Vec<String>, target: &[String]) -> Vec<String> 
     rewritten
 }
 
-/// TODO: Document replace_token_sequence.
+/// Replace a contiguous sequence of tokens in query text with a replacement string.
+/// Used by rule query-edit actions (replace operations).
 fn replace_token_sequence(
     tokens: Vec<String>,
     target: &[String],
@@ -505,7 +517,8 @@ fn replace_token_sequence(
     rewritten
 }
 
-/// TODO: Document apply_query_edits_to_text.
+/// Apply a sequence of rule query edits (remove and replace operations) to the query
+/// text. Edits are applied in order; each operates on the result of the previous one.
 pub(super) fn apply_query_edits_to_text(
     query_text: &str,
     remove: Option<&[String]>,

@@ -93,7 +93,6 @@ mod tests {
         assert_eq!(outcome, TaskPollOutcome::Pending);
     }
 
-    /// TODO: Document classify_task_poll_response_surfaces_terminal_failures.
     #[test]
     fn classify_task_poll_response_surfaces_terminal_failures() {
         let outcome = classify_task_poll_response(
@@ -230,7 +229,6 @@ impl RunningServer {
         add_documents_batch_at(self.bind_addr(), index_name, payload)
     }
 
-    /// TODO: Document RunningServer.wait_for_task_published.
     pub(crate) fn wait_for_task_published(
         &self,
         index_name: &str,
@@ -283,7 +281,6 @@ pub(crate) struct HttpResponse {
     pub(crate) body: String,
 }
 
-/// TODO: Document spawn_flapjack_auto_port_process.
 pub(crate) fn spawn_flapjack_auto_port_process(
     data_dir: &str,
     no_auth: bool,
@@ -392,7 +389,6 @@ fn allocate_ephemeral_bind_addr() -> String {
     format!("127.0.0.1:{}", bind_addr.port())
 }
 
-/// TODO: Document wait_for_startup_bind_addr.
 fn wait_for_startup_bind_addr(child: &mut Child, timeout: Duration) -> String {
     let stdout = child
         .stdout
@@ -447,7 +443,6 @@ fn wait_for_startup_bind_addr(child: &mut Child, timeout: Duration) -> String {
     }
 }
 
-/// TODO: Document spawn_pipe_reader.
 fn spawn_pipe_reader<R: Read + Send + 'static>(reader: R, tx: mpsc::Sender<String>) {
     thread::spawn(move || {
         let mut reader = BufReader::new(reader);
@@ -481,7 +476,6 @@ fn extract_bind_addr_from_banner_line(line: &str) -> Option<String> {
     }
 }
 
-/// TODO: Document wait_for_health.
 fn wait_for_health(bind_addr: &str, timeout: Duration) {
     let start = Instant::now();
     loop {
@@ -534,7 +528,6 @@ fn extract_task_id_from_body(body: &Value) -> i64 {
         .unwrap_or_else(|| panic!("batch response must include numeric taskID: {body}"))
 }
 
-/// TODO: Document classify_task_poll_response.
 fn classify_task_poll_response(task_id: i64, body: &Value) -> TaskPollOutcome {
     let status = body["status"].as_str();
     let pending_task = body["pendingTask"].as_bool();
@@ -570,7 +563,6 @@ struct JsonResponse {
     body: Value,
 }
 
-/// TODO: Document http_request_with_headers.
 pub(crate) fn http_request_with_headers(
     bind_addr: &str,
     method: &str,
@@ -679,7 +671,6 @@ pub(crate) fn admin_entry_exists_in_json(json_str: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// TODO: Document strip_ansi.
 fn strip_ansi(text: &str) -> String {
     let mut result = String::new();
     let mut chars = text.chars().peekable();

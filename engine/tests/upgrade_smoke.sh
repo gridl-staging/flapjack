@@ -17,9 +17,8 @@ EOF
 }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WAIT_HELPER="$SCRIPT_DIR/common/wait_for_flapjack.sh"
-ADMIN_KEY="upgrade-smoke-admin-key-20260328"
+ADMIN_KEY=""
 INDEX_NAME="upgrade_smoke"
 QUERY_TOKEN="upgrade-smoke-token"
 
@@ -68,23 +67,31 @@ extract_port_from_log() {
   sed -n 's/.*Local:.*http:\/\/127\.0\.0\.1:\([0-9]*\).*/\1/p' "$log_path" | head -1
 }
 
+generate_admin_key() {
+  local random_hex
+  random_hex="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [ -n "$random_hex" ] || fail "failed to generate a random admin key from /dev/urandom"
+  printf 'fj_upgrade_smoke_%s\n' "$random_hex"
+}
+
 http_json() {
   local method="$1"
   local url="$2"
   local body="${3:-}"
+  local -a curl_args=(
+    -fsS
+    -X "$method"
+    "$url"
+    -H "content-type: application/json"
+    -H "x-algolia-application-id: flapjack"
+    -H "x-algolia-api-key: $ADMIN_KEY"
+  )
 
   if [ -n "$body" ]; then
-    curl -fsS -X "$method" "$url" \
-      -H "content-type: application/json" \
-      -H "x-algolia-application-id: flapjack" \
-      -H "x-algolia-api-key: $ADMIN_KEY" \
-      -d "$body"
-  else
-    curl -fsS -X "$method" "$url" \
-      -H "content-type: application/json" \
-      -H "x-algolia-application-id: flapjack" \
-      -H "x-algolia-api-key: $ADMIN_KEY"
+    curl_args+=(-d "$body")
   fi
+
+  curl "${curl_args[@]}"
 }
 
 wait_for_task_published() {
@@ -107,10 +114,12 @@ verify_search_hits() {
   local base_url="$1"
   local query="$2"
   local expected_hits="$3"
+  local request_body
   local response
   local hits
 
-  response="$(http_json POST "$base_url/1/indexes/$INDEX_NAME/query" "{\"query\":\"$query\"}")"
+  request_body="$(jq -cn --arg query "$query" '{query: $query}')"
+  response="$(http_json POST "$base_url/1/indexes/$INDEX_NAME/query" "$request_body")"
   hits="$(printf '%s' "$response" | jq -r '.nbHits')"
   [ "$hits" = "$expected_hits" ] || fail "expected $expected_hits hits for query '$query', got $hits"
 }
@@ -157,6 +166,7 @@ main() {
   [ -x "$NEW_BIN" ] || fail "new binary is not executable: $NEW_BIN"
   [ -x "$WAIT_HELPER" ] || fail "missing wait helper: $WAIT_HELPER"
 
+  ADMIN_KEY="$(generate_admin_key)"
   TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/flapjack-upgrade-smoke.XXXXXX")"
   DATA_DIR="$TMP_DIR/data"
   OLD_LOG="$TMP_DIR/old.log"

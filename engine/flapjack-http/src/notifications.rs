@@ -1,4 +1,3 @@
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/mar25_pm_14_rust_quality_leaky_test/flapjack_dev/engine/flapjack-http/src/notifications.rs.
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -76,7 +75,7 @@ fn validate_ses_configuration(config: &NotificationEnvConfig) -> Result<(), &'st
     Ok(())
 }
 
-/// TODO: Document build_ses_client.
+/// Creates an AWS SES client for notification emails, returning `None` if disabled.
 async fn build_ses_client(config: &NotificationEnvConfig) -> Option<aws_sdk_sesv2::Client> {
     if !config.enabled {
         tracing::info!("[notifications] SES notifications disabled");
@@ -275,7 +274,7 @@ pub fn format_usage_alert_email(
     (subject, body)
 }
 
-/// TODO: Document redact_user_token.
+/// Redacts a user token for safe logging, preserving only the first and last 4 characters.
 fn redact_user_token(user_token: &str) -> String {
     const PREFIX_CHARS: usize = 4;
     const SUFFIX_CHARS: usize = 4;

@@ -61,7 +61,6 @@ make_sourceable_script() {
   chmod +x "$dest"
 }
 
-# TODO: Document write_runner_fixture_helpers.
 write_runner_fixture_helpers() {
   local dest="$1"
   cat > "$dest" <<'EOF'

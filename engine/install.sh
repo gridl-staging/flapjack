@@ -42,7 +42,6 @@ error() { printf "${RED}error${NC} %s\n" "$1" >&2; }
 
 # ── Platform Detection ───────────────────────────────────────────────────────
 
-# TODO: Document detect_platform.
 detect_platform() {
   os="$(uname -s)"
   arch="$(uname -m)"
@@ -107,7 +106,6 @@ detect_downloader() {
   fi
 }
 
-# TODO: Document download.
 download() {
   url="$1"
   output="$2"
@@ -134,7 +132,6 @@ download() {
 
 # ── Version Resolution ───────────────────────────────────────────────────────
 
-# TODO: Document get_version.
 get_version() {
   if [ -n "${FLAPJACK_VERSION:-}" ]; then
     version="$FLAPJACK_VERSION"
@@ -218,7 +215,6 @@ download_release_asset() {
 
 # ── Download & Verify ────────────────────────────────────────────────────────
 
-# TODO: Document download_and_verify.
 download_and_verify() {
   archive_name="flapjack-${target}.tar.gz"
   checksum_name="${archive_name}.sha256"
@@ -270,7 +266,6 @@ install_binary() {
 
 # ── PATH Setup ───────────────────────────────────────────────────────────────
 
-# TODO: Document setup_path.
 setup_path() {
   if [ "${NO_MODIFY_PATH:-0}" = "1" ]; then
     return
@@ -346,7 +341,6 @@ setup_path() {
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-# TODO: Document main.
 main() {
   setup_colors
 

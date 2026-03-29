@@ -451,8 +451,6 @@ mod tests {
 
         assert_eq!(oplog.oldest_seq(), None);
     }
-
-    /// TODO: Document test_oldest_seq_after_truncate_before.
     #[test]
     fn test_oldest_seq_after_truncate_before() {
         let tmp = TempDir::new().unwrap();

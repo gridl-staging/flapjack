@@ -43,7 +43,6 @@ find_latest_artifact() {
   done < <(list_result_dirs_desc)
 }
 
-# TODO: Document find_latest_complete_k6_dir.
 find_latest_complete_k6_dir() {
   local result_dir
   local scenario_name
@@ -79,7 +78,6 @@ discover_search_vus() {
   echo "$max_vus"
 }
 
-# TODO: Document main.
 main() {
   [[ -f "$BASELINE_COMPILER" ]] || fail "missing $BASELINE_COMPILER"
   [[ -f "$BENCHMARKS_FILE" ]] || fail "missing $BENCHMARKS_FILE"

@@ -208,7 +208,6 @@ run_batch_imports() {
 
 # --- main ---
 
-# TODO: Document main.
 main() {
   [[ -f "$LOADTEST_HELPERS" ]] || fail "missing $LOADTEST_HELPERS"
 

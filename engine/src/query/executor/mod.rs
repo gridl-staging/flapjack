@@ -35,7 +35,8 @@ pub struct QueryExecutor {
 }
 
 impl QueryExecutor {
-    /// TODO: Document QueryExecutor.new.
+    /// Create a query executor with the schema's `_json_search` field, a document
+    /// converter, and a default filter compiler.
     pub fn new(converter: Arc<DocumentConverter>, schema: tantivy::schema::Schema) -> Self {
         let json_search_field = schema
             .get_field("_json_search")
@@ -58,7 +59,8 @@ impl QueryExecutor {
         self
     }
 
-    /// TODO: Document QueryExecutor.with_settings.
+    /// Apply index settings: extract searchable attributes (with `unordered()` tracking),
+    /// configure typo tolerance, stop words, synonyms, and custom ranking.
     pub fn with_settings(mut self, settings: SettingsRef) -> Self {
         // Reset derived path state on each call so repeated builder usage stays correct.
         self.searchable_paths.clear();
@@ -151,7 +153,8 @@ impl QueryExecutor {
 
     // Expands short queries (≤2 chars) by enumerating matching terms from the index.
     // Recursively handles nested BooleanQueries containing ShortQueryPlaceholders.
-    /// TODO: Document QueryExecutor.expand_short_query_with_searcher.
+    /// Replace `ShortQueryPlaceholder` nodes with real term queries by enumerating
+    /// matching terms from the searcher's index segments.
     pub(crate) fn expand_short_query_with_searcher(
         &self,
         query: Box<dyn TantivyQuery>,
@@ -203,7 +206,8 @@ impl QueryExecutor {
         Ok(query)
     }
 
-    /// TODO: Document QueryExecutor.expand_placeholder.
+    /// Expand a single placeholder by iterating the term dictionary for each searchable
+    /// field, collecting prefix-matching terms up to a configurable limit.
     fn expand_placeholder(
         &self,
         placeholder: &ShortQueryPlaceholder,
@@ -278,7 +282,7 @@ impl QueryExecutor {
         Ok(documents)
     }
 
-    /// TODO: Document QueryExecutor.build_result.
+    /// Assemble scored documents and total hit count into a `SearchResult`.
     pub(crate) fn build_result(
         &self,
         documents: Vec<ScoredDocument>,

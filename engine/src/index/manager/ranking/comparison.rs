@@ -14,7 +14,8 @@ pub(in crate::index::manager) enum RankingSortValue {
     Missing,
 }
 
-/// TODO: Document parse_custom_ranking_specs.
+/// Parse custom ranking specifications from index settings into `(field_path,
+/// direction)` pairs. Each spec is formatted as `asc(field)` or `desc(field)`.
 pub(in crate::index::manager) fn parse_custom_ranking_specs(
     settings: Option<&IndexSettings>,
 ) -> Vec<CustomRankingSpec> {
@@ -40,7 +41,8 @@ pub(in crate::index::manager) fn parse_custom_ranking_specs(
     specs
 }
 
-/// TODO: Document compare_ranking_sort_value.
+/// Compare two `SortValue` entries for ranking. Handles numeric, string, and
+/// boolean types with null-last semantics and directional ordering (asc/desc).
 pub(in crate::index::manager) fn compare_ranking_sort_value(
     a: &RankingSortValue,
     b: &RankingSortValue,
@@ -61,7 +63,9 @@ pub(in crate::index::manager) fn compare_ranking_sort_value(
     }
 }
 
-/// TODO: Document compare_custom_values.
+/// Compare two `FieldValue` entries for custom ranking. Coerces across types
+/// (numeric comparison when both are numbers, string fallback), with null or
+/// missing values sorting last.
 pub(in crate::index::manager) fn compare_custom_values(
     a_values: &[RankingSortValue],
     b_values: &[RankingSortValue],
@@ -90,7 +94,8 @@ pub(in crate::index::manager) fn compare_custom_values(
     Ordering::Equal
 }
 
-/// TODO: Document extract_custom_ranking_value.
+/// Extract a `FieldValue` from a document's JSON by dotted field path. Traverses
+/// nested objects and returns `None` if any path segment is missing.
 pub(in crate::index::manager) fn extract_custom_ranking_value(
     document: &Document,
     field_path: &str,
@@ -126,7 +131,9 @@ pub(in crate::index::manager) fn extract_custom_ranking_value(
     }
 }
 
-/// TODO: Document Stage2RankingContext.
+/// Pre-computed context for stage-2 re-ranking. Holds parsed ranking criteria,
+/// custom ranking specs, searchable attributes, typo settings, and optional
+/// filter scores to avoid recomputation per comparison.
 pub(in crate::index::manager) struct Stage2RankingContext<'a> {
     pub query_text: &'a str,
     pub searchable_paths: &'a [String],
@@ -146,7 +153,8 @@ pub(in crate::index::manager) struct Stage2RankingContext<'a> {
     pub min_proximity: Option<u32>,
 }
 
-/// TODO: Document resolve_optional_filter_values_for_path.
+/// Collect the expected filter values for a dotted field path from the optional
+/// filter specs. Returns the values and their associated boost scores.
 pub(in crate::index::manager) fn resolve_optional_filter_values_for_path<'a>(
     document: &'a Document,
     field_path: &str,
@@ -193,7 +201,8 @@ pub(in crate::index::manager) fn resolve_optional_filter_values_for_path<'a>(
     current_values
 }
 
-/// TODO: Document field_value_matches_optional_filter_value.
+/// Test whether a document's field value matches an optional filter value, with
+/// type coercion (string-to-number, bool-to-string) for cross-type comparison.
 pub(in crate::index::manager) fn field_value_matches_optional_filter_value(
     value: &FieldValue,
     expected: &str,
@@ -227,7 +236,8 @@ pub(in crate::index::manager) fn doc_matches_optional_filter_spec(
         .any(|field_value| field_value_matches_optional_filter_value(field_value, value))
 }
 
-/// TODO: Document compute_optional_filter_score.
+/// Sum the boost scores for all optional filter specs whose values match the
+/// document's fields. Higher scores indicate stronger optional filter affinity.
 pub(in crate::index::manager) fn compute_optional_filter_score(
     document: &Document,
     groups: &[Vec<(String, String, f32)>],

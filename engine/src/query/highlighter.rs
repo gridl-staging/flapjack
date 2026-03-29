@@ -55,7 +55,8 @@ fn all_query_words_found(query_words: &[String], matched_words: &[String]) -> bo
         .all(|query_word| unique_matched.contains(query_word.as_str()))
 }
 
-/// TODO: Document collect_exact_matches.
+/// Find query words that appear as exact substrings in the lowercased text
+/// and record their byte positions for highlighting.
 fn collect_exact_matches(
     text_lower: &str,
     query_words: &[String],
@@ -74,7 +75,8 @@ fn collect_exact_matches(
     }
 }
 
-/// TODO: Document collect_split_matches.
+/// Find matches where a single query word is split across adjacent text words
+/// (e.g. query "notebook" matches text "note book"), recording positions.
 fn collect_split_matches(
     text_lower: &str,
     query_words: &[String],
@@ -107,7 +109,8 @@ fn collect_split_matches(
     }
 }
 
-/// TODO: Document collect_concat_matches.
+/// Find matches where adjacent query words concatenate inside the text
+/// (e.g. query "note book" matches text "notebook"), recording positions.
 fn collect_concat_matches(
     text_lower: &str,
     query_words: &[String],
@@ -136,7 +139,7 @@ fn collect_concat_matches(
     }
 }
 
-/// TODO: Document split_text_words.
+/// Split text into (byte_offset, word) pairs on non-alphanumeric boundaries.
 fn split_text_words(text: &str) -> Vec<(usize, &str)> {
     let mut words = Vec::new();
     let mut current_start = 0;
@@ -170,7 +173,8 @@ fn highlight_end_for_char_count(text_word: &str, word_start: usize, char_count: 
         .unwrap_or(word_start + text_word.len())
 }
 
-/// TODO: Document collect_fuzzy_matches.
+/// Find query words that fuzzy-match text words within Levenshtein distance 1-2
+/// (scaled by word length), recording their positions for highlighting.
 fn collect_fuzzy_matches(
     text: &str,
     query_words: &[String],
@@ -240,7 +244,8 @@ impl Highlighter {
         self
     }
 
-    /// TODO: Document Highlighter.highlight_document.
+    /// Highlight all highlightable fields in a document, returning a map of
+    /// field paths to their highlighted values.
     pub fn highlight_document(
         &self,
         doc: &Document,
@@ -264,7 +269,8 @@ impl Highlighter {
         result
     }
 
-    /// TODO: Document Highlighter.highlight_field_value.
+    /// Recursively highlight a field value: descend into objects/arrays,
+    /// apply text highlighting to string leaves.
     fn highlight_field_value(
         &self,
         value: &FieldValue,
@@ -298,7 +304,8 @@ impl Highlighter {
         }
     }
 
-    /// TODO: Document Highlighter.highlight_text.
+    /// Highlight a text string by collecting exact, split, concat, and fuzzy
+    /// matches, then wrapping matched spans in `<em>` tags.
     pub fn highlight_text(&self, text: &str, query_words: &[String]) -> HighlightResult {
         let text_lower = text.to_lowercase();
         let mut matched_words = Vec::new();
@@ -388,7 +395,8 @@ impl Highlighter {
         merged
     }
 
-    /// TODO: Document Highlighter.apply_highlights.
+    /// Insert `<em>`/`</em>` tags around the given byte-position ranges in the text,
+    /// merging overlapping ranges and preserving surrounding content.
     fn apply_highlights(&self, text: &str, positions: &[(usize, usize)]) -> String {
         if positions.is_empty() {
             return text.to_string();
@@ -443,7 +451,8 @@ impl Highlighter {
         result
     }
 
-    /// TODO: Document Highlighter.snippet_field_value.
+    /// Extract a snippet (truncated highlight) from a field value, limiting to
+    /// `word_count` words around the best match region.
     fn snippet_field_value(
         &self,
         value: &FieldValue,
@@ -484,7 +493,8 @@ impl Highlighter {
         }
     }
 
-    /// TODO: Document Highlighter.snippet_text.
+    /// Generate a snippet by highlighting the text, then windowing around the first
+    /// match to return at most `word_count` words with ellipsis markers.
     fn snippet_text(&self, text: &str, query_words: &[String], word_count: usize) -> SnippetResult {
         // First, get the full highlight result to find match positions
         let highlight = self.highlight_text(text, query_words);

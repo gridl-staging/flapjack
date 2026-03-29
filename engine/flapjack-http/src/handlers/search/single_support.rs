@@ -16,7 +16,7 @@ pub(super) struct SearchWindow {
     pub(super) should_window_for_personalization: bool,
 }
 
-/// TODO: Document resolve_search_sort.
+/// Parses sort specifications (`field:asc`/`field:desc`) from the search request.
 pub(super) fn resolve_search_sort(req: &SearchRequest) -> Option<Sort> {
     req.sort.as_ref().and_then(|sort_specs| {
         sort_specs.first().and_then(|first| {
@@ -37,7 +37,8 @@ pub(super) fn resolve_search_sort(req: &SearchRequest) -> Option<Sort> {
     })
 }
 
-/// TODO: Document build_facet_requests.
+/// Builds the facet request list from the search request's `facets` param, expanding
+/// `["*"]` to all configured facets and filtering against the index's allowed facet set.
 pub(super) fn build_facet_requests(
     req: &SearchRequest,
     loaded_settings: Option<&IndexSettings>,
@@ -77,7 +78,7 @@ pub(super) fn build_facet_requests(
     }
 }
 
-/// TODO: Document resolve_distinct_count.
+/// Resolves the distinct deduplication count from the request or index settings.
 pub(super) fn resolve_distinct_count(
     req: &SearchRequest,
     loaded_settings: Option<&IndexSettings>,
@@ -104,7 +105,7 @@ pub(super) fn resolve_effective_relevancy_strictness(
         .unwrap_or(DEFAULT_RELEVANCY_STRICTNESS)
 }
 
-/// TODO: Document resolve_search_window.
+/// Computes the internal search window size accounting for pagination, geo, and personalization.
 pub(super) fn resolve_search_window(
     req: &SearchRequest,
     should_window_for_personalization: bool,
@@ -186,8 +187,6 @@ fn hybrid_search_inputs_reports_inactive_without_query_vector() {
 
     assert!(!inputs.is_hybrid_active());
 }
-
-/// TODO: Document resolve_search_sort_parses_asc_and_desc_suffixes.
 #[test]
 fn resolve_search_sort_parses_asc_and_desc_suffixes() {
     let req = SearchRequest {

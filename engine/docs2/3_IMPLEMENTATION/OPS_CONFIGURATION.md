@@ -31,7 +31,6 @@ Verified separately from the harnesses above:
 
 - Request correlation (`x-request-id`) is always on and has no env flag.
 - Startup dependency summary logging is always on and has no env flag.
-- OpenTelemetry export is planned but not shipped yet.
 
 ## Server
 
@@ -63,6 +62,7 @@ Verified separately from the harnesses above:
 | `FLAPJACK_ALLOWED_ORIGINS` | Comma-separated origin URLs | permissive mode | CORS allowlist. Empty or invalid entries fall back to permissive mode. |
 | `FLAPJACK_SHUTDOWN_TIMEOUT_SECS` | Positive integer seconds | `30` | Graceful shutdown drain timeout. |
 | `FLAPJACK_TRUSTED_PROXY_CIDRS` | Comma-separated CIDRs, or `off`/`none` | `127.0.0.0/8,::1/128` | Trusted proxy ranges for forwarded client IP handling. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/gRPC collector endpoint URL | unset | Enables OpenTelemetry trace export when the server is built with `--features otel`. |
 
 ## Storage / Snapshots
 
@@ -155,8 +155,12 @@ FLAPJACK_SHUTDOWN_TIMEOUT_SECS=60 \
 flapjack-server
 ```
 
-### OTEL status
+### OpenTelemetry export (feature-gated)
 
-OpenTelemetry export is planned but not shipped yet. Keep OTEL-specific env
-settings out of production config until PR-11 moves from planned to shipped in
-[../FEATURES.md](../FEATURES.md).
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+cargo run -p flapjack-server --features otel
+```
+
+If you run a prebuilt binary, it must be compiled with the `otel` feature for
+this env var to take effect.

@@ -72,8 +72,6 @@ fn committed_docs2_openapi_matches_export_output() {
         "committed engine/docs2/openapi.json must be regenerated from current ApiDoc when routes or schemas change"
     );
 }
-
-/// TODO: Document export_output_covers_recommend_personalization_and_experiments_routes.
 #[test]
 fn export_output_covers_recommend_personalization_and_experiments_routes() {
     let temp_dir = TempDir::new().expect("temp dir must be created");
@@ -97,8 +95,6 @@ fn export_output_covers_recommend_personalization_and_experiments_routes() {
         );
     }
 }
-
-/// TODO: Document export_output_includes_federated_batch_contract_components.
 #[test]
 fn export_output_includes_federated_batch_contract_components() {
     let temp_dir = TempDir::new().expect("temp dir must be created");

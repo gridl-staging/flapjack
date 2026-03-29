@@ -4754,8 +4754,6 @@ fn parse_client_ip_for_geo_returns_none_for_missing_or_invalid_values() {
         Some("8.8.8.8".parse().unwrap())
     );
 }
-
-/// TODO: Document resolve_geoip_lookup_ip_requires_eligible_request_and_valid_user_ip.
 #[test]
 fn resolve_geoip_lookup_ip_requires_eligible_request_and_valid_user_ip() {
     let disabled = SearchRequest {
@@ -4795,8 +4793,6 @@ fn resolve_geoip_reader_returns_none_when_unavailable() {
     let no_reader: Option<Arc<crate::geoip::GeoIpReader>> = None;
     assert!(resolve_geoip_reader(&no_reader).is_none());
 }
-
-/// TODO: Document around_lat_lng_via_ip_resolves_coords_from_geoip.
 #[test]
 fn around_lat_lng_via_ip_resolves_coords_from_geoip() {
     // Requires a real MMDB file — skip if not available

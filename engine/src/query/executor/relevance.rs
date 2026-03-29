@@ -17,7 +17,8 @@ impl QueryExecutor {
             .collect()
     }
 
-    /// TODO: Document QueryExecutor.execute_relevance_sort.
+    /// Execute a relevance-sorted search: collect top-K candidates by BM25 score,
+    /// then apply tier-2 ranking (attribute position, custom ranking) to re-sort.
     pub(crate) fn execute_relevance_sort(
         &self,
         searcher: &Searcher,
@@ -61,7 +62,8 @@ impl QueryExecutor {
         Ok((documents, total))
     }
 
-    /// TODO: Document QueryExecutor.apply_tier2_and_custom_ranking.
+    /// Re-rank BM25 candidates by attribute position (min term position per document)
+    /// and then by custom ranking fields (asc/desc per `customRanking` settings).
     pub(crate) fn apply_tier2_and_custom_ranking(
         &self,
         searcher: &Searcher,
@@ -179,7 +181,8 @@ impl QueryExecutor {
             .collect())
     }
 
-    /// TODO: Document QueryExecutor.apply_tier2_only.
+    /// Apply attribute-position ranking without custom ranking fields; used when
+    /// no `customRanking` is configured.
     pub(crate) fn apply_tier2_only(
         &self,
         searcher: &Searcher,
@@ -247,7 +250,8 @@ impl QueryExecutor {
             .collect())
     }
 
-    /// TODO: Document QueryExecutor.extract_min_position.
+    /// Find the minimum term position across all searchable fields for a document,
+    /// used as the attribute-ranking signal (lower position = better match).
     pub(crate) fn extract_min_position(
         &self,
         searcher: &Searcher,

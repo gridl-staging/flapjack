@@ -101,7 +101,7 @@
         "tags": [
           "query-suggestions"
         ],
-        "summary": "POST /1/configs — create a new configuration and schedule a build",
+        "summary": "TODO: Document create_config.",
         "operationId": "create_config",
         "requestBody": {
           "content": {
@@ -184,7 +184,7 @@
         "tags": [
           "query-suggestions"
         ],
-        "summary": "PUT /1/configs/:indexName — update an existing configuration and rebuild",
+        "summary": "TODO: Document update_config.",
         "operationId": "update_config",
         "parameters": [
           {
@@ -281,7 +281,7 @@
         "tags": [
           "query-suggestions"
         ],
-        "summary": "POST /1/configs/:indexName/build — trigger an immediate rebuild (Flapjack extension)",
+        "summary": "TODO: Document trigger_build.",
         "operationId": "trigger_build",
         "parameters": [
           {
@@ -804,7 +804,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "Add a record with an auto-generated objectID (Algolia-compatible)",
+        "summary": "TODO: Document add_record_auto_id.",
         "operationId": "add_record_auto_id",
         "parameters": [
           {
@@ -1130,7 +1130,7 @@
         "tags": [
           "snapshots"
         ],
-        "summary": "TODO: Document export_snapshot.",
+        "summary": "Exports an index as a compressed snapshot file returned as a binary download response.",
         "operationId": "export_snapshot",
         "parameters": [
           {
@@ -1489,7 +1489,7 @@
         "tags": [
           "snapshots"
         ],
-        "summary": "TODO: Document restore_from_s3.",
+        "summary": "Restores an index from an S3 snapshot, downloading and installing the snapshot bytes into the local index directory.",
         "operationId": "restore_from_s3",
         "parameters": [
           {
@@ -1539,7 +1539,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "Batch save multiple rules",
+        "summary": "TODO: Document save_rules.",
         "operationId": "save_rules",
         "parameters": [
           {
@@ -1569,6 +1569,9 @@
                 "schema": {}
               }
             }
+          },
+          "400": {
+            "description": "Invalid query parameter value"
           }
         },
         "security": [
@@ -1583,7 +1586,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "Clear all rules for an index",
+        "summary": "TODO: Document clear_rules.",
         "operationId": "clear_rules",
         "parameters": [
           {
@@ -1618,7 +1621,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "Search for rules",
+        "summary": "TODO: Document search_rules.",
         "operationId": "search_rules",
         "parameters": [
           {
@@ -1662,7 +1665,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "Get a rule by ID",
+        "summary": "TODO: Document get_rule.",
         "operationId": "get_rule",
         "parameters": [
           {
@@ -1707,7 +1710,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "Create or update a rule",
+        "summary": "TODO: Document save_rule.",
         "operationId": "save_rule",
         "parameters": [
           {
@@ -1758,7 +1761,7 @@
         "tags": [
           "rules"
         ],
-        "summary": "Delete a rule by ID",
+        "summary": "TODO: Document delete_rule.",
         "operationId": "delete_rule",
         "parameters": [
           {
@@ -1889,7 +1892,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Update index settings",
+        "summary": "TODO: Document set_settings.",
         "operationId": "set_settings",
         "parameters": [
           {
@@ -1940,7 +1943,7 @@
         "tags": [
           "snapshots"
         ],
-        "summary": "TODO: Document snapshot_to_s3.",
+        "summary": "Uploads an index snapshot to the configured S3 bucket, returning the snapshot key on success.",
         "operationId": "snapshot_to_s3",
         "parameters": [
           {
@@ -2019,7 +2022,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "Batch save multiple synonyms",
+        "summary": "TODO: Document save_synonyms.",
         "operationId": "save_synonyms",
         "parameters": [
           {
@@ -2049,6 +2052,9 @@
                 "schema": {}
               }
             }
+          },
+          "400": {
+            "description": "Invalid query parameter value"
           }
         },
         "security": [
@@ -2063,7 +2069,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "Clear all synonyms for an index",
+        "summary": "TODO: Document clear_synonyms.",
         "operationId": "clear_synonyms",
         "parameters": [
           {
@@ -2098,7 +2104,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "Search for synonyms",
+        "summary": "TODO: Document search_synonyms.",
         "operationId": "search_synonyms",
         "parameters": [
           {
@@ -2142,7 +2148,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "Get a synonym by ID",
+        "summary": "TODO: Document get_synonym.",
         "operationId": "get_synonym",
         "parameters": [
           {
@@ -2187,7 +2193,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "Create or update a synonym",
+        "summary": "TODO: Document save_synonym.",
         "operationId": "save_synonym",
         "parameters": [
           {
@@ -2238,7 +2244,7 @@
         "tags": [
           "synonyms"
         ],
-        "summary": "Delete a synonym by ID",
+        "summary": "TODO: Document delete_synonym.",
         "operationId": "delete_synonym",
         "parameters": [
           {
@@ -2379,7 +2385,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "Update or create an object",
+        "summary": "TODO: Document put_object.",
         "operationId": "put_object",
         "parameters": [
           {
@@ -2435,7 +2441,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "Delete a single object by ID",
+        "summary": "TODO: Document delete_object.",
         "operationId": "delete_object",
         "parameters": [
           {
@@ -2484,7 +2490,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "Partial update a record (Algolia-compatible dedicated endpoint)",
+        "summary": "TODO: Document partial_update_object.",
         "operationId": "partial_update_object",
         "parameters": [
           {
@@ -2572,7 +2578,7 @@
         "tags": [
           "keys"
         ],
-        "summary": "Create a new API key",
+        "summary": "TODO: Document create_key.",
         "operationId": "create_key",
         "requestBody": {
           "description": "Key configuration",
@@ -3395,8 +3401,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Create a new A/B test experiment from an Algolia-compatible request body.",
-        "description": "Validates and converts the incoming DTO, persists the experiment via the store,\nand returns the assigned numeric ID.\n\n# Returns\n\n`200 OK` with the numeric AB test ID and index name on success,\nor an error response if the store is unavailable or validation fails.",
+        "summary": "TODO: Document create_experiment.",
         "operationId": "create_experiment",
         "requestBody": {
           "description": "A/B test creation payload",
@@ -3631,8 +3636,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Record the conclusion of an experiment with a declared winner and statistical summary.",
-        "description": "Validates the winner field, persists the conclusion, and if the variant won with\npromotion requested, applies the variant's settings to the main index.\n\n# Returns\n\nThe updated experiment with its conclusion attached, or an error response.",
+        "summary": "TODO: Document conclude_experiment.",
         "operationId": "conclude_experiment",
         "parameters": [
           {
@@ -5931,7 +5935,7 @@
       },
       "AnalyticsRateDateEntry": {
         "type": "object",
-        "description": "TODO: Document AnalyticsRateDateEntry.",
+        "description": "Analytics time-series entry pairing a date with a rate value.",
         "required": [
           "date"
         ],
@@ -6006,7 +6010,7 @@
       },
       "AnalyticsRateWithDatesResponse": {
         "type": "object",
-        "description": "TODO: Document AnalyticsRateWithDatesResponse.",
+        "description": "Analytics response containing an aggregate rate and per-date breakdown.",
         "required": [
           "dates"
         ],
@@ -6219,7 +6223,7 @@
       },
       "AnalyticsTopSearchEntry": {
         "type": "object",
-        "description": "TODO: Document AnalyticsTopSearchEntry.",
+        "description": "Analytics response entry for a top search query with its count.",
         "required": [
           "search",
           "count"
@@ -9451,7 +9455,7 @@
       },
       "SearchResponse": {
         "type": "object",
-        "description": "TODO: Document SearchResponse.",
+        "description": "Algolia-compatible search response returned by query endpoints.",
         "required": [
           "hits",
           "nbHits",

@@ -7,7 +7,8 @@ use tantivy::schema::IndexRecordOption;
 use tantivy::Searcher;
 
 impl QueryExecutor {
-    /// TODO: Document QueryExecutor.apply_rules_to_results.
+    /// Apply rule effects (hide, pin, promote) to the scored result set, removing
+    /// hidden docs and inserting promoted/pinned docs at their target positions.
     pub(crate) fn apply_rules_to_results(
         &self,
         searcher: &Searcher,

@@ -30,11 +30,8 @@ fn index_path_or_404(state: &AppState, index_name: &str) -> Result<PathBuf, Box<
 }
 
 fn internal_error(prefix: &str, error: impl std::fmt::Display) -> Response {
-    json_error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("{prefix}: {error}"),
-    )
-    .into_response()
+    tracing::error!("{prefix}: {error}");
+    json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
 }
 
 fn snapshot_retention() -> usize {
@@ -44,13 +41,40 @@ fn snapshot_retention() -> usize {
         .unwrap_or(24)
 }
 
-/// TODO: Document download_restore_payload.
+/// Validates that a user-supplied restore key references the correct index and has proper format.
+fn validate_restore_key_override(index_name: &str, key: &str) -> Result<(), Box<Response>> {
+    let expected_prefix = format!("snapshots/{index_name}/");
+    let Some(file_name) = key.strip_prefix(&expected_prefix) else {
+        return Err(Box::new(
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "key must reference a snapshot for the requested index",
+            )
+            .into_response(),
+        ));
+    };
+
+    if file_name.is_empty() || file_name.contains('/') || !file_name.ends_with(".tar.gz") {
+        return Err(Box::new(
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "key must reference a snapshot for the requested index",
+            )
+            .into_response(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Downloads a snapshot payload from S3, using a specific key override or the latest snapshot for the index.
 async fn download_restore_payload(
     s3_config: &S3Config,
     index_name: &str,
     key_override: Option<String>,
 ) -> Result<(String, Vec<u8>), Box<Response>> {
     if let Some(key) = key_override {
+        validate_restore_key_override(index_name, &key)?;
         let data = flapjack::index::s3::download_snapshot(s3_config, &key)
             .await
             .map_err(|error| Box::new(internal_error("S3 download failed", error)))?;
@@ -64,7 +88,7 @@ async fn download_restore_payload(
     }
 }
 
-/// TODO: Document export_snapshot.
+/// Exports an index as a compressed snapshot file returned as a binary download response.
 #[utoipa::path(
     get,
     path = "/1/indexes/{indexName}/export",
@@ -100,10 +124,7 @@ pub async fn export_snapshot(
             ];
             (headers, bytes).into_response()
         }
-        Err(e) => {
-            tracing::error!("Export failed: {:?}", e);
-            internal_error("Export failed", e)
-        }
+        Err(e) => internal_error("Export failed", e),
     }
 }
 
@@ -131,14 +152,11 @@ pub async fn import_snapshot(
 ) -> Response {
     match crate::startup_catchup::install_snapshot_bytes(&state.manager, &index_name, &body) {
         Ok(()) => Json(serde_json::json!({ "status": "imported" })).into_response(),
-        Err(e) => {
-            tracing::error!("Import failed: {:?}", e);
-            internal_error("Import failed", e)
-        }
+        Err(e) => internal_error("Import failed", e),
     }
 }
 
-/// TODO: Document snapshot_to_s3.
+/// Uploads an index snapshot to the configured S3 bucket, returning the snapshot key on success.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/snapshot",
@@ -195,7 +213,7 @@ pub async fn snapshot_to_s3(
     }
 }
 
-/// TODO: Document restore_from_s3.
+/// Restores an index from an S3 snapshot, downloading and installing the snapshot bytes into the local index directory.
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/restore",
@@ -266,17 +284,18 @@ pub async fn list_s3_snapshots(ValidatedIndexName(index_name): ValidatedIndexNam
 
     match flapjack::index::s3::list_snapshots(&s3_config, &index_name).await {
         Ok(keys) => Json(serde_json::json!({ "snapshots": keys })).into_response(),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => internal_error("List snapshots failed", e),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{export_snapshot, import_snapshot};
+    use super::{export_snapshot, import_snapshot, validate_restore_key_override};
     use crate::test_helpers::{body_json, TestStateBuilder};
     use axum::{
         body::Body,
         http::{Request, StatusCode},
+        response::Response,
         routing::{get, post},
         Router,
     };
@@ -285,8 +304,6 @@ mod tests {
     use std::collections::HashMap;
     use tempfile::TempDir;
     use tower::ServiceExt;
-
-    /// TODO: Document export_snapshot_missing_index_returns_json_without_router_error_wrapper.
     #[tokio::test]
     async fn export_snapshot_missing_index_returns_json_without_router_error_wrapper() {
         let tmp = TempDir::new().unwrap();
@@ -323,8 +340,6 @@ mod tests {
             })
         );
     }
-
-    /// TODO: Document import_snapshot_success_returns_json_without_router_error_wrapper.
     #[tokio::test]
     async fn import_snapshot_success_returns_json_without_router_error_wrapper() {
         let tmp = TempDir::new().unwrap();
@@ -377,5 +392,74 @@ mod tests {
                 "status": "imported"
             })
         );
+    }
+
+    #[tokio::test]
+    async fn import_snapshot_invalid_payload_returns_sanitized_500_message() {
+        let tmp = TempDir::new().unwrap();
+        let state = TestStateBuilder::new(&tmp).build_shared();
+        let app = Router::new()
+            .route("/1/indexes/:indexName/import", post(import_snapshot))
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/1/indexes/products/import")
+                    .body(Body::from("not-a-valid-snapshot".as_bytes().to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(response).await;
+        let message = body["message"]
+            .as_str()
+            .expect("expected string message for 500 responses");
+        assert_eq!(message, "Internal server error");
+        assert_eq!(body["status"], serde_json::json!(500));
+        assert!(
+            !message.contains("Import failed:"),
+            "500 response must not leak internal prefix text: {message}"
+        );
+        assert!(
+            !message.contains("not-a-valid-snapshot"),
+            "500 response must not leak backend error details: {message}"
+        );
+    }
+
+    async fn assert_bad_request_message(response: Response, expected_message: &str) {
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({
+                "message": expected_message,
+                "status": 400
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_key_override_rejects_cross_index_snapshot_keys() {
+        let response =
+            validate_restore_key_override("products", "snapshots/orders/20260329T120000Z.tar.gz")
+                .unwrap_err();
+
+        assert_bad_request_message(
+            *response,
+            "key must reference a snapshot for the requested index",
+        )
+        .await;
+    }
+
+    #[test]
+    fn restore_key_override_accepts_requested_index_snapshot_keys() {
+        assert!(validate_restore_key_override(
+            "products",
+            "snapshots/products/20260329T120000Z.tar.gz"
+        )
+        .is_ok());
     }
 }

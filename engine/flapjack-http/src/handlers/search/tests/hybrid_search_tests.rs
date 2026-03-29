@@ -61,8 +61,6 @@ fn cache_query_vector(state: &Arc<AppState>, embedder_name: &str, query: &str, v
         .query_cache
         .insert(embedder_name, query, vector);
 }
-
-/// TODO: Document test_hybrid_search_pure_bm25.
 #[tokio::test]
 async fn test_hybrid_search_pure_bm25() {
     let tmp = TempDir::new().unwrap();
@@ -108,8 +106,6 @@ async fn test_hybrid_search_pure_bm25() {
     // doc3 ("cooking recipes") should NOT appear for query "learning"
     assert!(!ids.contains(&"doc3"));
 }
-
-/// TODO: Document test_hybrid_search_pure_vector.
 #[tokio::test]
 async fn test_hybrid_search_pure_vector() {
     let tmp = TempDir::new().unwrap();
@@ -164,8 +160,6 @@ async fn test_hybrid_search_pure_vector() {
         "doc4 should appear via vector search even without keyword match"
     );
 }
-
-/// TODO: Document test_hybrid_search_blended.
 #[tokio::test]
 async fn test_hybrid_search_blended() {
     let tmp = TempDir::new().unwrap();
@@ -234,8 +228,6 @@ async fn test_hybrid_search_blended() {
         "BM25 search should not include doc4"
     );
 }
-
-/// TODO: Document test_hybrid_search_no_embedder_fallback.
 #[tokio::test]
 async fn test_hybrid_search_no_embedder_fallback() {
     let tmp = TempDir::new().unwrap();
@@ -282,8 +274,6 @@ async fn test_hybrid_search_no_embedder_fallback() {
         msg
     );
 }
-
-/// TODO: Document test_hybrid_search_neural_mode_default_params.
 #[tokio::test]
 async fn test_hybrid_search_neural_mode_default_params() {
     let tmp = TempDir::new().unwrap();
@@ -330,8 +320,6 @@ async fn test_hybrid_search_neural_mode_default_params() {
         ids
     );
 }
-
-/// TODO: Document test_hybrid_search_empty_vector_index_fallback.
 #[tokio::test]
 async fn test_hybrid_search_empty_vector_index_fallback() {
     let tmp = TempDir::new().unwrap();
@@ -377,8 +365,6 @@ async fn test_hybrid_search_empty_vector_index_fallback() {
         "Response should include fallback message for empty vector index"
     );
 }
-
-/// TODO: Document test_hybrid_search_vector_only_docs_fetched.
 #[tokio::test]
 async fn test_hybrid_search_vector_only_docs_fetched() {
     let tmp = TempDir::new().unwrap();
@@ -556,8 +542,6 @@ async fn test_hybrid_ranking_quality_semantic_beats_keyword() {
         );
     }
 }
-
-/// TODO: Document test_hybrid_search_algolia_compat_no_hybrid.
 #[tokio::test]
 async fn test_hybrid_search_algolia_compat_no_hybrid() {
     let tmp = TempDir::new().unwrap();
@@ -597,8 +581,6 @@ async fn test_hybrid_search_algolia_compat_no_hybrid() {
     let hits = response["hits"].as_array().unwrap();
     assert!(hits.len() >= 2);
 }
-
-/// TODO: Document test_mode_b_hybrid_uses_variant_embedder_settings.
 #[tokio::test]
 async fn test_mode_b_hybrid_uses_variant_embedder_settings() {
     let tmp = TempDir::new().unwrap();
@@ -681,8 +663,6 @@ async fn test_mode_b_hybrid_uses_variant_embedder_settings() {
         "vector-ranked result must come from variant index"
     );
 }
-
-/// TODO: Document test_mode_b_hybrid_control_stays_keyword_only.
 #[tokio::test]
 async fn test_mode_b_hybrid_control_stays_keyword_only() {
     let tmp = TempDir::new().unwrap();

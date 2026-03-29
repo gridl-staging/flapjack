@@ -50,7 +50,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_filter_param.
     fn apply_filter_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "filters" => {
@@ -86,7 +85,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_facet_search_param.
     fn apply_facet_search_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "facets" => {
@@ -125,7 +123,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_highlight_param.
     fn apply_highlight_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "attributesToHighlight" => {
@@ -162,7 +159,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_ranking_param.
     fn apply_ranking_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "queryType" => {
@@ -222,7 +218,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_geo_param.
     fn apply_geo_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "aroundLatLng" => {
@@ -269,7 +264,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_analytics_param.
     fn apply_analytics_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "analytics" => {
@@ -292,7 +286,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_personalization_param.
     fn apply_personalization_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "userToken" => {
@@ -338,7 +331,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_retrieval_param.
     fn apply_retrieval_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "attributesToRetrieve" => {
@@ -371,7 +363,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_feature_toggle_param.
     fn apply_feature_toggle_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "enableSynonyms" => {
@@ -404,7 +395,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_language_param.
     fn apply_language_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "removeStopWords" => {
@@ -441,7 +431,6 @@ impl super::SearchRequest {
         true
     }
 
-    /// TODO: Document SearchRequest.apply_search_mode_param.
     fn apply_search_mode_param(&mut self, key: &str, value: &str) -> bool {
         match key {
             "mode" => {

@@ -58,7 +58,8 @@ fn partition_date_from_name(name: &str) -> Option<chrono::NaiveDate> {
     chrono::NaiveDate::parse_from_str(date_str, PARTITION_DATE_FORMAT).ok()
 }
 
-/// TODO: Document remove_partition_if_expired.
+/// Delete a date-partitioned directory if its date falls before the retention cutoff.
+/// Returns true on successful removal; logs a warning and returns false on failure.
 fn remove_partition_if_expired(partition_dir: &Path, cutoff: chrono::NaiveDate) -> bool {
     let partition_name = partition_dir
         .file_name()

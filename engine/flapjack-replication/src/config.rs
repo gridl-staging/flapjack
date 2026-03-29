@@ -31,7 +31,7 @@ impl NodeConfig {
         config
     }
 
-    /// TODO: Document NodeConfig.load_from_file.
+    /// Read `{data_dir}/node.json` if it exists, returning `None` on read or parse errors.
     fn load_from_file(node_json: &Path) -> Option<Self> {
         if !node_json.exists() {
             return None;
@@ -82,7 +82,7 @@ impl NodeConfig {
             .collect()
     }
 
-    /// TODO: Document NodeConfig.parse_peer_entry.
+    /// Parse one `FLAPJACK_PEERS` entry in `node_id=addr` form, ignoring malformed values.
     fn parse_peer_entry(peer: &str) -> Option<PeerConfig> {
         if peer.trim().is_empty() {
             return None;

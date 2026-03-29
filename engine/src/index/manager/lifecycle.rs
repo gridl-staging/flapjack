@@ -143,7 +143,9 @@ impl super::IndexManager {
         Ok(())
     }
 
-    /// TODO: Document IndexManager.export_tenant.
+    /// Queue an asynchronous tenant export to the given destination path. Creates a
+    /// task, sends an `Export` command to the task queue, and returns the task ID
+    /// for polling.
     pub fn export_tenant(&self, tenant_id: &TenantId, dest_path: PathBuf) -> Result<String> {
         validate_index_name(tenant_id)?;
         let numeric_id = self.next_numeric_task_id();
@@ -320,7 +322,8 @@ impl super::IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.log_write_queue_shutdown_outcome.
+    /// Log the result of a write-queue task shutdown: success, application error,
+    /// or task panic.
     fn log_write_queue_shutdown_outcome(
         tenant_id: &str,
         shutdown_result: std::result::Result<Result<()>, tokio::task::JoinError>,

@@ -139,7 +139,8 @@ async fn register_parquet_table(
     Ok(table_name)
 }
 
-/// TODO: Document listing_table_name.
+/// Build a SQL-safe table name from a directory path by lowercasing alphanumeric chars
+/// and replacing all other characters with underscores.
 fn listing_table_name(prefix: &str, dir: &Path) -> String {
     let raw = dir.to_string_lossy();
     let readable = raw
@@ -414,8 +415,6 @@ async fn read_pre_search_rows(
 mod tests {
     use super::listing_table_name;
     use std::path::Path;
-
-    /// TODO: Document listing_table_name_remains_sql_safe_for_hostile_paths.
     #[test]
     fn listing_table_name_remains_sql_safe_for_hostile_paths() {
         let suspicious =

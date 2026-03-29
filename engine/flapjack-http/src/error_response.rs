@@ -72,6 +72,13 @@ impl From<String> for HandlerError {
     }
 }
 
+impl From<(StatusCode, String)> for HandlerError {
+    /// Bridge for helpers like `validate_index_http` that return `(StatusCode, String)`.
+    fn from((status, message): (StatusCode, String)) -> Self {
+        HandlerError::Custom { status, message }
+    }
+}
+
 impl HandlerError {
     pub fn not_found(message: impl Into<String>) -> Self {
         HandlerError::Custom {
@@ -84,6 +91,18 @@ impl HandlerError {
         HandlerError::Custom {
             status: StatusCode::BAD_REQUEST,
             message: message.into(),
+        }
+    }
+
+    /// Force a sanitized 500 for server-side storage errors, regardless of the
+    /// underlying error type. Use this for load/save operations where any failure
+    /// (including serde parse errors from corrupt stored data) is a server fault,
+    /// not a client input error.
+    pub fn internal(e: impl std::fmt::Display) -> Self {
+        tracing::error!("internal error: {e}");
+        HandlerError::Custom {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "Internal server error".to_string(),
         }
     }
 }
@@ -120,8 +139,6 @@ mod tests {
     }
 
     // ── HandlerError adapter: delegates to FlapjackError ──
-
-    /// TODO: Document handler_error_core_io_produces_sanitized_500_json.
     #[tokio::test]
     async fn handler_error_core_io_produces_sanitized_500_json() {
         let he = HandlerError::from(std::io::Error::new(
@@ -180,5 +197,26 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["status"], 400);
         assert_eq!(json["message"], "bad filter syntax");
+    }
+
+    #[tokio::test]
+    async fn handler_error_internal_sanitizes_any_error_to_500() {
+        // Simulate a serde error from corrupt stored data — should still be 500, not 400
+        let serde_err = serde_json::from_str::<Vec<String>>("not json").unwrap_err();
+        let he = HandlerError::internal(serde_err);
+        let (status, json) = response_json(he.into_response()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["status"], 500);
+        assert_eq!(json["message"], "Internal server error");
+    }
+
+    #[tokio::test]
+    async fn handler_error_from_status_string_tuple_preserves_status_and_message() {
+        let tuple = (StatusCode::BAD_REQUEST, "Invalid index name".to_string());
+        let he = HandlerError::from(tuple);
+        let (status, json) = response_json(he.into_response()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json["status"], 400);
+        assert_eq!(json["message"], "Invalid index name");
     }
 }

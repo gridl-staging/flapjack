@@ -27,7 +27,8 @@ impl FilterCompiler {
     const MAX_FILTER_DEPTH: usize = 10;
     const MAX_BOOLEAN_CLAUSES: usize = 1000;
 
-    /// TODO: Document FilterCompiler.compile.
+    /// Compile a `Filter` tree into a Tantivy query, enforcing clause-count and
+    /// nesting-depth limits. Falls back to facet-only validation when available.
     pub fn compile(
         &self,
         filter: &Filter,
@@ -58,7 +59,8 @@ impl FilterCompiler {
         }
     }
 
-    /// TODO: Document FilterCompiler.is_valid_for_facet_set.
+    /// Check that every text-equality field in the filter tree exists in the facet set;
+    /// numeric and range filters are always valid.
     fn is_valid_for_facet_set(&self, filter: &Filter, facet_set: &HashSet<String>) -> bool {
         match filter {
             Filter::Equals { field, value } => {
@@ -84,7 +86,8 @@ impl FilterCompiler {
         }
     }
 
-    /// TODO: Document FilterCompiler.to_query_string.
+    /// Serialize a `Filter` tree into a Tantivy query string, quoting text values
+    /// that contain spaces or special characters.
     fn to_query_string(&self, filter: &Filter) -> Result<String> {
         match filter {
             Filter::Equals { field, value } => match value {
@@ -171,7 +174,8 @@ impl FilterCompiler {
         }
     }
 
-    /// TODO: Document FilterCompiler.format_value.
+    /// Format a field value for inclusion in a Tantivy query string, quoting text
+    /// with spaces/colons and panicking on non-scalar types (Object, Array).
     fn format_value(&self, value: &crate::types::FieldValue) -> String {
         match value {
             crate::types::FieldValue::Object(_) => {
@@ -203,7 +207,8 @@ impl FilterCompiler {
         }
     }
 
-    /// TODO: Document FilterCompiler.count_clauses.
+    /// Recursively count the total number of leaf clauses in a filter tree
+    /// for enforcement against `MAX_BOOLEAN_CLAUSES`.
     fn count_clauses(&self, filter: &Filter) -> usize {
         fn count_recursive(filter: &Filter) -> usize {
             match filter {
@@ -223,7 +228,8 @@ impl FilterCompiler {
         count_recursive(filter)
     }
 
-    /// TODO: Document FilterCompiler.compile_with_hybrid.
+    /// Recursively compile a filter tree into Tantivy boolean queries, enforcing
+    /// `MAX_FILTER_DEPTH` and mapping each leaf/combinator to the appropriate query type.
     fn compile_with_hybrid(&self, filter: &Filter, depth: usize) -> Result<Box<dyn Query>> {
         if depth > Self::MAX_FILTER_DEPTH {
             return Err(crate::error::FlapjackError::InvalidQuery(format!(

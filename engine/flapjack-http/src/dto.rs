@@ -336,7 +336,7 @@ impl SearchRequest {
         self.hits_per_page.unwrap_or(20)
     }
 
-    /// TODO: Document SearchRequest.validate.
+    /// Validates this search request against Algolia-compatible limits (query length, page depth).
     pub fn validate(&self) -> Result<(), FlapjackError> {
         // Query length: Algolia enforces 512 bytes.
         if self.query.len() > MAX_QUERY_BYTES {

@@ -161,40 +161,63 @@ pub struct ConcludedExperimentResponse {
     pub interleaving: Option<bool>,
 }
 
-impl From<Experiment> for ConcludedExperimentResponse {
-    fn from(experiment: Experiment) -> Self {
-        Self {
-            id: experiment.id,
-            name: experiment.name,
-            index_name: experiment.index_name,
-            status: experiment.status,
-            traffic_split: experiment.traffic_split,
-            control: experiment.control,
-            variant: experiment.variant,
-            primary_metric: experiment.primary_metric,
-            created_at: experiment.created_at,
-            started_at: experiment.started_at,
-            ended_at: experiment.ended_at,
-            stopped_at: experiment.stopped_at,
-            minimum_days: experiment.minimum_days,
-            winsorization_cap: experiment.winsorization_cap,
-            conclusion: experiment
-                .conclusion
-                .expect("concluded experiment response must include conclusion"),
-            interleaving: experiment.interleaving,
+fn concluded_experiment_response(
+    experiment: Experiment,
+) -> Result<ConcludedExperimentResponse, Response> {
+    let Experiment {
+        id,
+        name,
+        index_name,
+        status,
+        traffic_split,
+        control,
+        variant,
+        primary_metric,
+        created_at,
+        started_at,
+        ended_at,
+        stopped_at,
+        minimum_days,
+        winsorization_cap,
+        conclusion,
+        interleaving,
+    } = experiment;
+
+    let conclusion = match conclusion {
+        Some(conclusion) => conclusion,
+        None => {
+            tracing::error!(
+                experiment_id = %id,
+                experiment_status = ?status,
+                "concluded experiment response missing conclusion payload"
+            );
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "concluded experiment missing conclusion",
+            ));
         }
-    }
+    };
+
+    Ok(ConcludedExperimentResponse {
+        id,
+        name,
+        index_name,
+        status,
+        traffic_split,
+        control,
+        variant,
+        primary_metric,
+        created_at,
+        started_at,
+        ended_at,
+        stopped_at,
+        minimum_days,
+        winsorization_cap,
+        conclusion,
+        interleaving,
+    })
 }
 
-/// Create a new A/B test experiment from an Algolia-compatible request body.
-///
-/// Validates and converts the incoming DTO, persists the experiment via the store,
-/// and returns the assigned numeric ID.
-///
-/// # Returns
-///
-/// `200 OK` with the numeric AB test ID and index name on success,
-/// or an error response if the store is unavailable or validation fails.
 #[utoipa::path(
     post,
     path = "/2/abtests",
@@ -643,14 +666,6 @@ pub async fn stop_experiment(
     }
 }
 
-/// Record the conclusion of an experiment with a declared winner and statistical summary.
-///
-/// Validates the winner field, persists the conclusion, and if the variant won with
-/// promotion requested, applies the variant's settings to the main index.
-///
-/// # Returns
-///
-/// The updated experiment with its conclusion attached, or an error response.
 #[utoipa::path(
     post,
     path = "/2/abtests/{id}/conclude",
@@ -715,7 +730,10 @@ pub async fn conclude_experiment(
                     // with a warning header so the caller knows promotion was partial.
                 }
             }
-            Json(ConcludedExperimentResponse::from(experiment)).into_response()
+            match concluded_experiment_response(experiment) {
+                Ok(response) => Json(response).into_response(),
+                Err(response) => response,
+            }
         }
         Err(err) => experiment_error_to_response(err),
     }
@@ -743,13 +761,17 @@ fn promote_variant_settings(state: &AppState, experiment: &Experiment) -> Result
     Ok(())
 }
 
-/// TODO: Document promote_mode_b_settings.
 fn promote_mode_b_settings(
     state: &AppState,
     main_index: &str,
     variant_index: &str,
 ) -> Result<(), String> {
     use flapjack::index::settings::IndexSettings;
+
+    flapjack::validate_index_name(main_index)
+        .map_err(|e| format!("invalid index name: {}", e))?;
+    flapjack::validate_index_name(variant_index)
+        .map_err(|e| format!("invalid index name: {}", e))?;
 
     let variant_settings_path = state
         .manager
@@ -777,13 +799,15 @@ fn promote_mode_b_settings(
     Ok(())
 }
 
-/// TODO: Document promote_mode_a_overrides.
 fn promote_mode_a_overrides(
     state: &AppState,
     main_index: &str,
     overrides: &QueryOverrides,
 ) -> Result<(), String> {
     use flapjack::index::settings::IndexSettings;
+
+    flapjack::validate_index_name(main_index)
+        .map_err(|e| format!("invalid index name: {}", e))?;
 
     let main_settings_path = state
         .manager
@@ -818,7 +842,6 @@ fn promote_mode_a_overrides(
     Ok(())
 }
 
-/// TODO: Document collect_query_only_override_fields.
 fn collect_query_only_override_fields(overrides: &QueryOverrides) -> Vec<&'static str> {
     [
         overrides.typo_tolerance.as_ref().map(|_| "typoTolerance"),

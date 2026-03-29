@@ -18,11 +18,15 @@ fn settings_router(state: Arc<AppState>) -> Router {
 }
 
 async fn post_settings(app: &Router, body: &str) -> axum::http::Response<Body> {
+    post_json(app, "/1/indexes/test_idx/settings", body).await
+}
+
+async fn post_json(app: &Router, uri: &str, body: &str) -> axum::http::Response<Body> {
     app.clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/1/indexes/test_idx/settings")
+                .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -47,6 +51,82 @@ async fn get_settings_json(app: &Router) -> serde_json::Value {
         .await
         .unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+async fn test_get_settings_corrupt_settings_file_returns_sanitized_500() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = settings_router(state);
+
+    let settings_dir = tmp.path().join("test_idx");
+    std::fs::create_dir_all(&settings_dir).unwrap();
+    let settings_path = settings_dir.join("settings.json");
+    std::fs::write(
+        &settings_path,
+        r#"{"queryType":"prefixLast","searchableAttributes":["title"]"#,
+    )
+    .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/1/indexes/test_idx/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["message"]
+        .as_str()
+        .expect("500 response should include a string message");
+    assert_eq!(message, "Internal server error");
+    assert_eq!(json["status"], serde_json::json!(500));
+    assert!(
+        !message.contains("settings.json"),
+        "500 message must not leak internal file paths: {message}"
+    );
+    assert!(
+        !message.contains("JSON error"),
+        "500 message must not leak serde details: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_set_settings_when_tenant_path_is_file_returns_sanitized_500() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = settings_router(state);
+
+    std::fs::write(tmp.path().join("test_idx"), b"not-a-directory").unwrap();
+
+    let response = post_settings(&app, r#"{"searchableAttributes":["title"]}"#).await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["message"]
+        .as_str()
+        .expect("500 response should include a string message");
+    assert_eq!(message, "Internal server error");
+    assert_eq!(json["status"], serde_json::json!(500));
+    assert!(
+        !message.contains("settings.json"),
+        "500 message must not leak internal file paths: {message}"
+    );
+    assert!(
+        !message.contains("not a directory"),
+        "500 message must not leak OS-level IO text: {message}"
+    );
 }
 
 /// Verify that posting an embedder configuration roundtrips through GET settings.
@@ -2299,8 +2379,6 @@ async fn test_query_type_persists_to_disk() {
         "queryType should be persisted to disk"
     );
 }
-
-/// TODO: Document test_ranking_roundtrip_is_supported.
 #[tokio::test]
 async fn test_ranking_roundtrip_is_supported() {
     let tmp = TempDir::new().unwrap();
@@ -2339,8 +2417,6 @@ async fn test_ranking_roundtrip_is_supported() {
         "ranking should persist through GET after update"
     );
 }
-
-/// TODO: Document test_stage4_structural_settings_roundtrip_is_supported.
 #[tokio::test]
 async fn test_stage4_structural_settings_roundtrip_is_supported() {
     let tmp = TempDir::new().unwrap();
@@ -2403,28 +2479,82 @@ async fn test_stage4_structural_settings_roundtrip_is_supported() {
         serde_json::json!(["sku"])
     );
 }
-
-/// TODO: Document test_forward_to_replicas_rejects_invalid_boolean_value.
 #[tokio::test]
 async fn test_forward_to_replicas_rejects_invalid_boolean_value() {
     let tmp = TempDir::new().unwrap();
     let state = TestStateBuilder::new(&tmp).build_shared();
     let app = settings_router(state);
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/1/indexes/test_idx/settings?forwardToReplicas=maybe")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"searchableAttributes":["title"]}"#.to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = post_json(
+        &app,
+        "/1/indexes/test_idx/settings?forwardToReplicas=maybe",
+        r#"{"searchableAttributes":["title"]}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_synonyms_batch_rejects_invalid_forward_to_replicas_boolean_value() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = replica_sync_router_with_synonyms_rules(state);
+
+    let resp = post_json(
+        &app,
+        "/1/indexes/test_idx/synonyms/batch?forwardToReplicas=maybe",
+        r#"[{"objectID":"syn1","type":"synonym","synonyms":["phone","mobile"]}]"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_synonyms_batch_rejects_invalid_replace_existing_boolean_value() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = replica_sync_router_with_synonyms_rules(state);
+
+    let resp = post_json(
+        &app,
+        "/1/indexes/test_idx/synonyms/batch?replaceExistingSynonyms=maybe",
+        r#"[{"objectID":"syn1","type":"synonym","synonyms":["phone","mobile"]}]"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_rules_batch_rejects_invalid_forward_to_replicas_boolean_value() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = replica_sync_router_with_synonyms_rules(state);
+
+    let resp = post_json(
+        &app,
+        "/1/indexes/test_idx/rules/batch?forwardToReplicas=maybe",
+        r#"[{"objectID":"rule1","condition":{"pattern":"phone","anchoring":"contains"},"consequence":{"params":{"query":"smartphone"}}}]"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_rules_batch_rejects_invalid_clear_existing_boolean_value() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = replica_sync_router_with_synonyms_rules(state);
+
+    let resp = post_json(
+        &app,
+        "/1/indexes/test_idx/rules/batch?clearExistingRules=maybe",
+        r#"[{"objectID":"rule1","condition":{"pattern":"phone","anchoring":"contains"},"consequence":{"params":{"query":"smartphone"}}}]"#,
+    )
+    .await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }

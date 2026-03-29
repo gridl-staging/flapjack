@@ -38,7 +38,7 @@ pub struct CreateKeyRequest {
 }
 
 impl CreateKeyRequest {
-    /// TODO: Document CreateKeyRequest.into_api_key.
+    /// Converts this request into an `ApiKey` with empty hash/salt placeholders.
     fn into_api_key(self) -> ApiKey {
         ApiKey {
             hash: String::new(),
@@ -96,7 +96,6 @@ pub struct GenerateSecuredKeyResponse {
     pub secured_api_key: String,
 }
 
-/// Create a new API key
 #[utoipa::path(
     post,
     path = "/1/keys",
@@ -311,7 +310,7 @@ pub struct SecuredKeyRestrictions {
 }
 
 impl SecuredKeyRestrictions {
-    /// TODO: Document SecuredKeyRestrictions.to_query_params.
+    /// Serializes these restrictions into a URL query string for HMAC signing.
     fn to_query_params(&self) -> String {
         let mut params = Vec::new();
         push_encoded_query_param(&mut params, "filters", self.filters.as_deref());
@@ -502,9 +501,6 @@ mod tests {
         );
     }
 
-    /// Send a POST /1/keys request with a representative key payload and return the parsed JSON response.
-    ///
-    /// Asserts that the response status is 200 OK before returning.
     async fn create_test_key(app: &Router) -> Value {
         let resp = app
             .clone()
@@ -799,7 +795,6 @@ mod tests {
     }
 
     // T3.1: Without middleware, text/plain content-type is rejected by Json<> extractor
-    /// Verify that without `normalize_content_type` middleware, a `text/plain` request body is rejected by Axum's `Json<>` extractor.
     #[tokio::test]
     async fn create_key_text_plain_rejected_without_middleware() {
         let tmp = TempDir::new().unwrap();
@@ -827,7 +822,6 @@ mod tests {
     }
 
     // T3.2: With middleware, text/plain is normalized to application/json and accepted
-    /// Verify that with `normalize_content_type` middleware, a `text/plain` content-type is rewritten to `application/json` and the request succeeds.
     #[tokio::test]
     async fn create_key_text_plain_accepted_with_middleware() {
         let tmp = TempDir::new().unwrap();
@@ -854,7 +848,6 @@ mod tests {
     }
 
     // T3.3: With middleware, charset variant is normalized and accepted
-    /// Verify that with `normalize_content_type` middleware, `application/json; charset=utf-8` is accepted without rejection.
     #[tokio::test]
     async fn create_key_charset_content_type_accepted_with_middleware() {
         let tmp = TempDir::new().unwrap();
@@ -881,7 +874,6 @@ mod tests {
     }
 
     // T3.4: With middleware, missing content-type is normalized and accepted
-    /// Verify that with `normalize_content_type` middleware, a request with no Content-Type header is accepted and treated as JSON.
     #[tokio::test]
     async fn create_key_no_content_type_accepted_with_middleware() {
         let tmp = TempDir::new().unwrap();
@@ -908,7 +900,6 @@ mod tests {
 
     // ── restrictSources CRUD round-trip tests ──
 
-    /// POST /1/keys with restrictSources → GET /1/keys/{key} returns the same array.
     #[tokio::test]
     async fn post_key_with_restrict_sources_round_trips_through_get() {
         let tmp = TempDir::new().unwrap();
@@ -1011,7 +1002,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document create_key_rejects_malformed_restrict_sources.
     #[tokio::test]
     async fn create_key_rejects_malformed_restrict_sources() {
         let tmp = TempDir::new().unwrap();
@@ -1046,7 +1036,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document update_key_rejects_malformed_restrict_sources.
     #[tokio::test]
     async fn update_key_rejects_malformed_restrict_sources() {
         let tmp = TempDir::new().unwrap();
@@ -1085,7 +1074,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document generate_secured_key_rejects_malformed_restrict_sources.
     #[tokio::test]
     async fn generate_secured_key_rejects_malformed_restrict_sources() {
         let tmp = TempDir::new().unwrap();

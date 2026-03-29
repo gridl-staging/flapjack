@@ -1,4 +1,3 @@
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/mar24_pm_2_repo_hygiene_sweep/flapjack_dev/engine/src/error.rs.
 use http::StatusCode;
 use thiserror::Error;
 
@@ -589,8 +588,6 @@ mod tests {
                 );
             }
         }
-
-        /// TODO: Document internal_errors_dont_leak_details.
         #[tokio::test]
         async fn internal_errors_dont_leak_details() {
             // Tantivy errors must not leak engine internals

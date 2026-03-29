@@ -73,8 +73,6 @@ async fn auth_middleware_returns_algolia_error_shape_for_403_and_429() {
         })
     );
 }
-
-/// TODO: Document auth_middleware_enforces_secured_key_restrict_sources.
 #[tokio::test]
 async fn auth_middleware_enforces_secured_key_restrict_sources() {
     let temp_dir = TempDir::new().unwrap();
@@ -137,8 +135,6 @@ async fn auth_middleware_enforces_secured_key_restrict_sources() {
         })
     );
 }
-
-/// TODO: Document auth_middleware_internal_storage_requires_app_id_even_for_admin_key.
 #[tokio::test]
 async fn auth_middleware_internal_storage_requires_app_id_even_for_admin_key() {
     let temp_dir = TempDir::new().unwrap();
@@ -170,8 +166,6 @@ async fn auth_middleware_internal_storage_requires_app_id_even_for_admin_key() {
         })
     );
 }
-
-/// TODO: Document auth_middleware_secured_key_restrict_sources_rejection_does_not_consume_rate_limit.
 #[tokio::test]
 async fn auth_middleware_secured_key_restrict_sources_rejection_does_not_consume_rate_limit() {
     let temp_dir = TempDir::new().unwrap();
@@ -220,8 +214,6 @@ async fn auth_middleware_secured_key_restrict_sources_rejection_does_not_consume
         );
     }
 }
-
-/// TODO: Document auth_middleware_allows_non_admin_key_to_get_own_key_record.
 #[tokio::test]
 async fn auth_middleware_allows_non_admin_key_to_get_own_key_record() {
     let (_temp_dir, key_store, plaintext_key) = create_non_admin_test_key("Own-key read test key");
@@ -246,8 +238,6 @@ async fn auth_middleware_allows_non_admin_key_to_get_own_key_record() {
 
     assert_eq!(response.status(), StatusCode::OK);
 }
-
-/// TODO: Document auth_middleware_rejects_non_admin_key_for_own_restore_route.
 #[tokio::test]
 async fn auth_middleware_rejects_non_admin_key_for_own_restore_route() {
     let (_temp_dir, key_store, plaintext_key) =
@@ -280,8 +270,6 @@ async fn auth_middleware_rejects_non_admin_key_for_own_restore_route() {
         })
     );
 }
-
-/// TODO: Document auth_middleware_rejects_protected_routes_when_keystore_is_missing.
 #[tokio::test]
 async fn auth_middleware_rejects_protected_routes_when_keystore_is_missing() {
     let app = Router::new()

@@ -2036,8 +2036,6 @@ fn parse_pattern_tokens_no_placeholders() {
         ]
     );
 }
-
-/// TODO: Document match_pattern_tokens_with_placeholders_anchoring_modes.
 #[test]
 fn match_pattern_tokens_with_placeholders_anchoring_modes() {
     let query = vec!["buy".into(), "nike".into(), "shoes".into(), "now".into()];

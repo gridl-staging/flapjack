@@ -14,6 +14,7 @@ use super::replicas::{
     persist_replica_primary_links,
 };
 use super::AppState;
+use crate::error_response::HandlerError;
 use crate::extractors::ValidatedIndexName;
 use flapjack::index::replica::validate_replicas;
 use flapjack::index::settings::{
@@ -189,10 +190,17 @@ fn settings_file_path(base_path: &Path, index_name: &str) -> PathBuf {
     base_path.join(index_name).join("settings.json")
 }
 
-fn load_settings_or_default(settings_path: &Path) -> Result<IndexSettings, (StatusCode, String)> {
+fn load_settings_or_default(settings_path: &Path) -> Result<IndexSettings, HandlerError> {
     if settings_path.exists() {
-        IndexSettings::load(settings_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        // Persisted settings parse failures are internal corruption and must be 500s.
+        IndexSettings::load(settings_path).map_err(|error| match error {
+            flapjack::error::FlapjackError::Json(parse_error) => HandlerError::from(format!(
+                "Failed to parse persisted settings file '{}': {}",
+                settings_path.display(),
+                parse_error
+            )),
+            other => HandlerError::from(other.to_string()),
+        })
     } else {
         Ok(IndexSettings::default())
     }
@@ -206,25 +214,22 @@ fn unsupported_settings_params(payload: &SetSettingsRequest) -> Vec<String> {
     unsupported
 }
 
-/// TODO: Document parse_forward_to_replicas.
-fn parse_forward_to_replicas(
+/// Parse an optional boolean query parameter, defaulting to `false` when absent.
+pub(super) fn parse_bool_query_param(
     query_params: &HashMap<String, String>,
-) -> Result<bool, (StatusCode, String)> {
+    key: &str,
+) -> Result<bool, HandlerError> {
     query_params
-        .get("forwardToReplicas")
+        .get(key)
         .map(|value| {
-            value.parse::<bool>().map_err(|_| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    "forwardToReplicas must be 'true' or 'false'".to_string(),
-                )
-            })
+            value
+                .parse::<bool>()
+                .map_err(|_| HandlerError::bad_request(format!("{key} must be 'true' or 'false'")))
         })
         .transpose()
         .map(|value| value.unwrap_or(false))
 }
 
-/// Update index settings
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/settings",
@@ -246,21 +251,20 @@ pub async fn set_settings(
     ValidatedIndexName(index_name): ValidatedIndexName,
     Query(query_params): Query<HashMap<String, String>>,
     Json(payload): Json<SetSettingsRequest>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, HandlerError> {
     let is_virtual_settings_only = is_virtual_settings_only_index(&state, &index_name);
     if payload.relevancy_strictness.is_some() && !is_virtual_settings_only {
-        return Err((
-            StatusCode::BAD_REQUEST,
+        return Err(HandlerError::bad_request(
             "relevancyStrictness can only be set on virtual replica indices".to_string(),
         ));
     }
 
-    let forward_to_replicas = parse_forward_to_replicas(&query_params)?;
+    let forward_to_replicas = parse_bool_query_param(&query_params, "forwardToReplicas")?;
     if !is_virtual_settings_only {
         state
             .manager
             .create_tenant(&index_name)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|error| HandlerError::from(error.to_string()))?;
     }
 
     let settings_path = settings_file_path(&state.manager.base_path, &index_name);
@@ -275,11 +279,12 @@ pub async fn set_settings(
     let previous_replicas = settings.replicas.clone();
     let old_embedders = settings.embedders.clone();
 
-    let validated_replicas = merge_settings_payload(&mut settings, payload, &index_name)?;
+    let validated_replicas = merge_settings_payload(&mut settings, payload, &index_name)
+        .map_err(|(status, message)| HandlerError::Custom { status, message })?;
     settings.restore_redacted_response_secrets(&previous_settings);
     settings
         .validate_embedders()
-        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+        .map_err(HandlerError::bad_request)?;
     log_embedder_changes(&old_embedders, &settings);
 
     save_settings(&settings, &settings_path)?;
@@ -293,9 +298,9 @@ pub async fn set_settings(
             previous_replicas.as_deref(),
             replicas,
         )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|error| HandlerError::from(error.to_string()))?;
         persist_replica_primary_links(&state, &index_name, replicas)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|error| HandlerError::from(error.to_string()))?;
     }
 
     if forward_to_replicas {
@@ -305,7 +310,7 @@ pub async fn set_settings(
             attributes_for_faceting_provided,
             query_languages_provided,
         )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|error| HandlerError::from(error.to_string()))?;
     }
 
     #[cfg(feature = "vector-search")]
@@ -322,7 +327,7 @@ pub async fn set_settings(
     let noop_task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|error| HandlerError::from(error.to_string()))?;
     let response = SetSettingsResponse {
         updated_at: chrono::Utc::now().to_rfc3339(),
         task_id: noop_task.numeric_id,
@@ -341,7 +346,12 @@ pub async fn set_settings(
     Ok((status, Json(response)))
 }
 
-/// TODO: Document merge_settings_payload.
+/// Merges a partial settings update payload into the current index settings, returning any replica entries that need processing.
+// clippy::cognitive_complexity fires at 34/25 here, but the function is a flat
+// sequence of `if let Some(v) = payload.field { settings.field = v; }` mappings
+// with no nested control flow. Splitting into helper layers or macros would add
+// indirection without reducing real decision complexity — this is the single
+// canonical field-mapping site for settings payloads.
 #[allow(clippy::cognitive_complexity)]
 fn merge_settings_payload(
     settings: &mut IndexSettings,
@@ -500,7 +510,7 @@ fn apply_embedders_update(
     }
 }
 
-/// TODO: Document validate_and_apply_replicas.
+/// Validates replica index names (must differ from the primary and use valid `virtual()` syntax) and returns parsed replica entries for creation.
 fn validate_and_apply_replicas(
     settings: &mut IndexSettings,
     replicas: Option<Vec<String>>,
@@ -528,7 +538,6 @@ fn warn_neural_without_embedders(settings: &IndexSettings) {
     }
 }
 
-/// TODO: Document log_embedder_changes.
 fn log_embedder_changes(
     old: &Option<HashMap<String, serde_json::Value>>,
     settings: &IndexSettings,
@@ -548,18 +557,18 @@ fn log_embedder_changes(
     }
 }
 
-fn save_settings(settings: &IndexSettings, path: &Path) -> Result<(), (StatusCode, String)> {
+fn save_settings(settings: &IndexSettings, path: &Path) -> Result<(), HandlerError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to create settings directory: {}", e),
-            )
-        })?;
+        std::fs::create_dir_all(parent).map_err(|error| HandlerError::from(error.to_string()))?;
     }
-    settings
-        .save(path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    settings.save(path).map_err(|error| match error {
+        flapjack::error::FlapjackError::Json(serialize_error) => HandlerError::from(format!(
+            "Failed to serialize settings file '{}': {}",
+            path.display(),
+            serialize_error
+        )),
+        other => HandlerError::from(other.to_string()),
+    })
 }
 
 /// Forward the current settings from a primary index to all its configured replicas.
@@ -662,7 +671,7 @@ fn forward_settings_to_replicas(
 pub async fn get_settings(
     State(state): State<Arc<AppState>>,
     ValidatedIndexName(index_name): ValidatedIndexName,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, HandlerError> {
     let settings_path = settings_file_path(&state.manager.base_path, &index_name);
     let settings = load_settings_or_default(&settings_path)?;
 

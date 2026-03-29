@@ -34,9 +34,6 @@ function slugifyIndexComponent(value: string): string {
     .slice(0, 24);
 }
 
-/**
- * TODO: Document createIsolatedMerchandisingScenario.
- */
 export async function createIsolatedMerchandisingScenario(
   request: APIRequestContext,
   scenarioName: string,
@@ -64,9 +61,6 @@ export async function createIsolatedMerchandisingScenario(
   return { indexName, searchQuery };
 }
 
-/**
- * TODO: Document createIsolatedMerchandisingComparisonScenario.
- */
 export async function createIsolatedMerchandisingComparisonScenario(
   request: APIRequestContext,
   scenarioName: string,

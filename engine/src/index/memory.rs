@@ -21,7 +21,8 @@ impl Default for MemoryBudgetConfig {
 }
 
 impl MemoryBudgetConfig {
-    /// TODO: Document MemoryBudgetConfig.from_env.
+    /// Read buffer size and writer concurrency limits from environment variables
+    /// (`FLAPJACK_MAX_BUFFER_MB`, `FLAPJACK_MAX_CONCURRENT_WRITERS`), falling back to defaults.
     pub fn from_env() -> Self {
         MemoryBudgetConfig {
             max_buffer_mb: env::var("FLAPJACK_MAX_BUFFER_MB")

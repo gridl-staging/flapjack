@@ -22,7 +22,8 @@ impl S3Config {
         })
     }
 
-    /// TODO: Document S3Config.bucket_internal.
+    /// Construct an S3 `Bucket` from the configured name, region, and credentials,
+    /// applying path-style addressing when a custom endpoint is set.
     pub fn bucket_internal(&self) -> Result<Box<Bucket>> {
         let bucket = Bucket::new(
             &self.bucket_name,
@@ -153,8 +154,6 @@ mod tests {
             endpoint: endpoint.map(str::to_owned),
         }
     }
-
-    /// TODO: Document bucket_internal_uses_path_style_when_endpoint_set.
     #[test]
     fn bucket_internal_uses_path_style_when_endpoint_set() {
         set_dummy_aws_creds();

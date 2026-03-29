@@ -44,7 +44,7 @@ enum Command {
     ResetAdminKey,
 }
 
-/// TODO: Document run_uninstall.
+/// Remove the install directory (`FLAPJACK_INSTALL` first, then `$HOME/.flapjack`) and clean shell rc PATH entries.
 fn run_uninstall() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set")?;
     let install_dir =
@@ -92,7 +92,7 @@ fn run_uninstall() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// TODO: Document strip_flapjack_path_entries.
+/// Remove installer marker blocks and `.flapjack` PATH lines, returning `None` when unchanged.
 fn strip_flapjack_path_entries(contents: &str) -> Option<String> {
     let mut new_lines: Vec<&str> = Vec::new();
     let mut lines = contents.lines().peekable();
@@ -207,7 +207,7 @@ fn resolve_data_dir(cli: &Cli, matches: &ArgMatches) -> Result<String, String> {
     Ok(cli.data_dir.clone())
 }
 
-/// TODO: Document resolve_bind_addr.
+/// Resolve bind address precedence across CLI, instance mode, environment values, and loopback defaults.
 fn resolve_bind_addr(cli: &Cli, matches: &ArgMatches) -> Result<String, String> {
     let bind_addr_from_cli = is_set_on_command_line(matches, "bind_addr");
     let port_from_cli = is_set_on_command_line(matches, "port");
@@ -300,6 +300,8 @@ fn derive_instance_port(instance: &str) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -425,5 +427,151 @@ mod tests {
             resolve_bind_addr(&cli_with_bind, &matches_with_bind).unwrap_err(),
             "--auto-port cannot be used with --bind-addr"
         );
+    }
+
+    #[test]
+    fn strip_flapjack_path_entries_removes_marker_block_and_path_lines() {
+        let contents = [
+            "export PATH=\"$HOME/bin:$PATH\"",
+            "# Flapjack",
+            "export PATH=\"$HOME/.flapjack/bin:$PATH\"",
+            "set -gx PATH $HOME/.flapjack/bin $PATH",
+            "echo done",
+            "",
+        ]
+        .join("\n");
+
+        let stripped = strip_flapjack_path_entries(&contents).expect("expected cleanup");
+        assert_eq!(
+            stripped,
+            ["export PATH=\"$HOME/bin:$PATH\"", "echo done", ""].join("\n")
+        );
+    }
+
+    #[test]
+    fn run_uninstall_cleans_rc_files_when_default_install_dir_is_missing() {
+        let _guard = ENV_MUTEX.lock().expect("lock env mutex");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let test_home: PathBuf =
+            std::env::temp_dir().join(format!("flapjack-server-uninstall-missing-{unique}"));
+        std::fs::create_dir_all(&test_home).expect("create temp home");
+        let bashrc_path = test_home.join(".bashrc");
+        std::fs::write(
+            &bashrc_path,
+            [
+                "# Flapjack",
+                "export PATH=\"$HOME/.flapjack/bin:$PATH\"",
+                "export PATH=\"$HOME/bin:$PATH\"",
+                "",
+            ]
+            .join("\n"),
+        )
+        .expect("write .bashrc");
+
+        let previous_home = std::env::var("HOME").ok();
+        let previous_install = std::env::var("FLAPJACK_INSTALL").ok();
+        std::env::set_var("HOME", &test_home);
+        std::env::remove_var("FLAPJACK_INSTALL");
+
+        let result = run_uninstall();
+
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = previous_install {
+            std::env::set_var("FLAPJACK_INSTALL", value);
+        } else {
+            std::env::remove_var("FLAPJACK_INSTALL");
+        }
+
+        assert!(
+            result.is_ok(),
+            "run_uninstall should succeed for missing dir"
+        );
+        assert!(
+            !test_home.join(".flapjack").exists(),
+            "default install dir should stay absent"
+        );
+        let cleaned = std::fs::read_to_string(&bashrc_path).expect("read cleaned .bashrc");
+        assert_eq!(
+            cleaned,
+            ["export PATH=\"$HOME/bin:$PATH\"", ""].join("\n"),
+            "rc cleanup should remove flapjack marker block"
+        );
+
+        std::fs::remove_dir_all(&test_home).expect("cleanup temp home");
+    }
+
+    #[test]
+    fn run_uninstall_prefers_flapjack_install_env_over_default() {
+        let _guard = ENV_MUTEX.lock().expect("lock env mutex");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let test_home: PathBuf =
+            std::env::temp_dir().join(format!("flapjack-server-uninstall-env-{unique}"));
+        let default_install = test_home.join(".flapjack");
+        let custom_install = test_home.join("custom-install");
+        std::fs::create_dir_all(&default_install).expect("create default install dir");
+        std::fs::create_dir_all(&custom_install).expect("create custom install dir");
+        std::fs::write(default_install.join("keep.txt"), "keep").expect("seed default dir");
+        std::fs::write(custom_install.join("remove.txt"), "remove").expect("seed custom dir");
+
+        let zshrc_path = test_home.join(".zshrc");
+        std::fs::write(
+            &zshrc_path,
+            [
+                "export PATH=\"$HOME/bin:$PATH\"",
+                "export PATH=\"$HOME/.flapjack/bin:$PATH\"",
+                "",
+            ]
+            .join("\n"),
+        )
+        .expect("write .zshrc");
+
+        let previous_home = std::env::var("HOME").ok();
+        let previous_install = std::env::var("FLAPJACK_INSTALL").ok();
+        std::env::set_var("HOME", &test_home);
+        std::env::set_var(
+            "FLAPJACK_INSTALL",
+            custom_install.to_string_lossy().to_string(),
+        );
+
+        let result = run_uninstall();
+
+        if let Some(value) = previous_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = previous_install {
+            std::env::set_var("FLAPJACK_INSTALL", value);
+        } else {
+            std::env::remove_var("FLAPJACK_INSTALL");
+        }
+
+        assert!(result.is_ok(), "run_uninstall should succeed");
+        assert!(
+            default_install.exists(),
+            "default install dir should not be removed when FLAPJACK_INSTALL is set"
+        );
+        assert!(
+            !custom_install.exists(),
+            "custom install dir from FLAPJACK_INSTALL should be removed"
+        );
+        let cleaned = std::fs::read_to_string(&zshrc_path).expect("read cleaned .zshrc");
+        assert_eq!(
+            cleaned,
+            ["export PATH=\"$HOME/bin:$PATH\"", ""].join("\n"),
+            "rc cleanup should remove flapjack path line"
+        );
+
+        std::fs::remove_dir_all(&test_home).expect("cleanup temp home");
     }
 }

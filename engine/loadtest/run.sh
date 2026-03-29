@@ -28,7 +28,6 @@ create_results_dir() {
   mkdir -p "$RESULTS_DIR"
 }
 
-# TODO: Document derive_bind_addr_from_base_url.
 derive_bind_addr_from_base_url() {
   local parsed_bind_addr
 
@@ -72,7 +71,6 @@ build_or_reuse_binary() {
   [[ -x "$SERVER_BINARY" ]] || fail "build completed without producing $SERVER_BINARY"
 }
 
-# TODO: Document start_server.
 start_server() {
   local auth_mode="${1:-no-auth}"
   local server_log_path="$RESULTS_DIR/server.log"
@@ -104,7 +102,6 @@ start_server() {
   fi
 }
 
-# TODO: Document wait_for_health.
 wait_for_health() {
   local health_url="$FLAPJACK_BASE_URL/health"
   local max_attempts=300
@@ -155,7 +152,6 @@ configure_memory_pressure_env() {
   export FLAPJACK_MEMORY_CRITICAL
 }
 
-# TODO: Document stop_server.
 stop_server() {
   if [[ -z "$SERVER_PID" ]]; then
     return 0
@@ -205,7 +201,6 @@ run_memory_pressure_pass() {
   run_k6_scenario "memory-pressure" "scenarios/memory-pressure.js"
 }
 
-# TODO: Document main.
 main() {
   [[ -f "$LOADTEST_HELPERS" ]] || fail "missing $LOADTEST_HELPERS"
   [[ -x "$SEED_SCRIPT" ]] || fail "missing executable $SEED_SCRIPT"

@@ -24,7 +24,9 @@ pub(in crate::index::manager) struct PreparedSearchFilters {
     pub synonym_store: Option<Arc<SynonymStore>>,
 }
 
-/// TODO: Document ExpandedQueryExecutionContext.
+/// Shared read-only context for the expanded-query execution loop. Holds references
+/// to the index, searcher, parser, filters, facet requests, and split-alternative
+/// settings to avoid threading individual parameters.
 pub(super) struct ExpandedQueryExecutionContext<'a> {
     pub manager: &'a super::super::IndexManager,
     pub index: &'a Arc<Index>,
@@ -46,7 +48,8 @@ pub(super) struct ExpandedQueryExecutionContext<'a> {
     pub searchable_paths: &'a [String],
 }
 
-/// TODO: Document maybe_cache_facets.
+/// Cache facet results for reuse across expanded queries. Evicts the oldest entry
+/// when the cache is at capacity. No-ops when no cache key is provided.
 pub(super) fn maybe_cache_facets(
     manager: &super::super::IndexManager,
     facet_cache_key: Option<&String>,
@@ -86,7 +89,9 @@ pub(super) fn maybe_cache_facets(
     );
 }
 
-/// TODO: Document execute_expanded_queries.
+/// Execute each expanded query variant in sequence, deduplicating results by document
+/// ID. Caches facets from the first query, generates split-word alternatives when
+/// results are insufficient, and stops once the effective limit is reached.
 pub(super) fn execute_expanded_queries(
     mut expanded_queries: Vec<String>,
     mut facet_result: Option<FacetResultCache>,
@@ -161,7 +166,8 @@ pub(super) fn execute_expanded_queries(
     Ok((all_results, query_totals, facet_result))
 }
 
-/// TODO: Document execute_single_expanded_query.
+/// Execute one expanded query: parse, expand short queries, apply optional filter
+/// boosts, then run against Tantivy with facets (first query only) and distinct.
 fn execute_single_expanded_query(
     expanded_query: &str,
     query_idx: usize,
@@ -218,7 +224,8 @@ fn execute_single_expanded_query(
     )
 }
 
-/// TODO: Document apply_optional_filter_boosts.
+/// Flatten optional filter groups into boost specs and apply them to the query via
+/// `QueryExecutor::apply_optional_boosts`. No-ops when no optional filters are set.
 fn apply_optional_filter_boosts(
     query: Box<dyn tantivy::query::Query>,
     optional_filter_specs: Option<&[OptionalFilterGroup]>,
@@ -240,7 +247,9 @@ fn apply_optional_filter_boosts(
     }
 }
 
-/// TODO: Document append_split_alternatives.
+/// Generate word-split alternatives for each base query (e.g. "shoerack" → "shoe
+/// rack") by checking the index for exact matches on substrings. Caps total
+/// expanded queries at 15.
 fn append_split_alternatives(
     expanded_queries: &mut Vec<String>,
     searcher: &tantivy::Searcher,
@@ -301,7 +310,6 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// TODO: Document sample_facet_data.
     fn sample_facet_data() -> (
         HashMap<String, Vec<crate::types::FacetCount>>,
         HashMap<String, crate::types::FacetStats>,
@@ -338,8 +346,6 @@ mod tests {
             "facet cache should remain unchanged when no cache key is provided"
         );
     }
-
-    /// TODO: Document maybe_cache_facets_inserts_expected_payload.
     #[tokio::test]
     async fn maybe_cache_facets_inserts_expected_payload() {
         let temp_dir = TempDir::new().unwrap();
@@ -381,8 +387,6 @@ mod tests {
             5.0
         );
     }
-
-    /// TODO: Document maybe_cache_facets_evicts_existing_entry_when_at_capacity.
     #[tokio::test]
     async fn maybe_cache_facets_evicts_existing_entry_when_at_capacity() {
         let temp_dir = TempDir::new().unwrap();
@@ -421,8 +425,6 @@ mod tests {
             "most recent insertion should remain in cache after eviction"
         );
     }
-
-    /// TODO: Document should_generate_split_alternatives_requires_full_condition_set.
     #[test]
     fn should_generate_split_alternatives_requires_full_condition_set() {
         assert!(should_generate_split_alternatives(

@@ -12,7 +12,6 @@ fail() {
   exit 1
 }
 
-# TODO: Document print_usage.
 print_usage() {
   cat <<'USAGE'
 Usage: benchmark_k6.sh [--help]
@@ -65,7 +64,6 @@ create_results_dir() {
   mkdir -p "$RESULTS_DIR"
 }
 
-# TODO: Document verify_benchmark_index_ready.
 verify_benchmark_index_ready() {
   local index_name="$1"
   if ! loadtest_index_exists "$index_name"; then
@@ -87,7 +85,6 @@ verify_benchmark_index_ready() {
   BENCHMARK_DOC_COUNT="$doc_count"
 }
 
-# TODO: Document run_normal_pass.
 run_normal_pass() {
   if ! run_smoke_gate; then
     echo "FAIL: smoke scenario breached thresholds; aborting remaining scenarios" >&2
@@ -106,7 +103,6 @@ run_normal_pass() {
   run_k6_scenario "spike" "scenarios/spike.js"
 }
 
-# TODO: Document main.
 main() {
   parse_args "$@"
   [[ -f "$LOADTEST_HELPERS" ]] || fail "missing $LOADTEST_HELPERS"

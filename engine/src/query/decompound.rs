@@ -79,7 +79,8 @@ impl GermanDecompounder {
 }
 
 impl Decompounder for GermanDecompounder {
-    /// TODO: Document GermanDecompounder.decompound.
+    /// Split a German compound word into its constituent parts using a dictionary
+    /// lookup, requiring each component to be at least `MIN_COMPONENT_LEN` chars.
     fn decompound(&self, word: &str) -> Option<Vec<String>> {
         let lower = word.to_lowercase();
         let chars: Vec<char> = lower.chars().collect();

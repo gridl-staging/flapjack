@@ -11,7 +11,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::AppState;
-use crate::error_response::json_error;
+use crate::error_response::{json_error, HandlerError};
 
 /// Standard success response for query-suggestions mutation operations.
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -28,6 +28,24 @@ fn invalid_input_response(message: String) -> Response {
     json_error(StatusCode::BAD_REQUEST, message)
 }
 
+fn config_not_found_response(index_name: &str) -> Response {
+    json_error(
+        StatusCode::NOT_FOUND,
+        format!("No configuration found for '{}'.", index_name),
+    )
+}
+
+fn mutation_success_response(message: &'static str) -> Response {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": 200,
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
 fn validate_qs_index_name(index_name: &str) -> Result<(), String> {
     validate_index_name(index_name).map_err(|e| e.to_string())
 }
@@ -41,12 +59,16 @@ fn validate_qs_config(config: &QsConfig) -> Result<(), String> {
 }
 
 fn store_error_response(error: std::io::Error) -> Response {
-    let status = if error.kind() == std::io::ErrorKind::InvalidInput {
-        StatusCode::BAD_REQUEST
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-    };
-    json_error(status, error.to_string())
+    if error.kind() == std::io::ErrorKind::InvalidInput {
+        return json_error(StatusCode::BAD_REQUEST, error.to_string());
+    }
+    HandlerError::from(error.to_string()).into_response()
+}
+
+fn mark_build_running(store: &QsConfigStore, index_name: &str) {
+    let mut status = store.load_status(index_name);
+    status.is_running = true;
+    let _ = store.save_status(&status);
 }
 
 /// GET /1/configs — list all Query Suggestions configurations
@@ -63,11 +85,10 @@ fn store_error_response(error: std::io::Error) -> Response {
 pub async fn list_configs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match store(&state).list_configs() {
         Ok(configs) => Json(json!(configs)).into_response(),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(error) => HandlerError::from(error.to_string()).into_response(),
     }
 }
 
-/// POST /1/configs — create a new configuration and schedule a build
 #[utoipa::path(
     post,
     path = "/1/configs",
@@ -105,20 +126,12 @@ pub async fn create_config(
     }
 
     // Mark as running and fire off async build
-    let mut status = s.load_status(&config.index_name);
-    status.is_running = true;
-    s.save_status(&status).ok();
-
+    mark_build_running(&s, &config.index_name);
     spawn_build(Arc::clone(&state), config.clone());
 
-    (
-        StatusCode::OK,
-        Json(json!({
-            "status": 200,
-            "message": "Configuration was created, and a new indexing job has been scheduled."
-        })),
+    mutation_success_response(
+        "Configuration was created, and a new indexing job has been scheduled.",
     )
-        .into_response()
 }
 
 /// GET /1/configs/:indexName — get a single configuration
@@ -140,15 +153,11 @@ pub async fn get_config(
 
     match store(&state).load_config(&index_name) {
         Ok(Some(config)) => Json(json!(config)).into_response(),
-        Ok(None) => json_error(
-            StatusCode::NOT_FOUND,
-            format!("No configuration found for '{}'.", index_name),
-        ),
+        Ok(None) => config_not_found_response(&index_name),
         Err(e) => store_error_response(e),
     }
 }
 
-/// PUT /1/configs/:indexName — update an existing configuration and rebuild
 #[utoipa::path(put, path = "/1/configs/{indexName}", tag = "query-suggestions",
     params(("indexName" = String, Path, description = "Index name")),
     request_body = QsConfig,
@@ -171,20 +180,13 @@ pub async fn update_config(
     let s = store(&state);
 
     if !s.config_exists(&index_name) {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            format!("No configuration found for '{}'.", index_name),
-        );
+        return config_not_found_response(&index_name);
     }
 
     // Ensure the indexName in the body matches the path
     config.index_name = index_name;
     if let Err(message) = validate_qs_config(&config) {
         return invalid_input_response(message);
-    }
-
-    if let Err(e) = s.save_config(&config) {
-        return store_error_response(e);
     }
 
     // Guard against concurrent builds: two simultaneous builds on the same staging
@@ -197,20 +199,16 @@ pub async fn update_config(
         );
     }
 
-    let mut new_status = status;
-    new_status.is_running = true;
-    s.save_status(&new_status).ok();
+    if let Err(e) = s.save_config(&config) {
+        return store_error_response(e);
+    }
 
+    mark_build_running(&s, &config.index_name);
     spawn_build(Arc::clone(&state), config);
 
-    (
-        StatusCode::OK,
-        Json(json!({
-            "status": 200,
-            "message": "Configuration was updated, and a new indexing job has been scheduled."
-        })),
+    mutation_success_response(
+        "Configuration was updated, and a new indexing job has been scheduled.",
     )
-        .into_response()
 }
 
 /// DELETE /1/configs/:indexName — delete configuration (does NOT delete the suggestions index)
@@ -231,18 +229,8 @@ pub async fn delete_config(
     }
 
     match store(&state).delete_config(&index_name) {
-        Ok(true) => (
-            StatusCode::OK,
-            Json(json!({
-                "status": 200,
-                "message": "Configuration was deleted with success."
-            })),
-        )
-            .into_response(),
-        Ok(false) => json_error(
-            StatusCode::NOT_FOUND,
-            format!("No configuration found for '{}'.", index_name),
-        ),
+        Ok(true) => mutation_success_response("Configuration was deleted with success."),
+        Ok(false) => config_not_found_response(&index_name),
         Err(e) => store_error_response(e),
     }
 }
@@ -265,10 +253,7 @@ pub async fn get_status(
     }
 
     if !store(&state).config_exists(&index_name) {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            format!("No configuration found for '{}'.", index_name),
-        );
+        return config_not_found_response(&index_name);
     }
     let status = store(&state).load_status(&index_name);
     Json(json!(status)).into_response()
@@ -294,7 +279,6 @@ pub async fn get_logs(
     Json(json!(logs)).into_response()
 }
 
-/// POST /1/configs/:indexName/build — trigger an immediate rebuild (Flapjack extension)
 #[utoipa::path(post, path = "/1/configs/{indexName}/build", tag = "query-suggestions",
     params(("indexName" = String, Path, description = "Index name")),
     responses(
@@ -316,12 +300,7 @@ pub async fn trigger_build(
 
     let config = match s.load_config(&index_name) {
         Ok(Some(c)) => c,
-        Ok(None) => {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                format!("No configuration found for '{}'.", index_name),
-            );
-        }
+        Ok(None) => return config_not_found_response(&index_name),
         Err(e) => {
             return store_error_response(e);
         }
@@ -335,17 +314,10 @@ pub async fn trigger_build(
         );
     }
 
-    let mut new_status = status;
-    new_status.is_running = true;
-    s.save_status(&new_status).ok();
-
+    mark_build_running(&s, &index_name);
     spawn_build(Arc::clone(&state), config);
 
-    (
-        StatusCode::OK,
-        Json(json!({"status": 200, "message": "Build triggered."})),
-    )
-        .into_response()
+    mutation_success_response("Build triggered.")
 }
 
 /// Spawn a background build task.

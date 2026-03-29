@@ -21,7 +21,9 @@ const DEFAULT_RANKING_CRITERIA: [RankingCriterion; 7] = [
     RankingCriterion::Exact,
 ];
 
-/// TODO: Document parse_ranking_criteria.
+/// Parse ranking criteria from index settings into the internal enum representation.
+/// Falls back to the default order (typo, geo, words, filters, proximity, attribute,
+/// exact) when settings are absent or empty.
 pub(super) fn parse_ranking_criteria(settings: Option<&IndexSettings>) -> Vec<RankingCriterion> {
     let criteria: Vec<_> = settings
         .and_then(|index_settings| index_settings.ranking.as_ref())
@@ -85,7 +87,9 @@ pub(in crate::index::manager) fn typo_distance_strict(
     full_distance
 }
 
-/// TODO: Document compute_typo_bucket_from_tokens.
+/// Compute a typo-distance bucket for a document by matching query tokens against
+/// document tokens. Uses strict distance (no prefix matching) and sums the best
+/// per-token distances, capped at a configurable maximum.
 pub(in crate::index::manager) fn compute_typo_bucket_from_tokens(
     query_terms: &[String],
     doc_tokens: &[String],
@@ -195,7 +199,9 @@ pub(in crate::index::manager) fn compute_prefix_eligible(
 
 pub(in crate::index::manager) type TermAlternatives = Vec<Vec<String>>;
 
-/// TODO: Document build_term_alternatives.
+/// Build alternative term forms (plurals, decompound parts) for each query token
+/// from the plural expansion map. Returns a vec parallel to the query tokens, where
+/// each entry lists the original term plus any expansions.
 pub(in crate::index::manager) fn build_term_alternatives(
     query_terms: &[String],
     alternatives_as_exact: &[String],
@@ -266,7 +272,8 @@ pub(in crate::index::manager) fn build_term_alternatives(
         .collect()
 }
 
-/// TODO: Document find_term_positions.
+/// Find all character positions where a term (or any of its alternatives) appears
+/// in a field's text. Returns a sorted, deduplicated list of positions.
 pub(in crate::index::manager) fn find_term_positions(
     tokens: &[String],
     term: &str,
@@ -286,7 +293,8 @@ pub(in crate::index::manager) fn find_term_positions(
         .collect()
 }
 
-/// TODO: Document min_distance_sorted.
+/// Compute the minimum pairwise distance between two sorted position lists.
+/// Returns `usize::MAX` if either list is empty.
 pub(in crate::index::manager) fn min_distance_sorted(
     positions_a: &[usize],
     positions_b: &[usize],
@@ -474,7 +482,8 @@ pub(in crate::index::manager) struct AttributeRankingConfig<'a> {
     pub unordered_path_indexes: &'a HashSet<usize>,
 }
 
-/// TODO: Document compute_best_attribute_index.
+/// Find the best (lowest) attribute index where any query token appears, using
+/// the searchable attributes ordering. Lower indices rank higher.
 pub(in crate::index::manager) fn compute_best_attribute_index(
     query_terms: &[String],
     tokens_by_path: &[(usize, Vec<String>)],
@@ -515,7 +524,8 @@ pub(in crate::index::manager) fn compute_best_attribute_index(
     best
 }
 
-/// TODO: Document compute_best_attribute_by_proximity.
+/// Rank by the sum of minimum pairwise distances between consecutive query terms
+/// in each attribute. Lower total proximity scores rank higher.
 pub(in crate::index::manager) fn compute_best_attribute_by_proximity(
     query_terms: &[String],
     tokens_by_path: &[(usize, Vec<String>)],
@@ -597,7 +607,9 @@ pub(in crate::index::manager) fn bm25_length_normalization_denominator(
     1.0 + BM25_K1 * (1.0 - b + b * (dl / avg_doc_len_tokens))
 }
 
-/// TODO: Document bm25_short_field_correction_factor.
+/// Compute a correction factor for BM25 scoring on short fields (fewer than 5
+/// tokens). Boosts exact or near-exact matches in short fields to compensate
+/// for BM25's length normalization bias.
 pub(in crate::index::manager) fn bm25_short_field_correction_factor(
     doc_len_tokens: usize,
     avg_doc_len_tokens: f32,

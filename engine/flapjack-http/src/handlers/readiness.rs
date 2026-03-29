@@ -17,7 +17,7 @@ fn readiness_service_unavailable() -> HandlerError {
     }
 }
 
-/// TODO: Document ready.
+/// Readiness probe: returns 200 with loaded/expected tenant counts for orchestrators.
 pub async fn ready(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
@@ -60,7 +60,6 @@ mod tests {
     use tempfile::TempDir;
     use tower::ServiceExt;
 
-    /// TODO: Document readiness_response_json.
     async fn readiness_response_json(app: Router) -> (StatusCode, serde_json::Value) {
         let response = app
             .oneshot(
@@ -108,8 +107,6 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, serde_json::json!({ "ready": true }));
     }
-
-    /// TODO: Document ready_returns_canonical_503_when_visible_tenant_discovery_fails.
     #[tokio::test]
     async fn ready_returns_canonical_503_when_visible_tenant_discovery_fails() {
         let tmp = TempDir::new().unwrap();

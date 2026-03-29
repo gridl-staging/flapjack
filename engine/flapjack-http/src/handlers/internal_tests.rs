@@ -67,7 +67,6 @@ fn make_index_op(
     }
 }
 
-/// TODO: Document apply_single_index_op.
 async fn apply_single_index_op(
     manager: &IndexManager,
     seq: u64,
@@ -119,7 +118,6 @@ struct BatchWrapperFlowSpec<'a> {
     restored_entry: serde_json::Value,
 }
 
-/// TODO: Document assert_batch_wrapper_flow.
 async fn assert_batch_wrapper_flow<AfterReplace, AfterDelete, AfterRestore>(
     spec: BatchWrapperFlowSpec<'_>,
     assert_after_replace: AfterReplace,
@@ -2138,8 +2136,6 @@ async fn test_full_pause_write_resume_cycle() {
         "step 6: write after resume should NOT return 503"
     );
 }
-
-/// TODO: Document contains_document_replication_ops_detects_upsert_and_delete.
 #[test]
 fn contains_document_replication_ops_detects_upsert_and_delete() {
     let upsert = make_upsert_op(1, 1000, "node-a", "tenant", "doc1", "alpha");

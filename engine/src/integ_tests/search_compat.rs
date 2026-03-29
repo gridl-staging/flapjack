@@ -1,4 +1,3 @@
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/mar26_pm_4_dev_repo_test_suite_and_docker/flapjack_dev/engine/src/integ_tests/search_compat.rs.
 use crate::index::SearchOptions;
 use crate::types::{FacetRequest, Filter, SearchResult, Sort};
 use crate::{error::Result, IndexManager};
@@ -31,8 +30,6 @@ fn legacy_search_options<'a>(
 /// `search_full`) that transform positional parameters into a `SearchOptions` struct and delegate
 /// to `search_with_options`. Implemented by `IndexManager` to keep integration test call sites
 /// compiling during API migration.
-/// TODO: Document SearchCompat.
-/// TODO: Document SearchCompat.
 /// TODO: Document SearchCompat.
 #[allow(clippy::too_many_arguments)] // Test-only shim preserves legacy lib-test callsites while production stays `SearchOptions`-based.
 pub(crate) trait SearchCompat {
@@ -137,7 +134,6 @@ mod tests {
     use crate::types::{FieldValue, SortOrder};
     use tempfile::TempDir;
 
-    /// TODO: Document legacy_search_options_maps_all_legacy_fields.
     #[test]
     fn legacy_search_options_maps_all_legacy_fields() {
         let filter = Filter::Equals {
@@ -175,7 +171,6 @@ mod tests {
         assert!(!options.sum_or_filters_scores);
     }
 
-    /// TODO: Document search_full_matches_explicit_search_options_path.
     #[tokio::test]
     async fn search_full_matches_explicit_search_options_path() {
         let temp_dir = TempDir::new().unwrap();

@@ -1,4 +1,3 @@
-//! Vector processing helpers for write-queue finalization.
 #[cfg(feature = "vector-search")]
 use std::collections::HashMap;
 
@@ -8,7 +7,9 @@ use std::sync::Arc;
 #[cfg(feature = "vector-search")]
 use super::{PreparedWriteDocument, PreparedWriteOperation, WriteFinalizationContext};
 
-/// TODO: Document process_vectors_for_write_op.
+/// Process all vector embeddings for a write batch: collect user-supplied vectors,
+/// generate auto-embeddings via configured embedders, store results in the
+/// VectorIndex, apply deletes, and inject computed vectors back into document JSON.
 #[cfg(feature = "vector-search")]
 pub(super) async fn process_vectors_for_write_op(
     context: &WriteFinalizationContext<'_>,
@@ -65,7 +66,8 @@ type PendingEmbedDocuments = Vec<(String, String)>;
 #[cfg(feature = "vector-search")]
 type ComputedVectors = HashMap<String, HashMap<String, Vec<f32>>>;
 
-/// TODO: Document collect_embedder_workload.
+/// Partition documents into user-supplied vectors ready for storage and documents
+/// needing auto-embedding via the configured embedder template.
 #[cfg(feature = "vector-search")]
 fn collect_embedder_workload(
     prepared: &PreparedWriteOperation,
@@ -94,7 +96,9 @@ fn collect_embedder_workload(
     (vectors_to_store, docs_needing_embed)
 }
 
-/// TODO: Document generate_embedder_vectors.
+/// Create an embedder from config and generate vector embeddings for documents
+/// lacking user-supplied vectors. Returns `None` on embedder creation or
+/// embedding failure (logged as warnings, does not block the Tantivy commit).
 #[cfg(feature = "vector-search")]
 async fn generate_embedder_vectors(
     tenant_id: &str,
@@ -125,7 +129,8 @@ async fn generate_embedder_vectors(
     )
 }
 
-/// TODO: Document create_embedder_with_logging.
+/// Instantiate an embedder from config, logging a warning and returning `None`
+/// on failure instead of propagating the error.
 #[cfg(feature = "vector-search")]
 fn create_embedder_with_logging(
     tenant_id: &str,
@@ -146,7 +151,8 @@ fn create_embedder_with_logging(
     }
 }
 
-/// TODO: Document embed_documents_with_logging.
+/// Embed documents via the embedder, chunking into batches of 50 when the input
+/// exceeds 100 documents. Returns `None` on failure.
 #[cfg(feature = "vector-search")]
 async fn embed_documents_with_logging(
     tenant_id: &str,
@@ -172,7 +178,8 @@ async fn embed_documents_with_logging(
     }
 }
 
-/// TODO: Document embed_documents_in_chunks.
+/// Split a large text batch into chunks of 50 and embed each sequentially,
+/// aborting on first failure.
 #[cfg(feature = "vector-search")]
 async fn embed_documents_in_chunks(
     tenant_id: &str,
@@ -212,7 +219,8 @@ fn record_computed_vectors(
     }
 }
 
-/// TODO: Document apply_vectors_to_index.
+/// Write vector embeddings into the tenant's VectorIndex, creating the index
+/// if it does not exist. Returns `true` if any vectors were successfully added.
 #[cfg(feature = "vector-search")]
 fn apply_vectors_to_index(
     vector_indices: &Arc<
@@ -250,7 +258,8 @@ fn apply_vectors_to_index(
     vectors_modified
 }
 
-/// TODO: Document apply_vector_deletes.
+/// Remove vector entries for deleted document IDs from the tenant's VectorIndex.
+/// Returns `true` if any vectors were removed.
 #[cfg(feature = "vector-search")]
 fn apply_vector_deletes(
     vector_indices: &Arc<
@@ -280,7 +289,8 @@ fn apply_vector_deletes(
     vectors_modified
 }
 
-/// TODO: Document inject_computed_vectors.
+/// Merge computed embedding vectors back into document JSON under the `_vectors`
+/// key so they persist alongside the indexed document.
 #[cfg(feature = "vector-search")]
 fn inject_computed_vectors(
     valid_docs: &mut [PreparedWriteDocument],

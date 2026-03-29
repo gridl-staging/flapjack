@@ -313,7 +313,7 @@ pub async fn migrate_from_algolia(
     }))
 }
 
-/// TODO: Document prepare_target_index.
+/// Ensures the target index directory exists and is ready for migration — deletes it first if `overwrite` is true, or returns a conflict error if it already exists.
 async fn prepare_target_index(
     state: &Arc<AppState>,
     target_index: &str,
@@ -360,7 +360,7 @@ fn extract_string_array(json: &serde_json::Value, key: &str) -> Option<Vec<Strin
     })
 }
 
-/// TODO: Document import_algolia_settings.
+/// Fetches index settings from the Algolia API and applies them to the local target index.
 async fn import_algolia_settings(
     ac: &AlgoliaClient<'_>,
     state: &Arc<AppState>,
@@ -479,7 +479,7 @@ async fn fetch_algolia_paginated<T: serde::de::DeserializeOwned>(
     Ok(all_items)
 }
 
-/// TODO: Document import_algolia_synonyms.
+/// Imports synonyms from a remote Algolia index into the local tenant.
 async fn import_algolia_synonyms(
     ac: &AlgoliaClient<'_>,
     state: &Arc<AppState>,
@@ -509,7 +509,7 @@ async fn import_algolia_synonyms(
     Ok(count)
 }
 
-/// TODO: Document import_algolia_rules.
+/// Imports rules from a remote Algolia index into the local tenant.
 async fn import_algolia_rules(
     ac: &AlgoliaClient<'_>,
     state: &Arc<AppState>,
@@ -541,7 +541,7 @@ async fn import_algolia_rules(
     Ok(count)
 }
 
-/// TODO: Document import_algolia_objects.
+/// Browses all objects from the Algolia source index via cursor pagination and batch-upserts them into the local target index.
 async fn import_algolia_objects(
     ac: &AlgoliaClient<'_>,
     state: &Arc<AppState>,
@@ -606,7 +606,7 @@ async fn import_algolia_objects(
     Ok((total_objects, last_task_id))
 }
 
-/// TODO: Document parse_algolia_documents.
+/// Parses Algolia browse hits into flapjack `Document`s, stripping internal fields.
 fn parse_algolia_documents(hits: &[serde_json::Value]) -> Vec<Document> {
     hits.iter()
         .filter_map(|hit| {
@@ -627,7 +627,7 @@ fn parse_algolia_documents(hits: &[serde_json::Value]) -> Vec<Document> {
         .collect()
 }
 
-/// TODO: Document await_indexing_completion.
+/// Waits up to 60 seconds for all pending write-queue tasks to drain.
 async fn await_indexing_completion(state: &Arc<AppState>, target_index: &str) {
     let max_wait = std::time::Duration::from_secs(60);
     let start = std::time::Instant::now();
@@ -707,8 +707,6 @@ mod tests {
         );
         assert_eq!(extract_string_array(&settings_json, "missingField"), None);
     }
-
-    /// TODO: Document parse_algolia_documents_strips_metadata_and_skips_non_objects.
     #[test]
     fn parse_algolia_documents_strips_metadata_and_skips_non_objects() {
         let documents = parse_algolia_documents(&[

@@ -1,4 +1,3 @@
-//! Metrics endpoint and gauge assembly for `/metrics`.
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -26,7 +25,7 @@ pub async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
     encode_registry_response(&registry)
 }
 
-/// TODO: Document register_system_runtime_gauges.
+/// Registers Prometheus gauges for active writers, memory budget, and concurrent readers.
 fn register_system_runtime_gauges(registry: &Registry, state: &AppState) {
     let budget = flapjack::get_global_budget();
     register_gauge(
@@ -82,7 +81,7 @@ fn register_system_runtime_gauges(registry: &Registry, state: &AppState) {
     );
 }
 
-/// TODO: Document register_replication_gauges.
+/// Registers Prometheus gauges for replication state (enabled, peer count, circuit breaker).
 fn register_replication_gauges(registry: &Registry, state: &AppState) {
     register_gauge(
         registry,
@@ -117,7 +116,6 @@ fn register_live_index_state_gauges(registry: &Registry, state: &AppState) {
     register_oplog_sequence_gauge(registry, state);
 }
 
-/// TODO: Document register_storage_bytes_gauge.
 fn register_storage_bytes_gauge(registry: &Registry, state: &AppState) {
     let values = collect_storage_gauge_values(state);
     register_index_labeled_gauge_values(
@@ -128,7 +126,7 @@ fn register_storage_bytes_gauge(registry: &Registry, state: &AppState) {
     );
 }
 
-/// TODO: Document register_documents_count_gauge.
+/// Registers per-tenant Prometheus gauges for document counts.
 fn register_documents_count_gauge(registry: &Registry, state: &AppState) {
     let values = state
         .manager
@@ -162,7 +160,7 @@ fn register_oplog_sequence_gauge(registry: &Registry, state: &AppState) {
     );
 }
 
-/// TODO: Document encode_registry_response.
+/// Encodes the Prometheus registry into a text-format HTTP response.
 fn encode_registry_response(registry: &Registry) -> Response {
     let encoder = TextEncoder::new();
     let mut metric_families = registry.gather();
@@ -201,7 +199,7 @@ fn bool_as_gauge_value(value: bool) -> f64 {
     }
 }
 
-/// TODO: Document collect_storage_gauge_values.
+/// Collects per-index storage-size gauge values from the metrics poller.
 fn collect_storage_gauge_values(state: &AppState) -> Vec<(String, f64)> {
     state
         .metrics_state
@@ -440,7 +438,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document metrics_reflects_actual_tenant_count.
     #[tokio::test]
     async fn metrics_reflects_actual_tenant_count() {
         let tmp = TempDir::new().unwrap();
@@ -464,7 +461,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document metrics_shows_storage_gauges_after_poller_update.
     #[tokio::test]
     async fn metrics_shows_storage_gauges_after_poller_update() {
         let tmp = TempDir::new().unwrap();
@@ -499,7 +495,6 @@ mod tests {
         assert_eq!(value, 1234.0, "storage bytes should come from MetricsState");
     }
 
-    /// TODO: Document metrics_includes_per_index_usage_counters.
     #[tokio::test]
     async fn metrics_includes_per_index_usage_counters() {
         let tmp = TempDir::new().unwrap();
@@ -567,7 +562,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document metrics_counter_values_match_known_operations.
     #[tokio::test]
     async fn metrics_counter_values_match_known_operations() {
         let tmp = TempDir::new().unwrap();
@@ -624,7 +618,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document metrics_includes_documents_count_gauge.
     #[tokio::test]
     async fn metrics_includes_documents_count_gauge() {
         let tmp = TempDir::new().unwrap();
@@ -672,7 +665,6 @@ mod tests {
         assert_eq!(value, 2.0, "should have 2 docs in the gauge");
     }
 
-    /// TODO: Document metrics_includes_oplog_current_seq_gauge.
     #[tokio::test]
     async fn metrics_includes_oplog_current_seq_gauge() {
         let tmp = TempDir::new().unwrap();

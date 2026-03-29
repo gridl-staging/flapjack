@@ -33,7 +33,6 @@ mod tests {
     // Test infrastructure
     // ──────────────────────────────────────────────────────────────────────────
 
-    /// TODO: Document full_stack_router.
     fn full_stack_router(
         state: Arc<AppState>,
         key_store: Arc<KeyStore>,

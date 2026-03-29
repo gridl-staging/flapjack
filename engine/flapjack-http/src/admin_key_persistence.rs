@@ -17,7 +17,8 @@ pub fn persist_admin_key_file(
     ensure_admin_key_permissions(admin_key_file, permission_mode)
 }
 
-/// TODO: Document ensure_admin_key_permissions.
+/// Sets the admin key file to mode 0600 (owner-only read/write) on Unix systems,
+/// logging or failing based on the configured permission failure mode.
 pub fn ensure_admin_key_permissions(
     admin_key_file: &Path,
     permission_mode: PermissionFailureMode,

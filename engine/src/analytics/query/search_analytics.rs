@@ -1,7 +1,8 @@
 use super::*;
 
 impl super::AnalyticsQueryEngine {
-    /// TODO: Document AnalyticsQueryEngine.top_searches.
+    /// Return top search queries for the given index/date range, optionally enriched
+    /// with click analytics and filtered by country or analytics tags.
     pub async fn top_searches(
         &self,
         params: &AnalyticsQueryParams<'_>,

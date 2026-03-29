@@ -62,7 +62,8 @@ pub struct FederatedResponse {
     pub processing_time_ms: Option<u64>,
 }
 
-/// TODO: Document merge_federated_results.
+/// Merges hits from multiple batch queries using weighted Reciprocal Rank Fusion,
+/// de-duplicating by objectID and paginating per the federation config.
 pub fn merge_federated_results(
     candidates: Vec<FederationCandidate>,
     estimated_total_hits_per_query: Vec<usize>,
@@ -154,7 +155,7 @@ fn deduplication_key(candidate: &FederationCandidate, sequence_number: usize) ->
     format!("{}::__sequence_{}", candidate.index_name, sequence_number)
 }
 
-/// TODO: Document attach_federation_metadata.
+/// Wraps an accumulated hit with federation metadata (index name, query position).
 fn attach_federation_metadata(accumulated_hit: &AccumulatedHit) -> FederatedHit {
     let document = accumulated_hit
         .hit
@@ -182,7 +183,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// TODO: Document candidate.
     fn candidate(
         index_name: &str,
         object_id: &str,
@@ -216,7 +216,6 @@ mod tests {
             .collect()
     }
 
-    /// TODO: Document equal_weight_two_index_merge_uses_rrf_ordering.
     #[test]
     fn equal_weight_two_index_merge_uses_rrf_ordering() {
         let candidates = vec![
@@ -239,7 +238,6 @@ mod tests {
         assert_eq!(ids(&response), vec!["p1", "a1", "p2", "a2"]);
     }
 
-    /// TODO: Document weight_boosting_changes_cross_index_rank_order.
     #[test]
     fn weight_boosting_changes_cross_index_rank_order() {
         let candidates = vec![
@@ -261,7 +259,6 @@ mod tests {
         assert_eq!(ids(&response), vec!["p1", "p2", "a1"]);
     }
 
-    /// TODO: Document tie_breaking_is_score_then_queries_position_then_rank.
     #[test]
     fn tie_breaking_is_score_then_queries_position_then_rank() {
         let candidates = vec![
@@ -299,9 +296,6 @@ mod tests {
         assert_eq!(response.estimated_total_hits, 0);
     }
 
-    /// Single-index merge must preserve original rank order and produce
-    /// monotonically decreasing scores — ensures RRF is a no-op for the
-    /// trivial single-query case.
     #[test]
     fn single_index_preserves_original_rank_order() {
         let candidates = vec![
@@ -331,7 +325,6 @@ mod tests {
         }
     }
 
-    /// TODO: Document duplicate_index_and_object_id_sum_scores_but_cross_index_duplicates_stay_distinct.
     #[test]
     fn duplicate_index_and_object_id_sum_scores_but_cross_index_duplicates_stay_distinct() {
         let candidates = vec![
@@ -372,7 +365,6 @@ mod tests {
         assert_eq!(shared_hits, 2);
     }
 
-    /// TODO: Document pagination_is_applied_after_sort_and_metadata_is_attached.
     #[test]
     fn pagination_is_applied_after_sort_and_metadata_is_attached() {
         let candidates = vec![
@@ -531,7 +523,6 @@ mod tests {
         assert_eq!(response.limit, 1);
     }
 
-    /// TODO: Document federation_candidate_serde_uses_camel_case_contract.
     #[test]
     fn federation_candidate_serde_uses_camel_case_contract() {
         let candidate = candidate("products", "p1", 2, 3, 1.3);

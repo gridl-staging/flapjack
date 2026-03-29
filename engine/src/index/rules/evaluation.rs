@@ -75,7 +75,9 @@ impl RuleStore {
         state.finish()
     }
 
-    /// TODO: Document RuleStore.apply_matching_rule.
+    /// Apply a matching rule's consequence to the search context: promotes, parameter
+    /// overrides, query edits, facet captures, and automatic facet filters.
+    /// Mutates `RuleEffects` in place.
     fn apply_matching_rule(
         &self,
         rule: &Rule,
@@ -93,7 +95,8 @@ impl RuleStore {
         }
     }
 
-    /// TODO: Document RuleStore.apply_rule_promotes.
+    /// Append promoted object IDs and first-match filter-promotes to
+    /// `RuleEffects`; hide/user-data consequences are handled separately.
     fn apply_rule_promotes(&self, rule: &Rule, is_conditionless: bool, effects: &mut RuleEffects) {
         if is_conditionless {
             return;
@@ -135,7 +138,9 @@ impl RuleStore {
         }
     }
 
-    /// TODO: Document RuleStore.apply_rule_params.
+    /// Apply the rule's `params` object to `RuleEffects`: scalar fields (query,
+    /// filters) use first-match-wins semantics; list fields (optionalFilters,
+    /// facetFilters) accumulate across rules.
     fn apply_rule_params(
         &self,
         rule: &Rule,
@@ -153,7 +158,9 @@ impl RuleStore {
         self.merge_rule_rendering_content(params, &mut state.merged_rule_rendering_content);
     }
 
-    /// TODO: Document RuleStore.apply_rule_query_edit.
+    /// If the rule has a non-empty `query` in `params`, apply it as a query replacement.
+    /// Otherwise, fall back to pattern-based remove/replace edits derived from the
+    /// rule's condition.
     fn apply_rule_query_edit(&self, params: &ConsequenceParams, state: &mut RuleEvaluationState) {
         if state.effects.query_edits.is_some() {
             return;
@@ -186,7 +193,8 @@ impl RuleStore {
         }
     }
 
-    /// TODO: Document RuleStore.apply_rule_facet_captures.
+    /// Convert `{facet:attr}` placeholder captures into automatic facet filters and
+    /// add them to `RuleEffects.automatic_facet_filters`.
     fn apply_rule_facet_captures(
         &self,
         rule: &Rule,
@@ -217,7 +225,9 @@ impl RuleStore {
         }
     }
 
-    /// TODO: Document RuleStore.apply_automatic_facet_filters.
+    /// Parse the rule's `automaticFacetFilters` field and add each entry to
+    /// `RuleEffects`. Each filter specifies an attribute, whether it is disjunctive,
+    /// and an optional score.
     fn apply_automatic_facet_filters(
         &self,
         params: &ConsequenceParams,
@@ -261,7 +271,8 @@ impl RuleStore {
         }
     }
 
-    /// TODO: Document RuleStore.apply_rule_scalar_params.
+    /// Apply first-match-wins scalar parameters from a rule's `params` to `RuleEffects`.
+    /// Skips parameters that have already been set by a higher-priority rule.
     fn apply_rule_scalar_params(&self, params: &ConsequenceParams, effects: &mut RuleEffects) {
         if effects.filters.is_none() {
             if let Some(rule_filters) = &params.filters {
@@ -346,5 +357,31 @@ impl RuleStore {
     ) -> Option<String> {
         self.evaluate_rules(query_text, context, active_filters, synonyms)
             .rewritten_query
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn apply_rule_promotes_doc_stays_scoped_to_promotions() {
+        let source = include_str!("evaluation.rs");
+        let before_fn = source
+            .split("fn apply_rule_promotes(&self, rule: &Rule, is_conditionless: bool, effects: &mut RuleEffects)")
+            .next()
+            .unwrap_or_default();
+        let doc_window = before_fn
+            .lines()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            doc_window.contains("filter-promotes"),
+            "apply_rule_promotes docs must describe only promote/filter-promotes behavior"
+        );
+        assert!(
+            !doc_window.contains("hidden object IDs"),
+            "apply_rule_promotes docs must not claim hidden-object handling"
+        );
     }
 }

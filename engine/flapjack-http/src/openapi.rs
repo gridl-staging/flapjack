@@ -367,7 +367,7 @@ impl utoipa::Modify for SecurityAddon {
 struct ChatSseAddon;
 
 impl utoipa::Modify for ChatSseAddon {
-    /// TODO: Document ChatSseAddon.modify.
+    /// Patches the OpenAPI spec to add SSE `text/event-stream` response to the chat endpoint.
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         use utoipa::openapi::Content;
 
@@ -435,7 +435,6 @@ mod tests {
         }
     }
 
-    /// Verify that all key-management endpoints reference concrete `$ref` schema components rather than inline definitions.
     #[test]
     fn key_endpoints_use_concrete_schema_components() {
         let doc = openapi_json();
@@ -1037,8 +1036,6 @@ mod tests {
         );
     }
 
-    /// Stage 7 bug fix: personalization + experiment lifecycle/results endpoints must
-    /// use shared typed OpenAPI schemas instead of generic serde_json::Value bodies.
     #[test]
     fn personalization_and_experiment_lifecycle_use_typed_schemas() {
         let doc = openapi_json();
@@ -1282,8 +1279,6 @@ mod tests {
 
     // --- Stage 7 Security Review: regression guards for auth-correct OpenAPI exposure ---
 
-    /// Security review: `/health` must have NO security requirement in the spec
-    /// (it is a public endpoint, see `is_public_path` in auth.rs).
     #[test]
     fn health_endpoint_has_no_security_requirement() {
         let doc = openapi_json();

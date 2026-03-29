@@ -57,7 +57,8 @@ impl super::IndexManager {
         None
     }
 
-    /// TODO: Document IndexManager.invalidate_settings_cache.
+    /// Remove the cached settings for a tenant and reload languages/separators
+    /// from disk so subsequent searches pick up the latest configuration.
     pub fn invalidate_settings_cache(&self, tenant_id: &str) {
         self.settings_cache.remove(tenant_id);
         if let Some(index) = self.loaded.get(tenant_id) {

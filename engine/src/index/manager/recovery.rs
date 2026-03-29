@@ -49,7 +49,10 @@ struct ReplayCommitContext<'a> {
 }
 
 impl IndexManager {
-    /// TODO: Document IndexManager.recover_from_oplog.
+    /// Replay uncommitted oplog entries for a tenant after startup. Rebuilds the LWW map
+    /// from all retained entries, replays config ops (settings), then replays document ops
+    /// (upsert/delete/clear) with a fresh Tantivy writer. Rebuilds the vector index when
+    /// the `vector-search` feature is enabled.
     pub(super) fn recover_from_oplog(
         &self,
         tenant_id: &str,
@@ -114,7 +117,8 @@ impl IndexManager {
         matches!(op_type, "upsert" | "delete" | "clear")
     }
 
-    /// TODO: Document IndexManager.finish_config_only_recovery.
+    /// Advance the committed sequence number when only config ops were replayed (no
+    /// document ops). No-ops if the final sequence has not advanced past the committed mark.
     fn finish_config_only_recovery(
         &self,
         tenant_id: &str,
@@ -134,7 +138,9 @@ impl IndexManager {
         Ok(())
     }
 
-    /// TODO: Document IndexManager.rebuild_lww_map.
+    /// Rebuild the LWW (last-writer-wins) map from all retained oplog entries, tracking
+    /// the highest `(timestamp_ms, node_id)` pair per object ID. Runs on every startup
+    /// so stale replicated ops arriving after restart are correctly rejected.
     pub(super) fn rebuild_lww_map(&self, tenant_id: &str, oplog: &OpLog) -> Result<()> {
         // P3: Rebuild lww_map from ALL retained oplog entries (read from seq=0).
         // This runs on every startup — crash or normal — so that stale replicated ops
@@ -167,7 +173,9 @@ impl IndexManager {
         Ok(())
     }
 
-    /// TODO: Document IndexManager.replay_config_ops.
+    /// Replay configuration operations (settings, synonyms, rules) from oplog entries.
+    /// Restores `settings.json` from the serialized payload; synonym and rule ops are
+    /// currently skipped pending aggregation support.
     pub(super) fn replay_config_ops(
         &self,
         tenant_id: &str,
@@ -207,7 +215,8 @@ impl IndexManager {
         Ok(())
     }
 
-    /// TODO: Document IndexManager.load_settings_after_config.
+    /// Load `IndexSettings` from the tenant's `settings.json` after config replay.
+    /// Returns `None` with a warning if the file is missing.
     pub(super) fn load_settings_after_config(
         &self,
         tenant_id: &str,
@@ -225,7 +234,9 @@ impl IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.replay_document_ops.
+    /// Replay document operations (upsert, delete, clear) through a fresh Tantivy writer.
+    /// Acquires a writer, replays all entries, commits, reloads the reader, and advances
+    /// the committed sequence number.
     pub(super) fn replay_document_ops(
         &self,
         tenant_id: &str,
@@ -252,7 +263,8 @@ impl IndexManager {
         )
     }
 
-    /// TODO: Document IndexManager.replay_document_entries.
+    /// Iterate over document oplog entries and dispatch each to `replay_document_entry`,
+    /// accumulating replay and failure counts.
     fn replay_document_entries(
         &self,
         tenant_id: &str,
@@ -271,7 +283,9 @@ impl IndexManager {
         Ok(stats)
     }
 
-    /// TODO: Document IndexManager.replay_document_entry.
+    /// Dispatch a single oplog entry by op type: upsert converts JSON to a Tantivy
+    /// document, delete removes by object ID term, clear deletes all documents.
+    /// Unknown op types are skipped with a warning.
     fn replay_document_entry(
         &self,
         tenant_id: &str,
@@ -303,7 +317,8 @@ impl IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.replay_upsert_entry.
+    /// Replay a single upsert: delete the existing term for the object ID, parse the
+    /// JSON body into a `Document`, convert to a Tantivy document, and add to the writer.
     fn replay_upsert_entry(
         &self,
         tenant_id: &str,
@@ -357,7 +372,8 @@ impl IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.replay_delete_entry.
+    /// Replay a single delete: remove the document matching the object ID from the
+    /// Tantivy writer via term deletion.
     fn replay_delete_entry(
         entry: &OpLogEntry,
         writer: &mut crate::index::ManagedIndexWriter,
@@ -375,7 +391,9 @@ impl IndexManager {
         ReplayDocumentOutcome::REPLAYED
     }
 
-    /// TODO: Document IndexManager.finish_replay_document_ops.
+    /// Commit the Tantivy writer after document replay, reload the reader, invalidate
+    /// the searchable-paths cache, and advance the committed sequence number on disk.
+    /// Logs a warning if any entries failed conversion.
     fn finish_replay_document_ops(
         &self,
         commit_context: ReplayCommitContext<'_>,
@@ -426,7 +444,8 @@ impl IndexManager {
         Ok(())
     }
 
-    /// TODO: Document IndexManager.rebuild_vector_index.
+    /// Rebuild the in-memory VectorIndex by replaying all oplog entries (upsert, delete,
+    /// clear). Persists the rebuilt index to disk only if any vectors were modified.
     #[cfg(feature = "vector-search")]
     pub(super) fn rebuild_vector_index(
         &self,
@@ -461,7 +480,8 @@ impl IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.recover_vectors_from_upsert.
+    /// Extract `_vectors` from an upsert oplog entry's body and add each named vector
+    /// to the VectorIndex, creating the index on first use with cosine similarity.
     #[cfg(feature = "vector-search")]
     fn recover_vectors_from_upsert(
         tenant_id: &str,
@@ -551,7 +571,8 @@ impl IndexManager {
         (vector.len() == raw_values.len() && !vector.is_empty()).then_some(vector)
     }
 
-    /// TODO: Document IndexManager.persist_rebuilt_vector_index.
+    /// Save the rebuilt VectorIndex to the tenant's `vectors/` directory and register
+    /// it in the in-memory map. Logs a warning on save failure.
     #[cfg(feature = "vector-search")]
     fn persist_rebuilt_vector_index(
         &self,

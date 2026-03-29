@@ -7,6 +7,8 @@ use axum::{
 };
 use flapjack::analytics::schema::SearchEvent;
 use flapjack::analytics::AnalyticsQueryEngine;
+use flapjack::index::settings::IndexSettings;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// Construct a test `AppState` with an experiment store and an optional analytics query engine.
@@ -547,7 +549,6 @@ async fn estimate_uses_historical_analytics_traffic_for_duration() {
     assert_eq!(json["durationDays"], 16);
 }
 
-/// Verify that the list endpoint filters experiments by `indexPrefix` and `indexSuffix` query parameters, returning only matching entries with correct count and total.
 #[tokio::test]
 async fn list_experiments_filters_by_index_prefix_and_suffix() {
     let tmp = TempDir::new().unwrap();
@@ -585,7 +586,6 @@ async fn list_experiments_filters_by_index_prefix_and_suffix() {
     assert_eq!(json["abtests"][0]["variants"][0]["index"], "prod_beta_v2");
 }
 
-/// Exercise the full create → GET (active) → stop → GET (stopped) lifecycle, asserting Algolia wire schema conformance and correct status transitions at each step.
 #[tokio::test]
 async fn algolia_lifecycle_create_get_stop_get_matches_wire_schema() {
     let tmp = TempDir::new().unwrap();
@@ -627,7 +627,6 @@ async fn algolia_lifecycle_create_get_stop_get_matches_wire_schema() {
     assert_eq!(get_stopped_json["abTestID"], ab_test_id);
 }
 
-/// Verify that stopping a running experiment preserves the original `endAt` value and sets `stoppedAt` to a distinct timestamp.
 #[tokio::test]
 async fn stop_preserves_scheduled_end_at_and_sets_distinct_stopped_at() {
     let tmp = TempDir::new().unwrap();
@@ -668,7 +667,6 @@ async fn stop_preserves_scheduled_end_at_and_sets_distinct_stopped_at() {
     assert_ne!(get_json["stoppedAt"], get_json["endAt"]);
 }
 
-/// Verify that stopping an experiment releases the per-index active slot, allowing a new experiment on the same index to start without a 409 conflict.
 #[tokio::test]
 async fn stopped_experiment_releases_active_slot_for_same_index() {
     let tmp = TempDir::new().unwrap();
@@ -1118,7 +1116,6 @@ async fn conclude_draft_experiment_returns_409() {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 }
 
-/// Verify that omitting `minimumDays` from the create request defaults the persisted value to `DEFAULT_MINIMUM_DAYS`.
 #[tokio::test]
 async fn create_experiment_default_minimum_days() {
     let tmp = TempDir::new().unwrap();
@@ -1489,7 +1486,6 @@ async fn delete_nonexistent_experiment_returns_404() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
-/// Verify that the list endpoint returns at most 10 experiments by default when more than 10 exist, with `total` reflecting the full count.
 #[tokio::test]
 async fn list_experiments_default_limit_is_ten() {
     let tmp = TempDir::new().unwrap();
@@ -1576,7 +1572,6 @@ async fn list_experiments_ordered_by_creation_then_id() {
     );
 }
 
-/// C2: Pagination — offset+limit slices the ordered list correctly.
 #[tokio::test]
 async fn list_experiments_pagination_slices_ordered_list() {
     let tmp = TempDir::new().unwrap();
@@ -1670,7 +1665,6 @@ async fn list_experiments_pagination_slices_ordered_list() {
     );
 }
 
-/// C2: Filtering — indexPrefix and indexSuffix are applied before pagination.
 #[tokio::test]
 async fn list_experiments_filter_applied_before_pagination() {
     let tmp = TempDir::new().unwrap();
@@ -1741,7 +1735,6 @@ async fn list_experiments_filter_applied_before_pagination() {
     assert_eq!(json["count"], 3);
 }
 
-/// C2: count = page size, total = full filtered match count.
 #[tokio::test]
 async fn list_experiments_count_equals_page_size_total_equals_filtered() {
     let tmp = TempDir::new().unwrap();
@@ -1812,7 +1805,6 @@ async fn start_already_running_experiment_returns_409() {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 }
 
-/// Verify that starting a second experiment on an index that already has an active experiment returns 409 Conflict.
 #[tokio::test]
 async fn start_second_experiment_on_same_index_returns_409() {
     let tmp = TempDir::new().unwrap();
@@ -1857,7 +1849,6 @@ async fn start_experiment_sets_started_at_timestamp() {
     assert_eq!(json["endedAt"], serde_json::Value::Null);
 }
 
-/// TODO: Document list_experiments_exposes_started_at_only_after_start.
 #[tokio::test]
 async fn list_experiments_exposes_started_at_only_after_start() {
     let tmp = TempDir::new().unwrap();
@@ -3654,8 +3645,33 @@ async fn update_experiment_mixed_mode_variant_returns_400() {
 
 // --- Promote flow tests ---
 
-/// Helper: create a Mode B experiment (control = "products", variant index = "products_v2"),
-/// start it, then conclude with the given promoted flag and winner.
+fn index_settings_path(tmp: &TempDir, index_name: &str) -> PathBuf {
+    tmp.path().join(index_name).join("settings.json")
+}
+
+fn load_index_settings(tmp: &TempDir, index_name: &str) -> IndexSettings {
+    IndexSettings::load(&index_settings_path(tmp, index_name)).unwrap()
+}
+
+fn create_index_with_custom_ranking(
+    tmp: &TempDir,
+    state: &Arc<AppState>,
+    index_name: &str,
+    custom_ranking: &[&str],
+) {
+    state.manager.create_tenant(index_name).unwrap();
+
+    let settings_path = index_settings_path(tmp, index_name);
+    let mut settings = IndexSettings::load(&settings_path).unwrap();
+    settings.custom_ranking = Some(
+        custom_ranking
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+    );
+    settings.save(&settings_path).unwrap();
+}
+
 async fn create_start_conclude_mode_b(
     app: &Router,
     state: &Arc<AppState>,
@@ -3704,33 +3720,25 @@ async fn create_start_conclude_mode_b(
     id
 }
 
-/// Verify that promoting a Mode B variant winner copies the variant index's settings (e.g. `customRanking`) to the main index on disk.
 #[tokio::test]
 async fn promote_mode_b_copies_variant_settings_to_main_index() {
-    use flapjack::index::settings::IndexSettings;
-
     let tmp = TempDir::new().unwrap();
     let state = make_experiments_state(&tmp);
     let app = app_router(state.clone());
 
     // Set up variant index with distinct custom_ranking
     state.manager.create_tenant("products").unwrap();
-    state.manager.create_tenant("products_v2").unwrap();
-    let variant_settings_path = tmp.path().join("products_v2").join("settings.json");
-    let mut variant_settings = IndexSettings::load(&variant_settings_path).unwrap();
-    variant_settings.custom_ranking = Some(vec!["desc(popularity)".to_string()]);
-    variant_settings.save(&variant_settings_path).unwrap();
+    create_index_with_custom_ranking(&tmp, &state, "products_v2", &["desc(popularity)"]);
 
     // Verify main index does NOT have custom_ranking yet
-    let main_settings_path = tmp.path().join("products").join("settings.json");
-    let main_before = IndexSettings::load(&main_settings_path).unwrap();
+    let main_before = load_index_settings(&tmp, "products");
     assert!(main_before.custom_ranking.is_none());
 
     create_start_conclude_mode_b(&app, &state, true, "variant").await;
 
     // After promote, main index should have variant's custom_ranking
     state.manager.invalidate_settings_cache("products");
-    let main_after = IndexSettings::load(&main_settings_path).unwrap();
+    let main_after = load_index_settings(&tmp, "products");
     assert_eq!(
         main_after.custom_ranking,
         Some(vec!["desc(popularity)".to_string()]),
@@ -3738,65 +3746,97 @@ async fn promote_mode_b_copies_variant_settings_to_main_index() {
     );
 }
 
-/// Verify that promoting with the control arm as winner does not copy variant index settings to the main index.
 #[tokio::test]
 async fn promote_mode_b_control_winner_does_not_change_settings() {
-    use flapjack::index::settings::IndexSettings;
-
     let tmp = TempDir::new().unwrap();
     let state = make_experiments_state(&tmp);
     let app = app_router(state.clone());
 
     state.manager.create_tenant("products").unwrap();
-    state.manager.create_tenant("products_v2").unwrap();
-    let variant_settings_path = tmp.path().join("products_v2").join("settings.json");
-    let mut variant_settings = IndexSettings::load(&variant_settings_path).unwrap();
-    variant_settings.custom_ranking = Some(vec!["desc(popularity)".to_string()]);
-    variant_settings.save(&variant_settings_path).unwrap();
+    create_index_with_custom_ranking(&tmp, &state, "products_v2", &["desc(popularity)"]);
 
     create_start_conclude_mode_b(&app, &state, true, "control").await;
 
     // Main index should remain unchanged (control winner = keep original)
-    let main_settings_path = tmp.path().join("products").join("settings.json");
-    let main_after = IndexSettings::load(&main_settings_path).unwrap();
+    let main_after = load_index_settings(&tmp, "products");
     assert!(
         main_after.custom_ranking.is_none(),
         "control winner should not copy variant settings"
     );
 }
 
-/// Verify that concluding with `promoted: false` leaves the main index settings unchanged, even when the variant winner has different settings.
 #[tokio::test]
 async fn conclude_without_promote_does_not_change_settings() {
-    use flapjack::index::settings::IndexSettings;
-
     let tmp = TempDir::new().unwrap();
     let state = make_experiments_state(&tmp);
     let app = app_router(state.clone());
 
     state.manager.create_tenant("products").unwrap();
-    state.manager.create_tenant("products_v2").unwrap();
-    let variant_settings_path = tmp.path().join("products_v2").join("settings.json");
-    let mut variant_settings = IndexSettings::load(&variant_settings_path).unwrap();
-    variant_settings.custom_ranking = Some(vec!["desc(popularity)".to_string()]);
-    variant_settings.save(&variant_settings_path).unwrap();
+    create_index_with_custom_ranking(&tmp, &state, "products_v2", &["desc(popularity)"]);
 
     create_start_conclude_mode_b(&app, &state, false, "variant").await;
 
     // promoted=false → main index untouched
-    let main_settings_path = tmp.path().join("products").join("settings.json");
-    let main_after = IndexSettings::load(&main_settings_path).unwrap();
+    let main_after = load_index_settings(&tmp, "products");
     assert!(
         main_after.custom_ranking.is_none(),
         "promoted=false should not change main index settings"
     );
 }
 
-/// Verify that promoting a Mode A variant winner merges `customSearchParameters` (e.g. `customRanking`, `removeWordsIfNoResults`) into the main index settings on disk.
+#[tokio::test]
+async fn promote_mode_b_rejects_path_traversal_variant_index() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_experiments_state(&tmp);
+
+    state.manager.create_tenant("products").unwrap();
+
+    let main_before = load_index_settings(&tmp, "products");
+    assert!(main_before.custom_ranking.is_none());
+
+    let escape_dir = tmp.path().join("../escape_promote_mode_b");
+    std::fs::create_dir_all(&escape_dir).unwrap();
+    let escape_settings_path = escape_dir.join("settings.json");
+    let mut escape_settings = main_before.clone();
+    escape_settings.custom_ranking = Some(vec!["desc(leaked)".to_string()]);
+    escape_settings.save(&escape_settings_path).unwrap();
+
+    let error = promote_mode_b_settings(&state, "products", "../escape_promote_mode_b")
+        .expect_err("path traversal variant index should be rejected");
+    assert!(
+        error.contains("invalid index name"),
+        "unexpected error for traversal attempt: {error}"
+    );
+
+    let main_after = load_index_settings(&tmp, "products");
+    assert!(
+        main_after.custom_ranking.is_none(),
+        "rejected traversal must not overwrite the main index settings"
+    );
+}
+
+#[tokio::test]
+async fn promote_mode_a_rejects_path_traversal_main_index() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_experiments_state(&tmp);
+
+    let error = promote_mode_a_overrides(
+        &state,
+        "../escape_promote_mode_a",
+        &QueryOverrides {
+            custom_ranking: Some(vec!["desc(popularity)".to_string()]),
+            ..Default::default()
+        },
+    )
+    .expect_err("path traversal main index should be rejected");
+    assert!(
+        error.contains("invalid index name"),
+        "unexpected error for traversal attempt: {error}"
+    );
+}
+
 #[tokio::test]
 async fn promote_mode_a_applies_custom_ranking_to_main_index() {
-    use flapjack::index::settings::IndexSettings;
-
     let tmp = TempDir::new().unwrap();
     let state = make_experiments_state(&tmp);
     let app = app_router(state.clone());
@@ -3849,8 +3889,7 @@ async fn promote_mode_a_applies_custom_ranking_to_main_index() {
 
     // Main index should now have custom_ranking and remove_words_if_no_results from overrides
     state.manager.invalidate_settings_cache("products");
-    let main_settings_path = tmp.path().join("products").join("settings.json");
-    let main_after = IndexSettings::load(&main_settings_path).unwrap();
+    let main_after = load_index_settings(&tmp, "products");
     assert_eq!(
         main_after.custom_ranking,
         Some(vec!["desc(sales)".to_string(), "asc(price)".to_string()]),
@@ -4245,7 +4284,6 @@ fn build_results_response_cuped_safety_fallback_when_adjusted_variance_not_lower
     );
 }
 
-/// TODO: Document collect_query_only_override_fields_returns_only_query_time_keys.
 #[test]
 fn collect_query_only_override_fields_returns_only_query_time_keys() {
     let overrides = flapjack::experiments::config::QueryOverrides {
@@ -4277,7 +4315,6 @@ fn collect_query_only_override_fields_returns_only_query_time_keys() {
     );
 }
 
-/// TODO: Document resolve_experiment_index_names_deduplicates_variant_index.
 #[test]
 fn resolve_experiment_index_names_deduplicates_variant_index() {
     let experiment = Experiment {

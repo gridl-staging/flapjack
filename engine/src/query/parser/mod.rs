@@ -172,7 +172,8 @@ struct FieldQueryContext<'a> {
 }
 
 impl QueryParser {
-    /// TODO: Document QueryParser.new.
+    /// Create a parser with equal weights across all default fields, prefix-last
+    /// query type, and default typo tolerance thresholds (1 typo at 4 chars, 2 at 8).
     pub fn new(_schema: &TantivySchema, default_fields: Vec<tantivy::schema::Field>) -> Self {
         let weights = vec![1.0; default_fields.len()];
         QueryParser {
@@ -197,7 +198,8 @@ impl QueryParser {
         }
     }
 
-    /// TODO: Document QueryParser.new_with_weights.
+    /// Create a parser with explicit per-field weights and searchable attribute paths.
+    /// Panics if weights and searchable_paths have different lengths.
     pub fn new_with_weights(
         _schema: &TantivySchema,
         fields: Vec<tantivy::schema::Field>,
@@ -340,7 +342,8 @@ impl QueryParser {
         }
     }
 
-    /// TODO: Document QueryParser.parse.
+    /// Parse a query into a Tantivy query tree: normalize text, try advanced syntax,
+    /// then dispatch to short-query or multi-token builder based on token count.
     pub fn parse(&self, query: &Query) -> Result<Box<dyn TantivyQuery>> {
         let normalized_query_text = normalize_for_search(
             &query.text,

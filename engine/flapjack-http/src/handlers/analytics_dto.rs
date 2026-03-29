@@ -8,7 +8,7 @@ pub struct AnalyticsDateCount {
     pub count: i64,
 }
 
-/// TODO: Document AnalyticsTopSearchEntry.
+/// Analytics response entry for a top search query with its count.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsTopSearchEntry {
@@ -80,7 +80,7 @@ pub struct AnalyticsCountWithDatesResponse {
     pub dates: Vec<AnalyticsDateCount>,
 }
 
-/// TODO: Document AnalyticsRateDateEntry.
+/// Analytics time-series entry pairing a date with a rate value.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsRateDateEntry {
@@ -105,7 +105,7 @@ pub struct AnalyticsRateDateEntry {
     pub purchase_count: Option<i64>,
 }
 
-/// TODO: Document AnalyticsRateWithDatesResponse.
+/// Analytics response containing an aggregate rate and per-date breakdown.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsRateWithDatesResponse {

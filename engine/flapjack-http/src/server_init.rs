@@ -22,7 +22,6 @@ use crate::handlers::metrics::MetricsState;
 use crate::usage_middleware::TenantUsageCounters;
 use dashmap::DashMap;
 
-/// Aggregated state created during server bootstrap before task spawning.
 pub(crate) struct InfrastructureState {
     pub manager: Arc<IndexManager>,
     pub dictionary_manager: Arc<DictionaryManager>,
@@ -41,6 +40,8 @@ pub(crate) struct InfrastructureState {
     pub notification_service: Option<Arc<NotificationService>>,
     pub s3_config: Option<flapjack::index::s3::S3Config>,
     pub s3_snapshot_interval_secs: Option<u64>,
+    #[cfg(feature = "otel")]
+    pub otel_guard: Option<crate::otel::OtelGuard>,
 }
 
 /// Lightweight startup dependency projection used for summary logging and unit tests.
@@ -85,7 +86,6 @@ pub(crate) fn log_startup_summary(summary: &StartupSummary) {
     );
 }
 
-/// Initialize all pure server subsystems needed before background task spawn and routing.
 pub(crate) async fn initialize_infrastructure(
     server_config: &ServerConfig,
     data_dir: &Path,
@@ -134,10 +134,12 @@ pub(crate) async fn initialize_infrastructure(
         notification_service,
         s3_config,
         s3_snapshot_interval_secs,
+        #[cfg(feature = "otel")]
+        otel_guard: None,
     })
 }
 
-/// TODO: Document log_bind_address_resolution.
+/// Logs the resolved bind address, node identity, and data directory at startup.
 fn log_bind_address_resolution(
     node_config: &NodeConfig,
     server_config: &ServerConfig,
@@ -163,7 +165,8 @@ fn log_bind_address_resolution(
     }
 }
 
-/// TODO: Document initialize_trusted_proxies.
+/// Parses `FLAPJACK_TRUSTED_PROXY_CIDRS` into a `TrustedProxyMatcher` for
+/// extracting real client IPs from forwarded headers behind reverse proxies.
 fn initialize_trusted_proxies() -> Result<Arc<TrustedProxyMatcher>, Box<dyn std::error::Error>> {
     let trusted_proxy_cidrs_raw = std::env::var("FLAPJACK_TRUSTED_PROXY_CIDRS").ok();
     let matcher = Arc::new(
@@ -214,7 +217,7 @@ fn initialize_replication(
     }
 }
 
-/// TODO: Document initialize_ssl_manager.
+/// Initializes the SSL/TLS manager from environment configuration.
 async fn initialize_ssl_manager() -> Option<Arc<flapjack::SslManager>> {
     match flapjack::SslConfig::from_env() {
         Ok(ssl_config) => {
@@ -240,7 +243,7 @@ async fn initialize_ssl_manager() -> Option<Arc<flapjack::SslManager>> {
     }
 }
 
-/// TODO: Document initialize_s3.
+/// Initializes S3 snapshot configuration and restores any existing remote snapshots.
 async fn initialize_s3(
     data_dir: &Path,
     manager: &Arc<IndexManager>,
@@ -262,7 +265,7 @@ async fn initialize_s3(
     }
 }
 
-/// TODO: Document initialize_analytics_subsystem.
+/// Initializes the analytics subsystem: config, event collector, and query engine.
 fn initialize_analytics_subsystem() -> (
     AnalyticsConfig,
     Arc<AnalyticsCollector>,
@@ -285,7 +288,7 @@ fn initialize_analytics_subsystem() -> (
     (config, collector, engine)
 }
 
-/// TODO: Document initialize_usage_persistence.
+/// Initializes per-tenant usage persistence and restores counters from disk.
 fn initialize_usage_persistence(
     data_dir: &Path,
     usage_counters: &Arc<DashMap<String, TenantUsageCounters>>,
@@ -412,8 +415,6 @@ mod tests {
             self.clone()
         }
     }
-
-    /// TODO: Document startup_summary_struct_fields_reflect_values.
     #[test]
     fn startup_summary_struct_fields_reflect_values() {
         let summary = StartupSummary {
@@ -436,8 +437,6 @@ mod tests {
         assert!(summary.vector_search_compiled);
         assert!(!summary.auth_enabled);
     }
-
-    /// TODO: Document log_startup_summary_emits_single_structured_info_event.
     #[test]
     fn log_startup_summary_emits_single_structured_info_event() {
         let summary = StartupSummary {

@@ -21,7 +21,7 @@ pub struct PeerClient {
 }
 
 impl PeerClient {
-    /// TODO: Document PeerClient.new.
+    /// Build a peer client with a 5-second HTTP timeout and a fresh circuit breaker.
     pub fn new(peer_id: String, base_url: String, admin_key: Option<String>) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))

@@ -1,8 +1,9 @@
 # 3-Node HA Cluster with nginx Load Balancer
 
-`test_ha.sh` is the authoritative proof surface for this example topology.
-It verifies nginx rerouting, replication visibility across nodes, startup catch-up,
-and analytics fan-out for this compose stack.
+`test_ha.sh` is the fast topology proof for this example — it verifies nginx rerouting,
+replication visibility across nodes, startup catch-up, and analytics fan-out for this
+compose stack. For long-running soak evidence under sustained restart rotation, see the
+Stage 5 HA Soak section in [`engine/loadtest/BENCHMARKS.md`](../../loadtest/BENCHMARKS.md).
 
 Scope:
 

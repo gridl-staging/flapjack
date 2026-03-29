@@ -1,4 +1,3 @@
-//! Handle CRUD and batch operations for index documents, including multi-index batch writes, partial updates with built-in operations (Increment, Add, Remove, etc.), record size enforcement, and pause-aware write guards.
 mod batch;
 
 pub use batch::add_documents_batch_impl;
@@ -358,7 +357,6 @@ pub async fn get_object(
     }
 }
 
-/// Delete a single object by ID
 #[utoipa::path(
     delete,
     path = "/1/indexes/{indexName}/{objectID}",
@@ -409,7 +407,6 @@ pub async fn delete_object(
     }))
 }
 
-/// Update or create an object
 #[utoipa::path(
     put,
     path = "/1/indexes/{indexName}/{objectID}",
@@ -647,7 +644,6 @@ pub async fn delete_by_query(
     })))
 }
 
-/// Add a record with an auto-generated objectID (Algolia-compatible)
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}",
@@ -717,7 +713,6 @@ pub async fn add_record_auto_id(
     ))
 }
 
-/// Partial update a record (Algolia-compatible dedicated endpoint)
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/{objectID}/partial",

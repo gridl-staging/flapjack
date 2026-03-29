@@ -1,4 +1,3 @@
-/// TODO: Document schema_ref.
 pub(crate) fn schema_ref<'a>(doc: &'a serde_json::Value, schema_pointer: &str) -> Option<&'a str> {
     if let Some(reference) = doc
         .pointer(&format!("{schema_pointer}/$ref"))
@@ -24,7 +23,6 @@ pub(crate) fn schema_ref<'a>(doc: &'a serde_json::Value, schema_pointer: &str) -
     None
 }
 
-/// TODO: Document schema_composition_refs.
 pub(crate) fn schema_composition_refs<'a>(
     doc: &'a serde_json::Value,
     schema_pointer: &str,

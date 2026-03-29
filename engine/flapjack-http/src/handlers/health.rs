@@ -55,7 +55,6 @@ mod tests {
             .with_state(state)
     }
 
-    /// TODO: Document request_health_json.
     async fn request_health_json(state: Arc<AppState>) -> serde_json::Value {
         let response = test_router(state)
             .oneshot(
@@ -99,8 +98,6 @@ mod tests {
             "should have uptime_secs field"
         );
     }
-
-    /// TODO: Document health_capabilities_schema_stable.
     #[tokio::test]
     async fn health_capabilities_schema_stable() {
         let tmp = TempDir::new().unwrap();
@@ -119,8 +116,6 @@ mod tests {
             "capabilities.vectorSearchLocal must be a bool"
         );
     }
-
-    /// TODO: Document health_capabilities_vector_search_matches_feature.
     #[tokio::test]
     async fn health_capabilities_vector_search_matches_feature() {
         let tmp = TempDir::new().unwrap();

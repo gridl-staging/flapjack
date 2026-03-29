@@ -16,7 +16,8 @@ fn read_or_write_acl(
     })
 }
 
-/// TODO: Document required_acl_for_route.
+/// Maps an HTTP method and path to the ACL permission string required for access.
+/// Returns `None` for public paths (ACME challenges) that need no authentication.
 pub fn required_acl_for_route(method: &Method, path: &str) -> Option<&'static str> {
     if is_acme_challenge_path(path) {
         return None;
@@ -40,7 +41,8 @@ pub fn required_acl_for_route(method: &Method, path: &str) -> Option<&'static st
     None
 }
 
-/// TODO: Document fixed_path_acl.
+/// Resolves ACL for non-index routes: keys, usage, analytics, personalization, logs,
+/// configs, metrics, internal endpoints, A/B tests, events, and user-token deletion.
 fn fixed_path_acl(method: &Method, path: &str) -> Option<&'static str> {
     if path == "/1/migrate-from-algolia" || path == "/1/algolia-list-indexes" {
         return Some("admin");
@@ -88,7 +90,8 @@ fn fixed_path_acl(method: &Method, path: &str) -> Option<&'static str> {
     None
 }
 
-/// TODO: Document indexes_acl.
+/// Resolves ACL for `/1/indexes/...` routes based on path depth and HTTP method.
+/// Returns `None` (outer Option) if the path doesn't match the indexes prefix.
 fn indexes_acl(method: &Method, parts: &[&str]) -> Option<Option<&'static str>> {
     if parts.len() == 2 && parts[0] == "1" && parts[1] == "indexes" {
         return Some(match *method {
@@ -118,7 +121,8 @@ fn indexes_acl(method: &Method, parts: &[&str]) -> Option<Option<&'static str>> 
     Some(None)
 }
 
-/// TODO: Document index_nested_acl.
+/// Resolves ACL for nested index sub-routes (`/1/indexes/{name}/{action}`):
+/// query, batch, settings, synonyms, rules, browse, chat, snapshots, and more.
 fn index_nested_acl(method: &Method, parts: &[&str]) -> Option<&'static str> {
     if parts.len() == 5 && parts[4] == "partial" {
         return Some("addObject");

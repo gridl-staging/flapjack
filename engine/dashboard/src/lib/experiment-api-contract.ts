@@ -76,9 +76,6 @@ export function toAlgoliaMetricName(metric: string): string {
   }
 }
 
-/**
- * TODO: Document toAlgoliaCreateExperimentPayload.
- */
 export function toAlgoliaCreateExperimentPayload(
   payload: CreateExperimentPayload,
 ): AlgoliaCreateExperimentPayload {

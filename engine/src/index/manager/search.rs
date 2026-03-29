@@ -38,7 +38,8 @@ impl super::IndexManager {
         self.search_full_with_stop_words_with_hits_per_page_cap(tenant_id, query_text, opts)
     }
 
-    /// TODO: Document IndexManager.search_full_with_stop_words_with_hits_per_page_cap.
+    /// Top-level search entry point: resolve tenant settings, apply stop-word-aware
+    /// query expansion, enforce `hitsPerPage` cap, and delegate to the query executor.
     pub fn search_full_with_stop_words_with_hits_per_page_cap(
         &self,
         tenant_id: &str,

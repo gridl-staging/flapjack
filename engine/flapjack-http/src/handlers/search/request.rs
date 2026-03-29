@@ -32,7 +32,7 @@ pub(super) struct SearchEventParams<'a> {
     pub region: Option<String>,
 }
 
-/// TODO: Document build_search_event.
+/// Builds an analytics `SearchEvent` from the completed search request parameters.
 pub(super) fn build_search_event(
     params: &SearchEventParams<'_>,
 ) -> flapjack::analytics::schema::SearchEvent {
@@ -67,7 +67,8 @@ pub(super) fn build_search_event(
     }
 }
 
-/// TODO: Document merge_secured_filters.
+/// Merges secured API key restrictions into the search request: AND-combines forced
+/// filters, caps `hitsPerPage`, and overrides `userToken` if specified.
 pub(super) fn merge_secured_filters(
     req: &mut SearchRequest,
     restrictions: &crate::auth::SecuredKeyRestrictions,
@@ -157,7 +158,7 @@ where
     push_encoded_param(parts, key, &json_value, encode);
 }
 
-/// TODO: Document build_params_string.
+/// Serializes search request parameters into a URL query string for response echo.
 pub(super) fn build_params_string<F>(
     req: &SearchRequest,
     options: ParamsEchoOptions,

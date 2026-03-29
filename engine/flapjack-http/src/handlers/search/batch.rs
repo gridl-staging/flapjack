@@ -79,7 +79,8 @@ fn normalize_request_for_federation(
     request.response_fields = None;
 }
 
-/// TODO: Document validate_batch_federation_options.
+/// Validates federation config constraints: rejects `stopIfEnoughMatches` strategy
+/// and unsupported facet merging when federation is enabled.
 fn validate_batch_federation_options(
     federation: Option<&FederationConfig>,
     stop_if_enough: bool,
@@ -116,7 +117,8 @@ fn collect_federation_query_metadata(
         .collect()
 }
 
-/// TODO: Document build_federated_response_value.
+/// Assembles the federated search response by collecting hits from all queries into
+/// ranked candidates, merging via `merge_federated_results`, and serializing to JSON.
 fn build_federated_response_value(
     query_results: Vec<serde_json::Value>,
     query_metadata: Vec<FederationQueryMetadata>,
@@ -309,7 +311,7 @@ pub async fn batch_search(
     Ok(Json(serde_json::json!({"results": results})))
 }
 
-/// TODO: Document execute_single_batch_query.
+/// Executes a single search query within a multi-query batch request.
 async fn execute_single_batch_query(
     state: Arc<AppState>,
     index_name: String,
@@ -441,8 +443,6 @@ mod tests {
     use super::{federation_fetch_hits_per_page, normalize_request_for_federation};
     use crate::dto::SearchRequest;
     use crate::federation::FederationConfig;
-
-    /// TODO: Document federation_fetch_hits_per_page_uses_only_top_level_window.
     #[test]
     fn federation_fetch_hits_per_page_uses_only_top_level_window() {
         let request = SearchRequest {

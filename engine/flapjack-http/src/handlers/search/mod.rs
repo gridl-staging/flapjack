@@ -20,11 +20,8 @@ pub use request::resolve_search_mode;
 pub use single::{search, search_get, search_single};
 
 // Re-export utoipa-generated path structs for openapi.rs
-#[allow(unused_imports)]
 pub use batch::__path_batch_search;
-#[allow(unused_imports)]
 pub use single::__path_search;
-#[allow(unused_imports)]
 pub use single::__path_search_get;
 
 // Private re-imports so that `super::*` from the #[cfg(test)] block below
@@ -34,9 +31,6 @@ use experiments::*;
 #[cfg(test)]
 use geo::*;
 #[cfg(test)]
-#[allow(unused_imports)]
-use highlight::*;
-#[cfg(test)]
 use personalization::*;
 #[cfg(test)]
 use pipeline::*;
@@ -44,12 +38,6 @@ use pipeline::*;
 use request::*;
 #[cfg(test)]
 use reranking::*;
-#[cfg(test)]
-#[allow(unused_imports)]
-use single::*;
-#[cfg(test)]
-#[allow(unused_imports)]
-use synonyms::*;
 // Types needed by test code that were previously imported at module scope.
 #[cfg(test)]
 use super::AppState;

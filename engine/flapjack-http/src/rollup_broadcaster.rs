@@ -129,7 +129,8 @@ pub async fn run_rollup_broadcast(
     broadcast_rollups_for_indexes(engine, cluster, node_id, &indexes).await;
 }
 
-/// TODO: Document broadcast_rollups_for_indexes.
+/// Computes and pushes analytics rollups for each index to all replication peers,
+/// enabling cluster-wide analytics aggregation.
 async fn broadcast_rollups_for_indexes(
     engine: &AnalyticsQueryEngine,
     cluster: &AnalyticsClusterClient,
@@ -336,8 +337,6 @@ mod tests {
         run_rollup_broadcast(&engine, &config, &cluster, "local").await;
         // If we reach here without panic, the test passes
     }
-
-    /// TODO: Document broadcast_rollups_for_indexes_empty_input_is_noop.
     #[tokio::test]
     async fn broadcast_rollups_for_indexes_empty_input_is_noop() {
         use flapjack_replication::config::{NodeConfig, PeerConfig};

@@ -22,7 +22,7 @@ pub(super) fn assignment_method_str(method: &AssignmentMethod) -> &'static str {
     }
 }
 
-/// TODO: Document apply_query_overrides.
+/// Applies A/B test query overrides (typo tolerance, synonyms, rules) to a search request.
 pub(super) fn apply_query_overrides(req: &mut SearchRequest, overrides: &QueryOverrides) {
     if let Some(ref typo_tolerance) = overrides.typo_tolerance {
         req.typo_tolerance = Some(typo_tolerance.clone());
@@ -65,7 +65,9 @@ pub(super) fn apply_query_overrides(req: &mut SearchRequest, overrides: &QueryOv
     }
 }
 
-/// TODO: Document resolve_experiment_context.
+/// Resolves the active A/B test experiment for an index: assigns the user to a variant
+/// via user-token/session/query-id hashing, applies query overrides, and returns
+/// the effective index name and experiment context.
 pub(super) fn resolve_experiment_context(
     state: &AppState,
     index_name: &str,

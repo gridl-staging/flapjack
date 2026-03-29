@@ -1,7 +1,8 @@
 use super::*;
 
 impl super::AnalyticsQueryEngine {
-    /// TODO: Document AnalyticsQueryEngine.users_count.
+    /// Count distinct users (by token, IP, or "anonymous" fallback) who searched the
+    /// given index within the date range.
     pub async fn users_count(
         &self,
         index_name: &str,

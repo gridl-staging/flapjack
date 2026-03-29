@@ -184,7 +184,8 @@ impl MemoryObserver {
 
     // -- private helpers --
 
-    /// TODO: Document MemoryObserver.read_heap_allocated.
+    /// Read the current jemalloc heap-allocated byte count (advancing the stats epoch first).
+    /// Returns 0 on non-jemalloc builds or when the feature is disabled.
     fn read_heap_allocated() -> usize {
         #[cfg(all(feature = "memory-stats", not(target_env = "msvc")))]
         {
@@ -221,7 +222,8 @@ impl MemoryObserver {
         }
     }
 
-    /// TODO: Document MemoryObserver.detect_memory_limit.
+    /// Detect the system memory limit by priority: `FLAPJACK_MEMORY_LIMIT_MB` env var,
+    /// then cgroup limit (container-aware), then physical RAM.
     fn detect_memory_limit() -> (usize, String) {
         // Priority 1: explicit env var
         if let Ok(mb) = env::var("FLAPJACK_MEMORY_LIMIT_MB") {

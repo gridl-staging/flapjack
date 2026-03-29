@@ -47,7 +47,8 @@ pub fn flush_insight_events(events: &[InsightEvent], dir: &Path) -> Result<(), S
     Ok(())
 }
 
-/// TODO: Document partitioned_parquet_path.
+/// Build a date-partitioned parquet file path (`<dir>/date=YYYY-MM-DD/<prefix>_<ts>_<pid>_<seq>.parquet`),
+/// creating the partition directory if needed.
 fn partitioned_parquet_path(
     dir: &Path,
     prefix: &str,

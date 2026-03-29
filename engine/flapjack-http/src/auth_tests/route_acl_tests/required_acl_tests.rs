@@ -340,8 +340,6 @@ fn public_path_helper_only_exposes_dashboard_mount() {
         "only /dashboard and /dashboard/* should bypass auth"
     );
 }
-
-/// TODO: Document acl_personalization_strategy_requires_personalization.
 #[test]
 fn acl_personalization_strategy_requires_personalization() {
     assert_required_acl(

@@ -1,11 +1,11 @@
 # Flapjack — Roadmap
 
-**Last updated:** 2026-03-28
+**Last updated:** 2026-03-29
 **Status ledger policy:** This file is a routing page only. Canonical product status is maintained in [`engine/docs2/FEATURES.md`](engine/docs2/FEATURES.md).
 
 ## Implemented
 
-The substantive Tier 1 launch blockers and Tier 2 production-confidence engineering work are complete. OSS launch sign-off is now also complete, closed by staging run `23671792399` on commit `745a059`. The Stage 3 proof pack is now also materially stronger locally: 2h mixed/write soak artifacts, restart-during-active-writes proof, and a nontrivial crash/restart durability proof are all landed. See canonical details:
+The substantive Tier 1 launch blockers and Tier 2 production-confidence engineering work are complete. OSS launch sign-off is now also complete, closed by staging run `23671792399` on commit `745a059`. All workspace crates are at v1.0.0 with OSS policy docs (SECURITY.md, CHANGELOG.md, CONTRIBUTING.md) shipped. OpenTelemetry distributed tracing is available behind the `otel` feature flag. Codebase quality work completed on 2026-03-29: ~601 TODO stubs replaced with real docs, 15 error-leaking HTTP 500 sites fixed via HandlerError migration, cognitive_complexity suppressions removed, execute_search_query decomposed. See canonical details:
 
 - Shipped feature status: [`engine/docs2/FEATURES.md#shipped-feature-status`](engine/docs2/FEATURES.md#shipped-feature-status)
 - Production-readiness state: [`engine/docs2/FEATURES.md#current-production-readiness-state`](engine/docs2/FEATURES.md#current-production-readiness-state)
@@ -18,7 +18,11 @@ Launch sign-off is complete. The remaining open items are the standing post-laun
 | # | Work Item | Status | Details |
 |---|-----------|--------|---------|
 | ~~CONF-1~~ | ~~Sustained overload follow-up~~ | ✅ Done | Resolved 2026-03-28. Soak scenarios now use `SOAK_WRITE_THRESHOLDS` (relaxed for sustained overload); short baselines keep `WRITE_THRESHOLDS` unchanged. The threshold breach was a classification problem, not an engine defect. See `engine/loadtest/BENCHMARKS.md`. |
-| PR-11 | Distributed tracing (OpenTelemetry) | Not started | OTLP export behind `otel` feature flag. Structured logging groundwork shipped. |
+| PR-11 | Distributed tracing (OpenTelemetry) | ✅ Done (2026-03-28) | OTLP gRPC export shipped behind the `otel` feature flag with runtime endpoint configuration via `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| — | TODO stub cleanup + HA soak | ✅ Done (2026-03-29) | ~601 stubs → real docs. HA soak test script. Doc-regression tests. Branch: `mar28_pm_3`. |
+| — | Codebase quality round 2 | ✅ Done (2026-03-29) | 15 error-leaking sites fixed, HandlerError migration, complexity decomposition, search_query refactor. Branch: `mar29`. |
+| — | Debbie sync to staging (post-cleanup) | Not started | Push all recent work (pm_3 + mar29 + otel + policy docs) to staging and verify CI green. |
+| — | GitHub release v1.0.0 | Not started | Tagged release, 5-target binary matrix, Docker image. |
 | PR-12 | Runbooks & incident response | In progress | Canonical operator docs now exist in `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`; continue refining from real incidents. |
 | PR-13 | Mobile / responsive dashboard | Not started | Desktop-first acceptable for admin tooling. |
 | — | OWASP full deep pass | Not started | Required before multi-tenant SaaS, not for OSS launch. |

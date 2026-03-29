@@ -266,7 +266,8 @@ impl IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.evict_old_tasks.
+    /// Remove the oldest tasks for a tenant when the count exceeds `max_tasks`. Tasks
+    /// are sorted by creation time; both the string task ID and numeric ID alias are removed.
     pub fn evict_old_tasks(&self, tenant_id: &str, max_tasks: usize) {
         let prefix = format!("task_{}_{}", tenant_id, "");
         let mut tenant_tasks: Vec<_> = self
@@ -294,7 +295,9 @@ impl IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.get_or_load.
+    /// Return a tenant's `Arc<Index>`, loading from disk if not cached. Acquires a
+    /// per-tenant mutex to serialize recovery (oplog replay, vector index load) so
+    /// concurrent requests do not double-replay.
     pub fn get_or_load(&self, tenant_id: &str) -> Result<Arc<Index>> {
         validate_index_name(tenant_id)?;
         if let Some(index) = self.loaded.get(tenant_id) {
@@ -462,7 +465,8 @@ impl IndexManager {
         Ok(task)
     }
 
-    /// TODO: Document IndexManager.get_or_create_oplog.
+    /// Return the tenant's `OpLog`, creating and caching it on first access. Opens the
+    /// oplog directory under the tenant path with the configured node ID.
     pub fn get_or_create_oplog(&self, tenant_id: &str) -> Option<Arc<OpLog>> {
         if let Err(error) = validate_index_name(tenant_id) {
             tracing::warn!("[OPLOG {}] invalid tenant id: {}", tenant_id, error);
@@ -495,7 +499,8 @@ impl IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.get_document.
+    /// Retrieve a single document by object ID via a Tantivy term query. Returns
+    /// `None` if no document matches.
     pub fn get_document(&self, tenant_id: &str, object_id: &str) -> Result<Option<Document>> {
         let index = self.get_or_load(tenant_id)?;
         let reader = index.reader();

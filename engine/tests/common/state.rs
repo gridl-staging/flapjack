@@ -1,4 +1,3 @@
-//! Stub summary for engine/tests/common/state.rs.
 use axum::{
     middleware,
     routing::{delete, get, post},
@@ -147,7 +146,6 @@ fn default_trusted_proxy_matcher() -> Arc<flapjack_http::middleware::TrustedProx
     )
 }
 
-/// TODO: Document build_test_state.
 fn build_test_state(
     data_dir: &Path,
     key_store: Option<Arc<flapjack_http::auth::KeyStore>>,
@@ -183,7 +181,6 @@ fn build_test_state(
     })
 }
 
-/// TODO: Document wait_for_health.
 async fn wait_for_health(addrs: &[&str], attempts: usize) {
     let client = reqwest::Client::new();
     let mut last_unready_addr = "";
@@ -229,7 +226,6 @@ async fn spawn_router(app: Router, temp_dir: &mut TempDir) -> String {
     addr
 }
 
-/// TODO: Document build_query_suggestions_test_routes.
 fn build_query_suggestions_test_routes(state: Arc<flapjack_http::handlers::AppState>) -> Router {
     let public_health_routes =
         flapjack_http::router::build_public_health_routes().with_state(state.clone());
@@ -287,7 +283,6 @@ pub fn build_test_app_for_existing_data_dir(data_dir: &Path, admin_key: Option<&
     build_test_app_for_data_dir(data_dir, admin_key)
 }
 
-/// TODO: Document build_test_app_for_data_dir.
 fn build_test_app_for_data_dir(data_dir: &Path, admin_key: Option<&str>) -> Router {
     let (analytics_collector, analytics_engine) =
         build_analytics_runtime(analytics_config(data_dir, 10_000));
@@ -327,7 +322,6 @@ pub async fn spawn_server_with_key(admin_key: Option<&str>) -> (String, TempDir)
     (addr, temp_dir)
 }
 
-/// TODO: Document spawn_server_with_qs_analytics.
 pub async fn spawn_server_with_qs_analytics(source_index_name: &str) -> (String, TempDir) {
     let mut temp_dir = TempDir::new().unwrap();
 
@@ -579,7 +573,6 @@ pub async fn spawn_replication_pair(
     (addr_a, addr_b, tmp_a, tmp_b)
 }
 
-/// TODO: Document spawn_authenticated_replication_pair.
 pub async fn spawn_authenticated_replication_pair(
     node_a_id: &str,
     node_b_id: &str,
@@ -654,7 +647,6 @@ pub async fn spawn_authenticated_replication_pair(
 
 // ── Restartable node helpers ──────────────────────────────────────────────────
 
-/// TODO: Document serve_with_shutdown.
 fn serve_with_shutdown(listener: TcpListener, app: Router) -> TestNode {
     let addr = listener.local_addr().unwrap().to_string();
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -676,7 +668,6 @@ fn serve_with_shutdown(listener: TcpListener, app: Router) -> TestNode {
     }
 }
 
-/// TODO: Document spawn_stoppable_replication_pair.
 pub async fn spawn_stoppable_replication_pair(
     node_a_id: &str,
     node_b_id: &str,
@@ -713,7 +704,6 @@ pub async fn spawn_replication_node_on_existing_dir(
         .expect("replication node should finish pre-serve catch-up before serving")
 }
 
-/// TODO: Document try_spawn_replication_node_on_existing_dir.
 pub async fn try_spawn_replication_node_on_existing_dir(
     data_dir: &Path,
     node_id: &str,
@@ -748,7 +738,6 @@ pub async fn try_spawn_replication_node_on_existing_dir(
 mod tests {
     use super::{build_test_app_for_local_requests, spawn_router};
 
-    /// TODO: Document dropping_temp_dir_stops_attached_server.
     #[tokio::test]
     async fn dropping_temp_dir_stops_attached_server() {
         let (app, mut temp_dir) = build_test_app_for_local_requests(None);

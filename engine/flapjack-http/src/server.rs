@@ -7,40 +7,46 @@ use crate::server_init::{
     initialize_infrastructure, initialize_state, log_startup_summary, StartupSummary,
 };
 use crate::startup::{
-    cors_origins_from_env, initialize_key_store, load_server_config, print_startup_banner,
-    shutdown_signal, shutdown_timeout_secs_from_env, AuthStatus, CorsMode,
+    cors_origins_from_env, init_tracing, initialize_key_store, load_server_config,
+    log_memory_configuration, print_startup_banner, shutdown_signal,
+    shutdown_timeout_secs_from_env, AuthStatus, CorsMode,
 };
 
-/// TODO: Document serve.
+/// Main server entry point: loads config, initializes infrastructure (key store, S3,
+/// analytics, replication), builds the router, binds the listener, and runs the
+/// HTTP server with graceful shutdown handling.
 #[allow(clippy::cognitive_complexity)]
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let startup_start = std::time::Instant::now();
 
     let server_config = load_server_config();
+
+    #[cfg(feature = "otel")]
+    let otel_guard = init_tracing();
+    #[cfg(not(feature = "otel"))]
+    init_tracing();
+
+    log_memory_configuration();
+
     let cors_mode = cors_origins_from_env();
     let shutdown_timeout_secs = shutdown_timeout_secs_from_env();
     let data_dir = Path::new(&server_config.data_dir);
     let (key_store, admin_key, key_is_new) = initialize_key_store(&server_config, data_dir);
 
-    let infrastructure =
+    let mut infrastructure =
         initialize_infrastructure(&server_config, data_dir, admin_key.clone()).await?;
+
+    #[cfg(feature = "otel")]
+    {
+        infrastructure.otel_guard = otel_guard;
+    }
     tracing::info!(
         env_mode = %server_config.env_mode,
         replication_peers = infrastructure.node_config.peers.len(),
         trusted_proxy_ranges = infrastructure.trusted_proxy_matcher.len(),
         "Server infrastructure initialized"
     );
-    match &cors_mode {
-        CorsMode::Permissive => tracing::info!("CORS: permissive (all origins)"),
-        CorsMode::Restricted(origins) => {
-            let configured_origins = origins
-                .iter()
-                .filter_map(|origin| origin.to_str().ok())
-                .collect::<Vec<_>>()
-                .join(", ");
-            tracing::info!("CORS: restricted to [{}]", configured_origins);
-        }
-    }
+    log_cors_mode(&cors_mode);
     log_startup_summary(&StartupSummary::from_infrastructure(
         &infrastructure,
         !server_config.no_auth,
@@ -86,8 +92,22 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
 
-    let _ = run_graceful_shutdown(&infrastructure, &state, shutdown_timeout_secs).await;
+    let _ = run_graceful_shutdown(&mut infrastructure, &state, shutdown_timeout_secs).await;
     Ok(())
+}
+
+fn log_cors_mode(cors_mode: &CorsMode) {
+    match cors_mode {
+        CorsMode::Permissive => tracing::info!("CORS: permissive (all origins)"),
+        CorsMode::Restricted(origins) => {
+            let configured_origins = origins
+                .iter()
+                .filter_map(|origin| origin.to_str().ok())
+                .collect::<Vec<_>>()
+                .join(", ");
+            tracing::info!("CORS: restricted to [{}]", configured_origins);
+        }
+    }
 }
 
 fn resolve_auth_status(
@@ -110,7 +130,8 @@ enum ShutdownWaitOutcome {
     TimedOut,
 }
 
-/// TODO: Document flush_then_wait_for_manager_shutdown.
+/// Flushes analytics data then waits for the index manager to complete its graceful
+/// shutdown (flushing write queues), with a configurable timeout.
 async fn flush_then_wait_for_manager_shutdown<FlushFn, ShutdownFuture>(
     shutdown_timeout_secs: u64,
     flush_analytics: FlushFn,
@@ -133,9 +154,37 @@ where
     }
 }
 
-/// TODO: Document run_graceful_shutdown.
+/// Run the full shutdown sequence: analytics flush, manager drain (with timeout),
+/// then OTEL provider shutdown. The `otel_shutdown` closure runs unconditionally
+/// after the manager drain path, even when the drain times out.
+async fn full_graceful_shutdown<FlushFn, ShutdownFuture, OtelFn>(
+    shutdown_timeout_secs: u64,
+    flush_analytics: FlushFn,
+    manager_shutdown: ShutdownFuture,
+    otel_shutdown: OtelFn,
+) -> ShutdownWaitOutcome
+where
+    FlushFn: FnOnce(),
+    ShutdownFuture: std::future::Future<Output = ()>,
+    OtelFn: FnOnce(),
+{
+    let outcome = flush_then_wait_for_manager_shutdown(
+        shutdown_timeout_secs,
+        flush_analytics,
+        manager_shutdown,
+    )
+    .await;
+
+    otel_shutdown();
+
+    outcome
+}
+
+/// Orchestrates graceful shutdown by flushing analytics, waiting for
+/// index manager shutdown, and then shutting down OTEL tracing. Logs
+/// whether draining completed in time.
 async fn run_graceful_shutdown(
-    infrastructure: &crate::server_init::InfrastructureState,
+    infrastructure: &mut crate::server_init::InfrastructureState,
     state: &Arc<crate::handlers::AppState>,
     shutdown_timeout_secs: u64,
 ) -> ShutdownWaitOutcome {
@@ -145,10 +194,21 @@ async fn run_graceful_shutdown(
         "[shutdown] Server stopped accepting connections, cleaning up..."
     );
 
-    let outcome = flush_then_wait_for_manager_shutdown(
+    // Clone analytics refs upfront so the flush closure doesn't borrow
+    // infrastructure, leaving it free for the mutable OTEL shutdown closure.
+    let analytics_enabled = infrastructure.analytics_config.enabled;
+    let analytics_collector = Arc::clone(&infrastructure.analytics_collector);
+
+    let outcome = full_graceful_shutdown(
         shutdown_timeout_secs,
-        || flush_analytics_on_shutdown(infrastructure),
+        move || {
+            if analytics_enabled {
+                analytics_collector.shutdown();
+                tracing::info!("[shutdown] Analytics buffers flushed");
+            }
+        },
         state.manager.graceful_shutdown(),
+        || shutdown_otel_provider(infrastructure),
     )
     .await;
 
@@ -172,20 +232,29 @@ async fn run_graceful_shutdown(
     outcome
 }
 
-fn flush_analytics_on_shutdown(infrastructure: &crate::server_init::InfrastructureState) {
-    if infrastructure.analytics_config.enabled {
-        infrastructure.analytics_collector.shutdown();
-        tracing::info!("[shutdown] Analytics buffers flushed");
+/// Shut down the OTEL trace provider if one was initialized, flushing
+/// any pending spans. No-op when the `otel` feature is disabled or when
+/// no endpoint was configured at startup.
+fn shutdown_otel_provider(infrastructure: &mut crate::server_init::InfrastructureState) {
+    #[cfg(feature = "otel")]
+    if let Some(guard) = infrastructure.otel_guard.take() {
+        match guard.shutdown() {
+            Ok(()) => tracing::info!("[shutdown] OTEL trace provider shut down"),
+            Err(e) => tracing::warn!("[shutdown] OTEL trace provider shutdown error: {e}"),
+        }
     }
+
+    #[cfg(not(feature = "otel"))]
+    let _ = infrastructure;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{flush_then_wait_for_manager_shutdown, ShutdownWaitOutcome};
+    use super::{
+        flush_then_wait_for_manager_shutdown, full_graceful_shutdown, ShutdownWaitOutcome,
+    };
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-
-    /// TODO: Document shutdown_wait_helper_returns_drained_when_manager_completes_before_deadline.
     #[tokio::test]
     async fn shutdown_wait_helper_returns_drained_when_manager_completes_before_deadline() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -208,8 +277,6 @@ mod tests {
             ["analytics-flushed", "manager-wait-begins"]
         );
     }
-
-    /// TODO: Document shutdown_wait_helper_returns_timed_out_when_manager_exceeds_deadline.
     #[tokio::test]
     async fn shutdown_wait_helper_returns_timed_out_when_manager_exceeds_deadline() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -230,6 +297,58 @@ mod tests {
         assert_eq!(
             events.lock().unwrap().as_slice(),
             ["analytics-flushed", "manager-wait-begins"]
+        );
+    }
+
+    #[tokio::test]
+    async fn full_graceful_shutdown_calls_otel_after_manager_drain() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let flush_events = Arc::clone(&events);
+        let manager_events = Arc::clone(&events);
+        let otel_events = Arc::clone(&events);
+
+        let outcome = full_graceful_shutdown(
+            5,
+            move || flush_events.lock().unwrap().push("analytics-flushed"),
+            async move {
+                manager_events.lock().unwrap().push("manager-drained");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            },
+            move || otel_events.lock().unwrap().push("otel-shutdown"),
+        )
+        .await;
+
+        assert_eq!(outcome, ShutdownWaitOutcome::Drained);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["analytics-flushed", "manager-drained", "otel-shutdown"],
+            "shutdown order must be: analytics flush → manager drain → otel shutdown"
+        );
+    }
+
+    #[tokio::test]
+    async fn full_graceful_shutdown_calls_otel_even_after_timeout() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let flush_events = Arc::clone(&events);
+        let manager_events = Arc::clone(&events);
+        let otel_events = Arc::clone(&events);
+
+        let outcome = full_graceful_shutdown(
+            1,
+            move || flush_events.lock().unwrap().push("analytics-flushed"),
+            async move {
+                manager_events.lock().unwrap().push("manager-wait-begins");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            },
+            move || otel_events.lock().unwrap().push("otel-shutdown"),
+        )
+        .await;
+
+        assert_eq!(outcome, ShutdownWaitOutcome::TimedOut);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["analytics-flushed", "manager-wait-begins", "otel-shutdown"],
+            "OTEL shutdown must run even when manager drain times out"
         );
     }
 }

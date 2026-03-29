@@ -64,7 +64,8 @@ pub struct RestEmbedder {
 
 // Stub — implementation follows in later items
 impl RestEmbedder {
-    /// TODO: Document RestEmbedder.new.
+    /// Build an HTTP client from the embedder config, applying custom headers and
+    /// extracting the endpoint URL, request/response templates, and dimensions.
     pub fn new(config: &EmbedderConfig) -> Result<Self, VectorError> {
         config.validate()?;
         let mut client_builder = reqwest::Client::builder();
@@ -94,7 +95,8 @@ impl RestEmbedder {
         })
     }
 
-    /// TODO: Document RestEmbedder.embed_documents.
+    /// Send texts to the configured REST endpoint, batching if the request template
+    /// supports it or falling back to one-request-per-text otherwise.
     pub async fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
         if texts.is_empty() {
             return Ok(Vec::new());
@@ -207,7 +209,8 @@ impl RestEmbedder {
         }
     }
 
-    /// TODO: Document RestEmbedder.send_request.
+    /// POST a JSON body to the embedder URL and return the parsed JSON response,
+    /// surfacing HTTP status errors with the response body.
     async fn send_request(
         &self,
         body: &serde_json::Value,
@@ -291,7 +294,8 @@ impl RestEmbedder {
         path
     }
 
-    /// TODO: Document RestEmbedder.find_embedding_recursive.
+    /// Depth-first search for the `{{embedding}}` placeholder in the response template,
+    /// building the JSON key path as it descends.
     fn find_embedding_recursive(value: &serde_json::Value, path: &mut Vec<String>) -> bool {
         match value {
             serde_json::Value::String(s) if s == "{{embedding}}" => true,
@@ -355,7 +359,8 @@ impl RestEmbedder {
         current
     }
 
-    /// TODO: Document RestEmbedder.value_to_f32_vec.
+    /// Convert a JSON array of numbers into a `Vec<f32>` embedding vector,
+    /// returning an error if any element is non-numeric.
     fn value_to_f32_vec(value: &serde_json::Value) -> Result<Vec<f32>, VectorError> {
         match value {
             serde_json::Value::Array(arr) => arr
@@ -389,7 +394,8 @@ pub struct OpenAiEmbedder {
 }
 
 impl OpenAiEmbedder {
-    /// TODO: Document OpenAiEmbedder.new.
+    /// Initialize the OpenAI-compatible embedder, requiring an API key and model name
+    /// from the config. Supports custom base URLs for Azure/proxy endpoints.
     pub fn new(config: &EmbedderConfig) -> Result<Self, VectorError> {
         config.validate()?;
         let api_key = config
@@ -421,7 +427,8 @@ impl OpenAiEmbedder {
         })
     }
 
-    /// TODO: Document OpenAiEmbedder.embed_documents.
+    /// Send a batch of texts to the OpenAI embeddings endpoint, detect dimensions on
+    /// first call, and validate dimension consistency on subsequent calls.
     pub async fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
         if texts.is_empty() {
             return Ok(Vec::new());
@@ -585,7 +592,8 @@ impl std::fmt::Debug for FastEmbedEmbedder {
 
 #[cfg(feature = "vector-search-local")]
 impl FastEmbedEmbedder {
-    /// TODO: Document FastEmbedEmbedder.new.
+    /// Load a local fastembed model, validating that configured dimensions match the
+    /// model's native dimensions. Respects `FASTEMBED_CACHE_DIR` for model storage.
     pub fn new(config: &EmbedderConfig) -> Result<Self, VectorError> {
         let model_enum = parse_embedding_model(config.model.as_deref())?;
 
@@ -618,7 +626,8 @@ impl FastEmbedEmbedder {
         })
     }
 
-    /// TODO: Document FastEmbedEmbedder.embed_documents.
+    /// Run embedding inference on a background thread via `spawn_blocking` to avoid
+    /// blocking the async runtime; the model is mutex-guarded for thread safety.
     pub async fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
         if texts.is_empty() {
             return Ok(vec![]);

@@ -55,7 +55,9 @@ impl super::IndexManager {
         self.add_documents_inner(tenant_id, docs, true, true)
     }
 
-    /// TODO: Document IndexManager.add_documents_inner.
+    /// Core document-add path: load the tenant index, create a task, evict stale
+    /// tasks, and send an Add/Upsert/UpsertNoLwwUpdate `WriteOp` to the write
+    /// queue. Returns `QueueFull` on backpressure.
     fn add_documents_inner(
         &self,
         tenant_id: &str,
@@ -103,7 +105,8 @@ impl super::IndexManager {
         Ok(task)
     }
 
-    /// TODO: Document IndexManager.delete_documents.
+    /// Queue document deletions by object ID with LWW tracking. Creates a task
+    /// and sends `Delete` actions to the tenant's write queue.
     pub fn delete_documents(&self, tenant_id: &str, object_ids: Vec<String>) -> Result<TaskInfo> {
         let index = self.get_or_load(tenant_id)?;
 
@@ -135,7 +138,8 @@ impl super::IndexManager {
         Ok(task)
     }
 
-    /// TODO: Document IndexManager.delete_documents_for_replication.
+    /// Queue document deletions without updating the LWW map — the caller
+    /// (replication) has already recorded the correct timestamps before queuing.
     pub fn delete_documents_for_replication(
         &self,
         tenant_id: &str,
@@ -174,7 +178,8 @@ impl super::IndexManager {
         Ok(task)
     }
 
-    /// TODO: Document IndexManager.compact_index.
+    /// Queue a segment compaction for the tenant. Creates a task and sends a
+    /// single `Compact` action to the write queue.
     pub fn compact_index(&self, tenant_id: &str) -> Result<TaskInfo> {
         let index = self.get_or_load(tenant_id)?;
 
@@ -219,7 +224,8 @@ impl super::IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.add_documents_insert_sync.
+    /// Insert documents (non-upsert) and poll until the task succeeds or fails.
+    /// Async wrapper around `add_documents_insert`.
     pub async fn add_documents_insert_sync(
         &self,
         tenant_id: &str,
@@ -254,7 +260,8 @@ impl super::IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.delete_documents_sync.
+    /// Delete documents and poll until the task succeeds or fails. Async wrapper
+    /// around `delete_documents`.
     pub async fn delete_documents_sync(
         &self,
         tenant_id: &str,

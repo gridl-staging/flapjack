@@ -39,7 +39,9 @@ use flapjack::dictionaries::DEFAULT_DICTIONARY_TENANT;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-/// TODO: Document build_router.
+/// Constructs the full Axum router: mounts all route groups (index CRUD, search,
+/// keys, analytics, experiments, internal ops), applies middleware, and attaches
+/// the dashboard and OpenAPI/Swagger UI.
 pub fn build_router(
     state: Arc<AppState>,
     key_store: Option<Arc<KeyStore>>,
@@ -81,7 +83,7 @@ pub fn build_public_health_routes() -> Router<Arc<AppState>> {
         .route("/health/ready", get(ready))
 }
 
-/// TODO: Document build_key_routes.
+/// Builds API key management routes (CRUD for keys), skipped if auth is disabled.
 fn build_key_routes(key_store: Option<Arc<KeyStore>>) -> Router {
     if let Some(store) = key_store {
         Router::new()
@@ -106,7 +108,7 @@ fn build_key_routes(key_store: Option<Arc<KeyStore>>) -> Router {
     }
 }
 
-/// TODO: Document build_protected_routes.
+/// Builds all auth-protected routes: indexing, search, objects, settings, synonyms, rules.
 fn build_protected_routes(state: Arc<AppState>, data_dir: &Path) -> Router {
     let protected = Router::new()
         .route("/1/indexes", post(create_index).get(list_indices))
@@ -306,7 +308,7 @@ fn build_protected_routes(state: Arc<AppState>, data_dir: &Path) -> Router {
     ))
 }
 
-/// TODO: Document build_internal_routes.
+/// Builds internal routes: ACME challenge, health, readiness, version, and metrics.
 fn build_internal_routes(state: Arc<AppState>, auth_enabled: bool) -> Router {
     let public_routes = Router::new()
         .route(
@@ -315,12 +317,15 @@ fn build_internal_routes(state: Arc<AppState>, auth_enabled: bool) -> Router {
         )
         .with_state(state.clone());
 
-    if !auth_enabled {
-        return public_routes;
-    }
+    // Peer-health routes are always available (needed for HA probing even in no-auth mode)
+    let peer_health_routes = Router::new()
+        .route("/internal/status", get(internal::replication_status))
+        .route("/internal/cluster/status", get(internal::cluster_status))
+        .with_state(state.clone());
 
-    public_routes.merge(
-        Router::new()
+    let internal_routes = if auth_enabled {
+        // Auth mode: expose all internal/replication routes plus admin key rotation
+        let admin_internal_routes = Router::new()
             .route("/internal/replicate", post(internal::replicate_ops))
             .route("/internal/ops", get(internal::get_ops))
             .route("/internal/tenants", get(internal::list_tenants))
@@ -328,8 +333,6 @@ fn build_internal_routes(state: Arc<AppState>, auth_enabled: bool) -> Router {
                 "/internal/snapshot/:tenantId",
                 get(internal::internal_snapshot),
             )
-            .route("/internal/status", get(internal::replication_status))
-            .route("/internal/cluster/status", get(internal::cluster_status))
             .route(
                 "/internal/analytics-rollup",
                 post(internal::receive_analytics_rollup),
@@ -343,11 +346,19 @@ fn build_internal_routes(state: Arc<AppState>, auth_enabled: bool) -> Router {
                 "/internal/rotate-admin-key",
                 post(internal::rotate_admin_key),
             )
-            .with_state(state),
-    )
+            .with_state(state.clone());
+        Router::new()
+            .merge(peer_health_routes)
+            .merge(admin_internal_routes)
+    } else {
+        // No-auth mode: only peer-health routes for HA probing
+        peer_health_routes
+    };
+
+    public_routes.merge(internal_routes)
 }
 
-/// TODO: Document build_analytics_routes.
+/// Builds analytics API routes for top searches, click-through, and conversion rates.
 fn build_analytics_routes(state: Arc<AppState>, _collector: Arc<AnalyticsCollector>) -> Router {
     let analytics_engine = state
         .analytics_engine
@@ -414,7 +425,7 @@ fn build_analytics_routes(state: Arc<AppState>, _collector: Arc<AnalyticsCollect
     analytics_routes.merge(analytics_cleanup_routes)
 }
 
-/// TODO: Document build_experiments_routes.
+/// Builds A/B testing experiment management routes.
 fn build_experiments_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route(
@@ -451,7 +462,7 @@ fn build_experiments_routes(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// TODO: Document build_insights_routes.
+/// Builds click/conversion event ingestion and GDPR profile-deletion routes.
 fn build_insights_routes(analytics_collector: Arc<AnalyticsCollector>, data_dir: &Path) -> Router {
     let gdpr_delete_state = GdprDeleteState {
         analytics_collector: analytics_collector.clone(),
@@ -484,7 +495,8 @@ pub(crate) fn build_cors_layer(mode: &CorsMode) -> CorsLayer {
     }
 }
 
-/// TODO: Document apply_middleware.
+/// Applies the middleware stack to the router: CORS, body size limit, request
+/// logging, auth, rate limiting, trusted proxy IP extraction, and usage tracking.
 fn apply_middleware(
     app: Router,
     state: Arc<AppState>,
@@ -630,7 +642,6 @@ mod tests {
         build_test_router_with_state_for_data_dir(tmp, key_store, data_dir).0
     }
 
-    /// TODO: Document build_test_router_with_state_for_data_dir.
     fn build_test_router_with_state_for_data_dir(
         tmp: &TempDir,
         key_store: Option<Arc<KeyStore>>,
@@ -676,8 +687,6 @@ mod tests {
             .unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
     }
-
-    /// TODO: Document build_router_open_mode_allows_protected_routes_without_auth_layer.
     #[tokio::test]
     async fn build_router_open_mode_allows_protected_routes_without_auth_layer() {
         let tmp = TempDir::new().unwrap();
@@ -707,8 +716,6 @@ mod tests {
             "search response should include hits"
         );
     }
-
-    /// TODO: Document build_router_open_mode_allows_dictionary_routes_without_auth_layer.
     #[tokio::test]
     async fn build_router_open_mode_allows_dictionary_routes_without_auth_layer() {
         let tmp = TempDir::new().unwrap();
@@ -756,8 +763,6 @@ mod tests {
         let response = send_empty_request(&app, Method::GET, "/internal/storage").await;
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     }
-
-    /// TODO: Document build_router_does_not_log_trusted_proxy_initialization.
     #[tokio::test]
     async fn build_router_does_not_log_trusted_proxy_initialization() {
         let tmp = TempDir::new().unwrap();
@@ -777,8 +782,6 @@ mod tests {
             "router construction should not re-log trusted proxy initialization"
         );
     }
-
-    /// TODO: Document cors_preflight_returns_expected_allow_origin_for_restricted_and_permissive_modes.
     #[tokio::test]
     async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_permissive_modes() {
         let restricted_router = Router::new()
@@ -828,8 +831,6 @@ mod tests {
             .and_then(|value| value.to_str().ok());
         assert_eq!(permissive_origin, Some("https://allowed.example"));
     }
-
-    /// TODO: Document cors_preflight_rejects_blocked_origins_in_restricted_mode.
     #[tokio::test]
     async fn cors_preflight_rejects_blocked_origins_in_restricted_mode() {
         let app = Router::new()
@@ -888,8 +889,6 @@ mod tests {
             })
         );
     }
-
-    /// TODO: Document metrics_returns_200_with_admin_key_only.
     #[tokio::test]
     async fn metrics_returns_200_with_admin_key_only() {
         use axum::body::Body;

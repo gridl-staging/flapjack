@@ -113,7 +113,6 @@ benchmarks_output() {
   cat "$TEST_BENCHMARKS_FILE"
 }
 
-# TODO: Document write_fixture_results.
 write_fixture_results() {
   local results_dir="$1"
   local include_k6_json="${2:-yes}"
@@ -143,7 +142,6 @@ test_stdout_only_fallback_succeeds() {
   teardown_test_workspace
 }
 
-# TODO: Document test_missing_both_artifacts_fails.
 test_missing_both_artifacts_fails() {
   setup_test_workspace write_mock_compiler
 
@@ -165,7 +163,6 @@ test_missing_both_artifacts_fails() {
   teardown_test_workspace
 }
 
-# TODO: Document test_newer_partial_k6_run_is_ignored.
 test_newer_partial_k6_run_is_ignored() {
   setup_test_workspace write_arg_dump_compiler
   local appended_output
@@ -194,7 +191,6 @@ test_newer_partial_k6_run_is_ignored() {
   teardown_test_workspace
 }
 
-# TODO: Document test_split_timestamp_artifacts_are_discovered.
 test_split_timestamp_artifacts_are_discovered() {
   setup_test_workspace write_arg_dump_compiler
   local appended_output
@@ -228,7 +224,6 @@ test_split_timestamp_artifacts_are_discovered() {
   teardown_test_workspace
 }
 
-# TODO: Document test_newest_timestamp_wins_over_newer_mtime.
 test_newest_timestamp_wins_over_newer_mtime() {
   setup_test_workspace write_arg_dump_compiler
   local appended_output
@@ -263,7 +258,6 @@ test_newest_timestamp_wins_over_newer_mtime() {
   teardown_test_workspace
 }
 
-# TODO: Document test_metadata_overrides_are_forwarded.
 test_metadata_overrides_are_forwarded() {
   setup_test_workspace write_arg_dump_compiler
   write_fixture_results "$TEST_RESULTS_DIR" "yes"

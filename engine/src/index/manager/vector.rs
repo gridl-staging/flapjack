@@ -62,7 +62,9 @@ impl IndexManager {
             .then_some(vectors_dir)
     }
 
-    /// TODO: Document IndexManager.configured_embedder_fingerprints.
+    /// Read embedder configurations from the tenant's `settings.json` and parse them
+    /// into `(name, EmbedderConfig)` pairs. Returns an empty vec if settings are missing
+    /// or contain no valid embedders.
     fn configured_embedder_fingerprints(
         tenant_path: &Path,
     ) -> Vec<(String, crate::vector::config::EmbedderConfig)> {
@@ -92,7 +94,9 @@ impl IndexManager {
             .unwrap_or_default()
     }
 
-    /// TODO: Document IndexManager.vector_fingerprint_matches.
+    /// Check whether the persisted embedder fingerprint matches the current embedder
+    /// configurations. Returns `false` (skip load) if no embedders are configured or
+    /// the fingerprint indicates stale vectors.
     fn vector_fingerprint_matches(
         tenant_id: &str,
         vectors_dir: &Path,
@@ -122,7 +126,8 @@ impl IndexManager {
         }
     }
 
-    /// TODO: Document IndexManager.load_vector_index_from_disk.
+    /// Load a VectorIndex from the tenant's `vectors/` directory using cosine similarity.
+    /// Logs the vector count on success or a warning on failure.
     fn load_vector_index_from_disk(&self, tenant_id: &str, vectors_dir: &Path) {
         match crate::vector::index::VectorIndex::load(vectors_dir, usearch::ffi::MetricKind::Cos) {
             Ok(vi) => {

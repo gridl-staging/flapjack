@@ -1,4 +1,3 @@
-//! Stub summary for engine/flapjack-http/src/handlers/search/hybrid.rs.
 /// Hybrid (vector + keyword) search types and helpers for the single-search pipeline.
 ///
 /// This module owns:
@@ -84,7 +83,8 @@ pub(super) fn missing_hybrid_query_vector_fallback(
     .then(|| hybrid_fallback_message("no embedders configured"))
 }
 
-/// TODO: Document fuse_hybrid_search_results.
+/// Fuses BM25 keyword results with vector search results using Reciprocal Rank
+/// Fusion (RRF), weighted by `semantic_ratio`, then paginates the fused list.
 #[cfg(feature = "vector-search")]
 fn fuse_hybrid_search_results(
     state: &Arc<AppState>,
@@ -105,7 +105,8 @@ fn fuse_hybrid_search_results(
     replace_with_fused_page(result, fused_documents, hits_per_page, page);
 }
 
-/// TODO: Document build_fused_documents.
+/// Builds the fused document list by matching RRF-ranked IDs to BM25 hits or
+/// fetching vector-only documents from the index when not present in keyword results.
 #[cfg(feature = "vector-search")]
 fn build_fused_documents(
     state: &Arc<AppState>,
@@ -155,7 +156,8 @@ fn fused_scored_document(
     }
 }
 
-/// TODO: Document fetch_vector_only_fused_document.
+/// Fetches a document that appeared only in vector results (not in BM25 hits)
+/// from the index store, assigning its RRF fused score.
 #[cfg(feature = "vector-search")]
 fn fetch_vector_only_fused_document(
     state: &Arc<AppState>,
@@ -193,7 +195,8 @@ fn replace_with_fused_page(
     result.total = total_fused;
 }
 
-/// TODO: Document hybrid_vector_results.
+/// Executes a vector-only search against the tenant's vector index, returning
+/// ranked results or a fallback message if the vector index is unavailable or empty.
 #[cfg(feature = "vector-search")]
 pub(super) fn hybrid_vector_results(
     context: &HybridFusionContext<'_>,
@@ -232,7 +235,8 @@ pub(super) fn hybrid_vector_results(
         })
 }
 
-/// TODO: Document requested_hybrid_params.
+/// Determines whether hybrid search is requested (explicit `hybrid` param or
+/// NeuralSearch index mode) and returns the resolved `HybridParams` with defaults.
 #[cfg(feature = "vector-search")]
 pub(super) fn requested_hybrid_params(
     req: &crate::dto::SearchRequest,
@@ -257,7 +261,8 @@ pub(super) fn requested_hybrid_params(
     })
 }
 
-/// TODO: Document resolve_hybrid_query_vector.
+/// Resolves the query embedding vector for hybrid search: checks the embedding
+/// cache first, then falls back to computing a fresh embedding via the configured embedder.
 #[cfg(feature = "vector-search")]
 async fn resolve_hybrid_query_vector(
     state: &Arc<AppState>,
@@ -313,7 +318,8 @@ async fn resolve_hybrid_query_vector(
     }
 }
 
-/// TODO: Document resolve_hybrid_search_inputs.
+/// Pre-search async resolver that determines hybrid params and computes the query
+/// vector embedding. Returns `(None, None)` when hybrid search is not applicable.
 #[cfg(feature = "vector-search")]
 pub(super) async fn resolve_hybrid_search_inputs(
     state: &Arc<AppState>,
@@ -354,7 +360,7 @@ pub(super) async fn resolve_hybrid_search_inputs(
 // Phase 3a: Hybrid search fusion (cfg-gated)
 // ---------------------------------------------------------------------------
 
-/// TODO: Document apply_hybrid_fusion.
+/// Fuses keyword and vector search results using reciprocal rank fusion.
 #[cfg(feature = "vector-search")]
 pub(super) fn apply_hybrid_fusion(
     context: &HybridFusionContext<'_>,
@@ -398,7 +404,6 @@ fn hybrid_query_inputs<'a>(
     ))
 }
 
-/// TODO: Document apply_hybrid_fusion.
 #[cfg(not(feature = "vector-search"))]
 pub(super) fn apply_hybrid_fusion(
     _context: &HybridFusionContext<'_>,

@@ -57,9 +57,14 @@ async fn invalid_snapshot_import_returns_500_json_and_preserves_existing_index_d
     let import_message = import_body["message"]
         .as_str()
         .expect("expected string message on import failure");
+    assert_eq!(import_message, "Internal server error");
     assert!(
-        import_message.contains("Import failed:"),
-        "expected import failure message from handler path, got: {import_message}"
+        !import_message.contains("Import failed:"),
+        "500 response must not leak internal prefix text: {import_message}"
+    );
+    assert!(
+        !import_message.contains("not-a-valid-snapshot"),
+        "500 response must not leak raw backend text: {import_message}"
     );
 
     let after = query_hits(&app, index_name, "alpha").await;

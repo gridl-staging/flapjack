@@ -341,7 +341,10 @@ async fn next_write_queue_event(
     }
 }
 
-/// TODO: Document handle_received_write_op.
+/// Route an incoming `WriteOp`: flush the pending batch and run compaction
+/// immediately for `Compact` ops; otherwise buffer the op and flush when the
+/// batch threshold (`WRITE_QUEUE_BATCH_SIZE`) is reached. Returns `true` when
+/// a flush occurred and the deadline should be reset.
 async fn handle_received_write_op(
     ctx: &WriteQueueContext,
     pending: &mut Vec<WriteOp>,
@@ -543,7 +546,8 @@ fn load_write_settings(
     }
 }
 
-/// TODO: Document parse_embedder_configs.
+/// Deserialize embedder configurations from index settings JSON, skipping null
+/// or malformed entries with a warning log.
 #[cfg(feature = "vector-search")]
 fn parse_embedder_configs(
     settings: Option<&crate::index::settings::IndexSettings>,
@@ -578,7 +582,9 @@ fn parse_embedder_configs(
         .unwrap_or_default()
 }
 
-/// TODO: Document commit_single_write_op.
+/// Process one `WriteOp` end-to-end: mark the task as processing, prepare
+/// documents and deletes, embed vectors, write to Tantivy, commit, run
+/// post-commit finalization (oplog, caches, LWW, vectors), and mark succeeded.
 async fn commit_single_write_op(
     context: &WriteFinalizationContext<'_>,
     settings: Option<&crate::index::settings::IndexSettings>,
@@ -633,7 +639,9 @@ fn mark_task_processing(tasks: &Arc<dashmap::DashMap<String, TaskInfo>>, task_id
     numeric_id
 }
 
-/// TODO: Document prepare_write_actions.
+/// Dispatch each `WriteAction` to the appropriate handler: delete (with or
+/// without LWW tracking), add, upsert, or replicated-upsert document
+/// preparation.
 fn prepare_write_actions(
     preparation_context: &mut WritePreparationContext<'_>,
     prepared: &mut PreparedWriteOperation,
@@ -698,7 +706,9 @@ fn prepare_delete_action(
     prepared.deleted_ids.push(object_id);
 }
 
-/// TODO: Document prepare_document_write.
+/// Validate a document (size limit, vector schema, Tantivy conversion), strip
+/// `_vectors`, delete the existing term on upsert, and push to the prepared
+/// batch or reject list.
 fn prepare_document_write(
     preparation_context: &mut WritePreparationContext<'_>,
     prepared: &mut PreparedWriteOperation,

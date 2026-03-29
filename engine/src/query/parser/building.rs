@@ -1,7 +1,8 @@
 use super::*;
 
 impl QueryParser {
-    /// TODO: Document QueryParser.try_parse_advanced_syntax.
+    /// If advanced syntax is enabled, attempt to parse the query as a quoted phrase
+    /// or field-qualified expression; returns `None` if not applicable.
     pub(super) fn try_parse_advanced_syntax(
         &self,
         normalized_query_text: &str,
@@ -42,7 +43,8 @@ impl QueryParser {
         }
     }
 
-    /// TODO: Document QueryParser.try_parse_short_query.
+    /// For single-token queries without a trailing space, emit a `ShortQueryPlaceholder`
+    /// that defers expansion until a searcher is available for term enumeration.
     pub(super) fn try_parse_short_query(
         &self,
         tokens: &[String],
@@ -80,7 +82,8 @@ impl QueryParser {
         }
     }
 
-    /// TODO: Document QueryParser.build_exact_short_query.
+    /// Build an exact-match query for a single token across all searchable paths
+    /// using the JSON exact field (or primary field as fallback).
     fn build_exact_short_query(&self, token: &str) -> Box<dyn TantivyQuery> {
         let target_field = self.json_exact_field.unwrap_or(self.fields[0]);
         let field_queries: Vec<QueryClause> = self
@@ -103,7 +106,8 @@ impl QueryParser {
         Box::new(tantivy::query::BooleanQuery::new(field_queries))
     }
 
-    /// TODO: Document QueryParser.build_multi_token_query.
+    /// Build a boolean query from multiple tokens, applying per-token prefix/exact
+    /// mode, word splitting, and optional-word semantics when `all_optional` is set.
     pub(super) fn build_multi_token_query(
         &self,
         normalized_query_text: &str,
@@ -153,7 +157,8 @@ impl QueryParser {
         }
     }
 
-    /// TODO: Document QueryParser.build_word_query.
+    /// Build the query clause for a single token, choosing prefix vs exact mode based
+    /// on position (last token + no trailing space = prefix), and applying word splitting.
     fn build_word_query(
         &self,
         token: &str,
@@ -243,7 +248,8 @@ impl QueryParser {
             .unwrap_or_default()
     }
 
-    /// TODO: Document QueryParser.build_field_query.
+    /// Build a field-level query for a single token against one searchable path,
+    /// applying stemming, typo tolerance, and plural wrapping as configured.
     fn build_field_query(&self, context: FieldQueryContext<'_>) -> Box<dyn TantivyQuery> {
         let effective_token: std::borrow::Cow<str> = if context.is_prefix {
             std::borrow::Cow::Borrowed(context.token)
@@ -266,7 +272,8 @@ impl QueryParser {
         self.apply_query_weight(context.path_idx, plural_query)
     }
 
-    /// TODO: Document QueryParser.typo_distance_for_path.
+    /// Compute the allowed Levenshtein distance for a token on a given path,
+    /// respecting disabled-typo attributes/words and min-word-size thresholds.
     fn typo_distance_for_path(&self, context: &FieldQueryContext<'_>) -> u8 {
         if !self.typo_tolerance
             || self.disabled_typo_attrs.contains(context.path)
@@ -285,7 +292,8 @@ impl QueryParser {
         }
     }
 
-    /// TODO: Document QueryParser.build_term_query.
+    /// Build a fuzzy or exact term query for a token, adding a stripped-first-character
+    /// fallback term query for short-prefix resilience when fuzzy matching is enabled.
     fn build_term_query(
         &self,
         context: &FieldQueryContext<'_>,
@@ -334,7 +342,9 @@ impl QueryParser {
         Box::new(tantivy::query::BooleanQuery::new(clauses))
     }
 
-    /// TODO: Document QueryParser.build_first_character_fallback.
+    /// Build a fallback query that drops the first character from the token and searches
+    /// the search field for the remaining suffix, helping prefix queries survive a typo
+    /// or omission in the first character.
     fn build_first_character_fallback(
         &self,
         token: &str,
@@ -363,7 +373,8 @@ impl QueryParser {
         )))
     }
 
-    /// TODO: Document QueryParser.wrap_plural_forms.
+    /// Wrap a token query with OR-combined plural/singular alternatives from the
+    /// plural map, so both "shoe" and "shoes" match regardless of query form.
     fn wrap_plural_forms(
         &self,
         token_query: Box<dyn TantivyQuery>,

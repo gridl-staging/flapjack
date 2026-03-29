@@ -1,28 +1,16 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
     Json,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::{safe_nb_pages, AppState};
+use super::{safe_nb_pages, settings::parse_bool_query_param, AppState};
+use crate::error_response::HandlerError;
 use crate::extractors::{validate_index_http, ValidatedIndexName};
 use flapjack::index::rules::{Rule, RuleStore};
 
-/// Convert an internal storage error into a sanitized 500 response.
-/// Logs the real error server-side but returns a generic message to avoid
-/// leaking filesystem paths or other internals to clients.
-fn internal_error(e: impl std::fmt::Display) -> (StatusCode, String) {
-    tracing::error!("rules storage error: {e}");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Internal server error".to_string(),
-    )
-}
-
-/// Get a rule by ID
 #[utoipa::path(
     get,
     path = "/1/indexes/{indexName}/rules/{objectID}",
@@ -42,32 +30,26 @@ fn internal_error(e: impl std::fmt::Display) -> (StatusCode, String) {
 pub async fn get_rule(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
-) -> Result<Json<Rule>, (StatusCode, String)> {
+) -> Result<Json<Rule>, HandlerError> {
     validate_index_http(&index_name)?;
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     if !rules_path.exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("Rule {} not found", object_id),
-        ));
+        return Err(HandlerError::not_found(format!(
+            "Rule {} not found",
+            object_id
+        )));
     }
 
-    let store = RuleStore::load(&rules_path).map_err(internal_error)?;
+    let store = RuleStore::load(&rules_path).map_err(HandlerError::internal)?;
 
     store
         .get(&object_id)
         .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                format!("Rule {} not found", object_id),
-            )
-        })
+        .ok_or_else(|| HandlerError::not_found(format!("Rule {} not found", object_id)))
         .map(Json)
 }
 
-/// Create or update a rule
 #[utoipa::path(
     put,
     path = "/1/indexes/{indexName}/rules/{objectID}",
@@ -88,24 +70,24 @@ pub async fn save_rule(
     State(state): State<Arc<AppState>>,
     Path((index_name, _object_id)): Path<(String, String)>,
     Json(rule): Json<Rule>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, HandlerError> {
     validate_index_http(&index_name)?;
     state
         .manager
         .create_tenant(&index_name)
-        .map_err(internal_error)?;
+        .map_err(HandlerError::internal)?;
 
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     let mut store = if rules_path.exists() {
-        RuleStore::load(&rules_path).map_err(internal_error)?
+        RuleStore::load(&rules_path).map_err(HandlerError::internal)?
     } else {
         RuleStore::new()
     };
 
     store.insert(rule.clone());
 
-    store.save(&rules_path).map_err(internal_error)?;
+    store.save(&rules_path).map_err(HandlerError::internal)?;
 
     state.manager.invalidate_rules_cache(&index_name);
 
@@ -118,7 +100,7 @@ pub async fn save_rule(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(internal_error)?;
+        .map_err(HandlerError::internal)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339(),
@@ -126,7 +108,6 @@ pub async fn save_rule(
     })))
 }
 
-/// Delete a rule by ID
 #[utoipa::path(
     delete,
     path = "/1/indexes/{indexName}/rules/{objectID}",
@@ -146,27 +127,24 @@ pub async fn save_rule(
 pub async fn delete_rule(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, HandlerError> {
     validate_index_http(&index_name)?;
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     if !rules_path.exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("Rule {} not found", object_id),
-        ));
+        return Err(HandlerError::not_found(format!(
+            "Rule {} not found",
+            object_id
+        )));
     }
 
-    let mut store = RuleStore::load(&rules_path).map_err(internal_error)?;
+    let mut store = RuleStore::load(&rules_path).map_err(HandlerError::internal)?;
 
-    store.remove(&object_id).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            format!("Rule {} not found", object_id),
-        )
-    })?;
+    store
+        .remove(&object_id)
+        .ok_or_else(|| HandlerError::not_found(format!("Rule {} not found", object_id)))?;
 
-    store.save(&rules_path).map_err(internal_error)?;
+    store.save(&rules_path).map_err(HandlerError::internal)?;
 
     state.manager.invalidate_rules_cache(&index_name);
 
@@ -179,14 +157,13 @@ pub async fn delete_rule(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(internal_error)?;
+        .map_err(HandlerError::internal)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "deletedAt": chrono::Utc::now().to_rfc3339()
     })))
 }
 
-/// Batch save multiple rules
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/rules/batch",
@@ -196,7 +173,8 @@ pub async fn delete_rule(
     ),
     request_body(content = serde_json::Value, description = "Array of rules"),
     responses(
-        (status = 200, description = "Rules saved", body = serde_json::Value)
+        (status = 200, description = "Rules saved", body = serde_json::Value),
+        (status = 400, description = "Invalid query parameter value")
     ),
     security(
         ("api_key" = [])
@@ -207,23 +185,20 @@ pub async fn save_rules(
     ValidatedIndexName(index_name): ValidatedIndexName,
     Query(params): Query<HashMap<String, String>>,
     Json(rules): Json<Vec<Rule>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, HandlerError> {
     state
         .manager
         .create_tenant(&index_name)
-        .map_err(internal_error)?;
+        .map_err(HandlerError::internal)?;
 
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
-    let clear_existing = params
-        .get("clearExistingRules")
-        .and_then(|v| v.parse::<bool>().ok())
-        .unwrap_or(false);
+    let clear_existing = parse_bool_query_param(&params, "clearExistingRules")?;
 
     let mut store = if clear_existing || !rules_path.exists() {
         RuleStore::new()
     } else {
-        RuleStore::load(&rules_path).map_err(internal_error)?
+        RuleStore::load(&rules_path).map_err(HandlerError::internal)?
     };
 
     let rules_json: Vec<serde_json::Value> = rules
@@ -235,17 +210,14 @@ pub async fn save_rules(
         store.insert(rule);
     }
 
-    store.save(&rules_path).map_err(internal_error)?;
+    store.save(&rules_path).map_err(HandlerError::internal)?;
 
     state.manager.invalidate_rules_cache(&index_name);
 
     // Forward rules to replicas if requested
-    let forward_to_replicas = params
-        .get("forwardToReplicas")
-        .and_then(|v| v.parse::<bool>().ok())
-        .unwrap_or(false);
+    let forward_to_replicas = parse_bool_query_param(&params, "forwardToReplicas")?;
     if forward_to_replicas {
-        forward_rules_to_replicas(&state, &index_name, &store).map_err(internal_error)?;
+        forward_rules_to_replicas(&state, &index_name, &store).map_err(HandlerError::internal)?;
     }
 
     state.manager.append_oplog(
@@ -257,7 +229,7 @@ pub async fn save_rules(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(internal_error)?;
+        .map_err(HandlerError::internal)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339()
@@ -301,7 +273,6 @@ fn forward_rules_to_replicas(
     Ok(())
 }
 
-/// Clear all rules for an index
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/rules/clear",
@@ -319,11 +290,11 @@ fn forward_rules_to_replicas(
 pub async fn clear_rules(
     State(state): State<Arc<AppState>>,
     ValidatedIndexName(index_name): ValidatedIndexName,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, HandlerError> {
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     if rules_path.exists() {
-        std::fs::remove_file(&rules_path).map_err(internal_error)?;
+        std::fs::remove_file(&rules_path).map_err(HandlerError::internal)?;
     }
 
     state.manager.invalidate_rules_cache(&index_name);
@@ -334,7 +305,7 @@ pub async fn clear_rules(
     let task = state
         .manager
         .make_noop_task(&index_name)
-        .map_err(internal_error)?;
+        .map_err(HandlerError::internal)?;
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339()
@@ -357,7 +328,6 @@ fn default_hits_per_page() -> usize {
     20
 }
 
-/// Search for rules
 #[utoipa::path(
     post,
     path = "/1/indexes/{indexName}/rules/search",
@@ -377,11 +347,11 @@ pub async fn search_rules(
     State(state): State<Arc<AppState>>,
     ValidatedIndexName(index_name): ValidatedIndexName,
     Json(req): Json<SearchRulesRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, HandlerError> {
     let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
 
     let store = if rules_path.exists() {
-        RuleStore::load(&rules_path).map_err(internal_error)?
+        RuleStore::load(&rules_path).map_err(HandlerError::internal)?
     } else {
         RuleStore::new()
     };

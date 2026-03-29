@@ -141,7 +141,9 @@ fn validate_safe_name(value: &str, field: &str) -> Result<(), ExperimentError> {
 }
 
 impl Experiment {
-    /// TODO: Document Experiment.validate.
+    /// Validate experiment configuration: safe names, traffic split in (0,1), exactly one
+    /// variant mode (query overrides xor index name), clean control arm, and interleaving
+    /// only with Mode B.
     pub fn validate(&self) -> Result<(), ExperimentError> {
         validate_safe_name(&self.name, "name")?;
         validate_safe_name(&self.index_name, "indexName")?;

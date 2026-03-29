@@ -53,7 +53,8 @@ fn build_response_params_string(req: &SearchRequest, hits_per_page: usize) -> St
     )
 }
 
-/// TODO: Document expand_query_words_with_synonyms.
+/// Expands the query word set with synonym matches from the index's synonym store,
+/// building a synonym map for the highlighter to mark synonym-matched terms.
 fn expand_query_words_with_synonyms(
     req: &SearchRequest,
     state: &Arc<AppState>,
@@ -99,7 +100,8 @@ fn expand_query_words_with_synonyms(
     (query_words, synonym_map)
 }
 
-/// TODO: Document build_highlighter.
+/// Constructs a `Highlighter` with custom pre/post tags and snippet ellipsis text
+/// from request params or index settings.
 fn build_highlighter(req: &SearchRequest, params: &PreparedSearchParams) -> Highlighter {
     let base = match (&req.highlight_pre_tag, &req.highlight_post_tag) {
         (Some(pre), Some(post)) => Highlighter::new(pre.clone(), post.clone()),
@@ -119,7 +121,8 @@ fn build_highlighter(req: &SearchRequest, params: &PreparedSearchParams) -> High
     }
 }
 
-/// TODO: Document build_facet_distribution.
+/// Builds the Algolia-compatible facet distribution map from raw facet counts,
+/// applying alpha or count-based sorting per `sortFacetValuesBy`.
 fn build_facet_distribution(
     req: &SearchRequest,
     result: &mut flapjack::types::SearchResult,
@@ -169,7 +172,7 @@ struct ResponseExtras<'a> {
     is_virtual_replica_search: bool,
 }
 
-/// TODO: Document should_emit_nb_sorted_hits.
+/// Returns whether the response should include the `nbSortedHits` field.
 fn should_emit_nb_sorted_hits(
     params: &PreparedSearchParams,
     applied_relevancy_strictness: Option<u32>,
@@ -195,7 +198,8 @@ fn strictness_for_virtual_replica_extension(
     (is_virtual_replica_search && strictness < 100).then_some(strictness)
 }
 
-/// TODO: Document apply_optional_response_fields.
+/// Attaches optional fields to the JSON response: parsed query, facets, facet stats,
+/// user data, query ID, A/B test metadata, geo radius, applied rules, and `responseFields` filtering.
 fn apply_optional_response_fields(
     response: &mut serde_json::Value,
     result: &flapjack::types::SearchResult,
@@ -492,7 +496,8 @@ struct HitBuildContext<'a> {
     geo_distances: &'a HashMap<String, (f64, f64, f64)>,
 }
 
-/// TODO: Document build_hit_object.
+/// Builds a single Algolia-compatible hit JSON object from a scored document,
+/// applying field retrieval, highlighting, snippeting, ranking info, and geo distance.
 fn build_hit_object(
     scored_doc: &flapjack::types::ScoredDocument,
     req: &SearchRequest,
@@ -557,7 +562,7 @@ fn build_hit_object(
     serde_json::Value::Object(doc_map)
 }
 
-/// TODO: Document build_highlight_result.
+/// Builds the `_highlightResult` map for a document's matched attributes.
 fn build_highlight_result(
     doc_map: &mut serde_json::Map<String, serde_json::Value>,
     scored_doc: &flapjack::types::ScoredDocument,
@@ -614,7 +619,7 @@ fn build_highlight_result(
     );
 }
 
-/// TODO: Document build_snippet_result.
+/// Builds the `_snippetResult` map with truncated highlighted excerpts.
 fn build_snippet_result(
     doc_map: &mut serde_json::Map<String, serde_json::Value>,
     scored_doc: &flapjack::types::ScoredDocument,
@@ -655,7 +660,7 @@ fn build_snippet_result(
     );
 }
 
-/// TODO: Document build_ranking_info.
+/// Builds `_rankingInfo` metadata (scores, geo distance, matched words) for a hit.
 fn build_ranking_info(
     scored_doc: &flapjack::types::ScoredDocument,
     params: &PreparedSearchParams,
@@ -699,8 +704,6 @@ mod tests {
     use super::build_response_params_string;
     use crate::dto::SearchRequest;
     use serde_json::json;
-
-    /// TODO: Document response_params_string_includes_encoded_core_fields.
     #[test]
     fn response_params_string_includes_encoded_core_fields() {
         let req = SearchRequest {

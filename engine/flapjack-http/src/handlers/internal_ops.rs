@@ -58,7 +58,7 @@ fn resolve_upsert_object_id(body: &Value) -> Option<&str> {
         .filter(|object_id| !object_id.is_empty())
 }
 
-/// TODO: Document should_skip_stale_upsert.
+/// Returns true if an incoming upsert should be skipped because the local index already has a newer version of the same object (by oplog sequence).
 fn should_skip_stale_upsert(
     manager: &IndexManager,
     tenant_id: &str,
@@ -269,7 +269,7 @@ pub(crate) async fn apply_copy_index_op(
     Ok(())
 }
 
-/// TODO: Document copy_index_endpoint.
+/// Extracts a string field (source or destination index name) from a copy/move operation payload, returning an error if missing.
 fn copy_index_endpoint<'a>(
     tenant_id: &str,
     op_entry: &'a OpLogEntry,
@@ -287,7 +287,7 @@ fn copy_index_endpoint<'a>(
         })
 }
 
-/// TODO: Document parse_copy_scope.
+/// Parses the optional `scope` field from a copy operation payload.
 fn parse_copy_scope(tenant_id: &str, op_entry: &OpLogEntry) -> Result<Option<Vec<String>>, String> {
     let Some(scope_value) = op_entry.payload.get("scope") else {
         return Ok(None);
@@ -313,7 +313,7 @@ fn scope_includes(scope: Option<&[String]>, field_name: &str) -> bool {
     }
 }
 
-/// TODO: Document copy_scoped_payload_if_present.
+/// Copies a scoped data file (rules, synonyms, etc.) from the operation payload to the destination index directory, invalidating the relevant cache.
 fn copy_scoped_payload_if_present<F>(
     manager: &IndexManager,
     tenant_id: &str,
@@ -444,7 +444,7 @@ fn synonym_save(manager: &IndexManager, tenant_id: &str, synonym: Synonym) -> Re
     Ok(())
 }
 
-/// TODO: Document synonyms_batch.
+/// Applies a batch of synonym operations (add or replace-all) to a tenant index.
 fn synonyms_batch(
     manager: &IndexManager,
     tenant_id: &str,
@@ -613,7 +613,7 @@ fn rule_save(manager: &IndexManager, tenant_id: &str, rule: Rule) -> Result<(), 
     Ok(())
 }
 
-/// TODO: Document rules_batch.
+/// Applies a batch of rule operations (add or replace-all) to a tenant index.
 fn rules_batch(
     manager: &IndexManager,
     tenant_id: &str,

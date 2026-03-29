@@ -46,6 +46,8 @@ pub mod extractors;
 pub mod federation;
 #[cfg(feature = "vector-search")]
 pub mod fusion;
+#[cfg(feature = "otel")]
+pub mod otel;
 
 #[cfg(test)]
 mod openapi_export_tests;

@@ -18,9 +18,15 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+
 LB="http://localhost:7800"          # nginx load balancer (host-exposed)
 PASS=0
 FAIL=0
+PEERS_NODE_A=0
+PEERS_NODE_B=0
+PEERS_NODE_C=0
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -87,7 +93,7 @@ wait_healthy_compose() {
   local service="$1" name="$2"
   printf "  Waiting for %s..." "$name"
   for i in $(seq 1 45); do
-    if docker compose exec -T "$service" curl -sf http://localhost:7700/health >/dev/null 2>&1; then
+    if docker compose -f "$COMPOSE_FILE" exec -T "$service" curl -sf http://localhost:7700/health >/dev/null 2>&1; then
       echo " ready"
       return 0
     fi
@@ -101,11 +107,11 @@ wait_healthy_compose() {
 post_json_compose() {
   local service="$1" path="$2" payload="${3:-}"
   if [ -n "$payload" ]; then
-    docker compose exec -T "$service" curl -sf -X POST "http://localhost:7700$path" \
+    docker compose -f "$COMPOSE_FILE" exec -T "$service" curl -sf -X POST "http://localhost:7700$path" \
       -H 'Content-Type: application/json' \
       -d "$payload"
   else
-    docker compose exec -T "$service" curl -sf -X POST "http://localhost:7700$path"
+    docker compose -f "$COMPOSE_FILE" exec -T "$service" curl -sf -X POST "http://localhost:7700$path"
   fi
 }
 
@@ -163,13 +169,43 @@ flush_analytics_compose() {
   post_json_compose "$1" "/2/analytics/flush" >/dev/null 2>&1
 }
 
+cluster_status_compose() {
+  local service="$1"
+  docker compose -f "$COMPOSE_FILE" exec -T "$service" \
+    curl -sf http://localhost:7700/internal/cluster/status 2>/dev/null || echo "{}"
+}
+
+peers_total_compose() {
+  local service="$1"
+  cluster_status_compose "$service" | py "print(json.load(sys.stdin).get('peers_total',0))"
+}
+
+wait_for_peer_mesh_ready() {
+  local max_wait="${1:-45}"
+  local elapsed=0
+
+  echo "  Waiting for peer mesh convergence (up to ${max_wait}s)..."
+  while [ "$elapsed" -lt "$max_wait" ]; do
+    PEERS_NODE_A=$(peers_total_compose "node-a")
+    PEERS_NODE_B=$(peers_total_compose "node-b")
+    PEERS_NODE_C=$(peers_total_compose "node-c")
+    if [ "$PEERS_NODE_A" -ge 2 ] 2>/dev/null && [ "$PEERS_NODE_B" -ge 2 ] 2>/dev/null && [ "$PEERS_NODE_C" -ge 2 ] 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  return 1
+}
+
 # ── optional: docker lifecycle ────────────────────────────────────────────────
 
 WITH_DOCKER=false
 if [ "${1:-}" = "--with-docker" ]; then WITH_DOCKER=true; fi
 if $WITH_DOCKER; then
   echo "=== Building and starting 3-node HA cluster ==="
-  docker compose up -d --build
+  docker compose -f "$COMPOSE_FILE" up -d --build
 fi
 
 # ── 1. Health checks ──────────────────────────────────────────────────────────
@@ -177,9 +213,21 @@ fi
 echo ""
 echo "=== 1. Health checks ==="
 wait_healthy "$LB" "load-balancer"
+wait_healthy_compose "node-a" "node-a"
+wait_healthy_compose "node-b" "node-b"
+wait_healthy_compose "node-c" "node-c"
+
+if ! wait_for_peer_mesh_ready 60; then
+  red "peer mesh did not converge in 60s (node-a=$PEERS_NODE_A node-b=$PEERS_NODE_B node-c=$PEERS_NODE_C)"
+  FAIL=$((FAIL + 1))
+fi
 
 LB_HEALTH=$(curl -sf "$LB/health" | py "print(json.load(sys.stdin).get('status',''))")
 assert_eq "LB proxies health to a live node" "ok" "$LB_HEALTH"
+
+assert_eq "node-a sees 2 peers" "2" "$PEERS_NODE_A"
+assert_eq "node-b sees 2 peers" "2" "$PEERS_NODE_B"
+assert_eq "node-c sees 2 peers" "2" "$PEERS_NODE_C"
 
 # Cluster status on any node (via LB)
 STATUS=$(curl -sf "$LB/internal/cluster/status" 2>/dev/null || echo "{}")
@@ -229,7 +277,7 @@ assert_ge "node-c: all 5 docs replicated" 5 "$NODE_C_ALL"
 echo ""
 echo "=== 3. Node failover (stop node-c, LB continues serving) ==="
 
-docker compose stop node-c 2>/dev/null || { echo "  (direct docker access not available, skipping failover test)"; }
+docker compose -f "$COMPOSE_FILE" stop node-c 2>/dev/null || { echo "  (direct docker access not available, skipping failover test)"; }
 
 sleep 3  # nginx marks node-c as down
 
@@ -247,7 +295,7 @@ assert_ge "LB serves writes/reads with node-c down" 1 "$FAILOVER_HIT"
 
 # Restart node-c and wait for it to become healthy inside the compose network.
 # Node ports are not host-exposed; use docker compose exec for in-network probes.
-docker compose start node-c 2>/dev/null || true
+docker compose -f "$COMPOSE_FILE" start node-c 2>/dev/null || true
 wait_healthy_compose "node-c" "node-c (restarted)"
 
 # ── 3b. Startup catch-up: restarted node serves the missed document ────────
@@ -255,19 +303,9 @@ wait_healthy_compose "node-c" "node-c (restarted)"
 echo ""
 echo "=== 3b. Startup catch-up (node-c returns doc written while it was down) ==="
 
-# node-c runs pre-serve catch-up before accepting traffic (run_pre_serve_catchup),
-# so by the time wait_healthy_compose succeeds, catch-up should already be done.
-# Poll for up to 15s to allow write-queue drain on node-c.
-CATCHUP_FOUND=0
-for attempt in $(seq 1 15); do
-  CATCHUP_HIT=$(search_hits_compose "node-c" "$INDEX" "hazelnut")
-  if [ "$CATCHUP_HIT" -ge 1 ] 2>/dev/null; then
-    CATCHUP_FOUND=1
-    break
-  fi
-  sleep 1
-done
-assert_ge "node-c serves hazelnut doc after catch-up" 1 "$CATCHUP_FOUND"
+# Startup catch-up and replication are asynchronous; allow extra time for replay.
+CATCHUP_HIT=$(wait_for_hits_compose "node-c" "$INDEX" "hazelnut" 1 30)
+assert_ge "node-c serves hazelnut doc after catch-up" 1 "$CATCHUP_HIT"
 
 # ── 4. Analytics fan-out across 3 nodes ────────────────────────────────────
 
@@ -308,7 +346,7 @@ echo "════════════════════════�
 if $WITH_DOCKER; then
   echo ""
   echo "=== Tearing down ==="
-  docker compose down -v
+  docker compose -f "$COMPOSE_FILE" down -v
 fi
 
 [ "$FAIL" -eq 0 ]

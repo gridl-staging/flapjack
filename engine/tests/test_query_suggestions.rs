@@ -159,6 +159,92 @@ async fn create_duplicate_config_returns_409() {
 }
 
 #[tokio::test]
+async fn list_configs_store_failure_returns_sanitized_500() {
+    let (addr, tmp) = spawn_server().await;
+    let base = format!("http://{}", addr);
+
+    let store_path = tmp.path().join(".query_suggestions");
+    if store_path.exists() {
+        if store_path.is_dir() {
+            std::fs::remove_dir_all(&store_path).unwrap();
+        } else {
+            std::fs::remove_file(&store_path).unwrap();
+        }
+    }
+    std::fs::write(&store_path, b"not-a-directory").unwrap();
+
+    let resp = auth(client().get(format!("{}/1/configs", base)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 500);
+
+    let body: Value = resp.json().await.unwrap();
+    let message = body["message"]
+        .as_str()
+        .expect("500 response should include a string message");
+    assert_eq!(message, "Internal server error");
+    assert_eq!(body["status"], 500);
+    assert!(
+        !message.contains(".query_suggestions"),
+        "500 message must not leak store path details: {message}"
+    );
+    assert!(
+        !message.to_lowercase().contains("not a directory"),
+        "500 message must not leak raw IO details: {message}"
+    );
+}
+
+#[tokio::test]
+async fn create_config_store_failure_returns_sanitized_500() {
+    let (addr, tmp) = spawn_server().await;
+    let base = format!("http://{}", addr);
+
+    let store_path = tmp.path().join(".query_suggestions");
+    if store_path.exists() {
+        if store_path.is_dir() {
+            std::fs::remove_dir_all(&store_path).unwrap();
+        } else {
+            std::fs::remove_file(&store_path).unwrap();
+        }
+    }
+    std::fs::write(&store_path, b"not-a-directory").unwrap();
+
+    let resp = post_config(&base, basic_config("create_store_failure", "products")).await;
+    assert_eq!(resp.status(), 500);
+
+    let body: Value = resp.json().await.unwrap();
+    let message = body["message"]
+        .as_str()
+        .expect("500 response should include a string message");
+    assert_eq!(message, "Internal server error");
+    assert_eq!(body["status"], 500);
+    assert!(
+        !message.contains(".query_suggestions"),
+        "500 message must not leak store path details: {message}"
+    );
+}
+
+#[tokio::test]
+async fn create_config_invalid_input_keeps_400_message() {
+    let (addr, _tmp) = spawn_server().await;
+    let base = format!("http://{}", addr);
+
+    let resp = post_config(&base, basic_config("../keys", "products")).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = resp.json().await.unwrap();
+    let message = body["message"]
+        .as_str()
+        .expect("400 response should include a string message");
+    assert_eq!(body["status"], 400);
+    assert!(
+        message.contains("Index name contains invalid characters"),
+        "invalid input errors should stay client-visible: {message}"
+    );
+}
+
+#[tokio::test]
 async fn create_config_rejects_path_traversal_index_name() {
     let (addr, _tmp) = spawn_server().await;
     let base = format!("http://{}", addr);
@@ -763,6 +849,22 @@ async fn update_config_while_building_returns_409() {
         resp.status(),
         409,
         "update while build running must return 409 Conflict"
+    );
+
+    let config_resp = get_config(&base, "update_conflict_test").await;
+    assert_eq!(
+        config_resp.status(),
+        200,
+        "rejected update must keep config readable"
+    );
+    let config_body: Value = config_resp.json().await.unwrap();
+    assert_eq!(
+        config_body["sourceIndices"][0]["minHits"], 5,
+        "rejected update must not persist the new minHits value"
+    );
+    assert_eq!(
+        config_body["sourceIndices"][0]["minLetters"], 4,
+        "rejected update must not persist the new minLetters value"
     );
 
     // Wait for the initial build to finish, then update should succeed

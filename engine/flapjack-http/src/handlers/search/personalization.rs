@@ -66,7 +66,8 @@ pub(super) fn personalization_affinity_for_document(
     total_affinity
 }
 
-/// TODO: Document apply_personalization_boost_in_tiers.
+/// Adjusts document scores by personalization affinity (facet-value match scores
+/// weighted by strategy and query impact), then re-sorts preserving tie-break stability.
 pub(super) fn apply_personalization_boost_in_tiers(
     documents: &mut [ScoredDocument],
     context: &PersonalizationContext,
@@ -153,7 +154,8 @@ pub(super) fn convert_profile_scores_to_affinity_map(
         .collect::<HashMap<_, _>>()
 }
 
-/// TODO: Document load_profile_from_engine_or_cache.
+/// Loads a user's personalization profile: first attempts to compute a fresh profile
+/// from analytics data, falling back to the on-disk cached profile if computation fails.
 async fn load_profile_from_engine_or_cache(
     state: &Arc<AppState>,
     strategy: &PersonalizationStrategy,
@@ -210,7 +212,9 @@ async fn resolve_profile_affinity_scores(
     Some(convert_profile_scores_to_affinity_map(profile.scores))
 }
 
-/// TODO: Document resolve_personalization_context.
+/// Resolves the full personalization context for a search: checks enablement, loads
+/// the strategy, computes impact multiplier, and resolves affinity scores from
+/// explicit filters or the user's computed profile.
 pub(super) async fn resolve_personalization_context(
     state: &Arc<AppState>,
     req: &SearchRequest,

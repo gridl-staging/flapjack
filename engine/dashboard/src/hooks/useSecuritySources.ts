@@ -39,9 +39,6 @@ export function useSecuritySources() {
   });
 }
 
-/**
- * TODO: Document useAppendSecuritySource.
- */
 export function useAppendSecuritySource() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -68,9 +65,6 @@ export function useAppendSecuritySource() {
   });
 }
 
-/**
- * TODO: Document useDeleteSecuritySource.
- */
 export function useDeleteSecuritySource() {
   const queryClient = useQueryClient();
   const { toast } = useToast();

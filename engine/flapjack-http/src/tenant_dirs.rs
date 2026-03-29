@@ -8,7 +8,6 @@ pub(crate) fn visible_tenant_dir_name(entry: &std::fs::DirEntry) -> Option<Strin
     visible_tenant_name_if_visible_directory(entry.file_name(), is_directory)
 }
 
-/// TODO: Document visible_tenant_name_if_visible_directory.
 fn visible_tenant_name_if_visible_directory(
     name: std::ffi::OsString,
     is_directory: bool,

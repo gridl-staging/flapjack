@@ -89,7 +89,7 @@ impl BatchExecutionState {
         Ok(())
     }
 
-    /// TODO: Document BatchExecutionState.queue_partial_update.
+    /// Queues a partial update by merging new fields into the existing document.
     fn queue_partial_update(
         &mut self,
         state: &Arc<AppState>,
@@ -157,7 +157,7 @@ impl BatchExecutionState {
         Ok(())
     }
 
-    /// TODO: Document BatchExecutionState.apply_operation.
+    /// Applies a single batch write operation (add, update, partial update, or delete).
     async fn apply_operation(
         &mut self,
         state: &Arc<AppState>,
@@ -537,8 +537,6 @@ mod tests {
     fn document(id: &str) -> Document {
         Document::from_json(&serde_json::json!({ "_id": id })).expect("valid test document")
     }
-
-    /// TODO: Document batch_operations_from_legacy_request_wraps_docs_as_add_object_actions.
     #[test]
     fn batch_operations_from_legacy_request_wraps_docs_as_add_object_actions() {
         let operations = batch_operations_from_request(AddDocumentsRequest::Legacy {

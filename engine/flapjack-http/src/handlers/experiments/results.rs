@@ -87,7 +87,7 @@ fn index_name_refs(index_names: &[String]) -> Vec<&str> {
     index_names.iter().map(String::as_str).collect()
 }
 
-/// TODO: Document fetch_experiment_metrics.
+/// Queries analytics data to compute A/B experiment metrics (click rate, conversion rate) for the experiment period and indexes.
 async fn fetch_experiment_metrics(
     experiment: &Experiment,
     analytics_data_dir: Option<&PathBuf>,
@@ -112,7 +112,7 @@ async fn fetch_experiment_metrics(
     }
 }
 
-/// TODO: Document fetch_cuped_covariates.
+/// Fetches pre-experiment baseline metrics used as CUPED covariates to reduce variance in A/B test statistical analysis.
 async fn fetch_cuped_covariates(
     experiment: &Experiment,
     analytics_data_dir: Option<&PathBuf>,
@@ -138,7 +138,7 @@ async fn fetch_cuped_covariates(
     }
 }
 
-/// TODO: Document fetch_interleaving_metrics.
+/// Queries interleaving click attribution metrics for experiments that use team-draft interleaving to compare ranking variants.
 async fn fetch_interleaving_metrics(
     experiment: &Experiment,
     analytics_data_dir: Option<&PathBuf>,

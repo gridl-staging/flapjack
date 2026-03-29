@@ -77,7 +77,7 @@ fn contains_document_replication_ops(ops: &[OpLogEntry]) -> bool {
         .any(|op| matches!(op.op_type.as_str(), "upsert" | "delete"))
 }
 
-/// TODO: Document apply_replication_op.
+/// Applies a single replicated oplog entry (upsert, delete, settings change, copy/move, etc.) to the local index, accumulating batch upserts and deletes.
 async fn apply_replication_op(
     manager: &IndexManager,
     tenant_id: &str,

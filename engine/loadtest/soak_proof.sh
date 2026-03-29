@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOADTEST_HELPERS="$SCRIPT_DIR/lib/loadtest_shell_helpers.sh"
+SOAK_HELPERS="$SCRIPT_DIR/lib/loadtest_soak_helpers.sh"
 SEED_SCRIPT="$SCRIPT_DIR/seed-loadtest-data.sh"
 SERVER_BINARY="${FLAPJACK_LOADTEST_SERVER_BINARY:-$ENGINE_DIR/target/release/flapjack}"
 RESULTS_BASE_DIR="$SCRIPT_DIR/results"
@@ -41,9 +42,7 @@ fail() {
 }
 
 create_results_dir() {
-  local timestamp
-  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  RESULTS_DIR="$RESULTS_BASE_DIR/${timestamp}-${SCENARIO_NAME}"
+  RESULTS_DIR="$(create_loadtest_results_dir "$RESULTS_BASE_DIR" "$SCENARIO_NAME")"
   mkdir -p "$RESULTS_DIR"
   SAMPLE_PATH="$RESULTS_DIR/memory_samples.csv"
   SUMMARY_PATH="$RESULTS_DIR/summary.md"
@@ -223,13 +222,13 @@ stop_sampler() {
 }
 
 run_soak_scenario() {
-  local scenario_path="scenarios/${SCENARIO_NAME}.js"
-
   echo "INFO: running ${SCENARIO_NAME} for ${FLAPJACK_SOAK_DURATION}"
-  (
-    cd "$SCRIPT_DIR"
-    k6 run --address "$K6_API_ADDR" --out json="$K6_JSON_PATH" "$scenario_path"
-  ) | tee "$K6_STDOUT_PATH" || SCENARIO_EXIT_CODE=$?
+  run_loadtest_scenario_with_artifacts \
+    "$SCRIPT_DIR" \
+    "$SCENARIO_NAME" \
+    "$K6_API_ADDR" \
+    "$K6_JSON_PATH" \
+    "$K6_STDOUT_PATH" || SCENARIO_EXIT_CODE=$?
 
   case "$SCENARIO_EXIT_CODE" in
     0)
@@ -451,10 +450,13 @@ main() {
   [[ "$SCENARIO_NAME" == "mixed-soak" || "$SCENARIO_NAME" == "write-soak" ]] || \
     fail "--scenario must be one of: mixed-soak, write-soak"
   [[ -f "$LOADTEST_HELPERS" ]] || fail "missing $LOADTEST_HELPERS"
+  [[ -f "$SOAK_HELPERS" ]] || fail "missing $SOAK_HELPERS"
   [[ -x "$SEED_SCRIPT" ]] || fail "missing executable $SEED_SCRIPT"
 
   # shellcheck source=lib/loadtest_shell_helpers.sh
   source "$LOADTEST_HELPERS"
+  # shellcheck source=lib/loadtest_soak_helpers.sh
+  source "$SOAK_HELPERS"
 
   require_loadtest_commands cargo curl jq k6 node ps
   load_shared_loadtest_config

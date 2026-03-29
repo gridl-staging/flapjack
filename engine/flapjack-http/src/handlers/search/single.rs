@@ -48,7 +48,8 @@ pub async fn search_single(
 // Phase 1: Prepare search parameters
 // ---------------------------------------------------------------------------
 
-/// TODO: Document prepare_search_params.
+/// Resolves all search parameters from the request and index settings into a
+/// `PreparedSearchParams` struct: filters, sort, facets, pagination, typo tolerance, and rules.
 fn prepare_search_params(
     state: &AppState,
     effective_index: &str,
@@ -130,7 +131,8 @@ struct SearchInvocation<'a> {
 }
 
 impl SearchInvocation<'_> {
-    /// TODO: Document SearchInvocation.run.
+    /// Executes a search against the given tenant index, resolving virtual replica
+    /// settings and dictionary scope before delegating to the core search engine.
     fn run(
         self,
         tenant_id: &str,
@@ -212,7 +214,8 @@ struct InterleavingPage<'a> {
     assignment_query_id: &'a str,
 }
 
-/// TODO: Document SearchSyncContext.
+/// Carries all state needed to run the synchronous search pipeline on a blocking
+/// thread: resolved params, auth context, experiment/personalization/hybrid state.
 struct SearchSyncContext {
     state: Arc<AppState>,
     index_name: String,
@@ -242,7 +245,8 @@ fn apply_hybrid_fetch_window(
     }
 }
 
-/// TODO: Document build_interleaved_result.
+/// Merges control and variant search results using team-draft interleaving for
+/// A/B test experiments, paginating the interleaved list and recording team assignments.
 fn build_interleaved_result(
     control_result: SearchResult,
     variant_result: SearchResult,
@@ -335,7 +339,8 @@ fn build_interleaved_result(
     }
 }
 
-/// TODO: Document run_interleaved_search.
+/// Runs both control and variant searches for an interleaving experiment, falling
+/// back to control-only results if the variant index is not found.
 fn run_interleaved_search(
     invocation: SearchInvocation<'_>,
     request: InterleavingRequest<'_>,
@@ -377,7 +382,8 @@ fn run_interleaved_search(
     }
 }
 
-/// TODO: Document run_initial_search.
+/// Dispatches the initial search: returns empty results if pagination limit is exceeded,
+/// runs interleaved search if an experiment is active, or performs a standard search.
 fn run_initial_search(
     invocation: SearchInvocation<'_>,
     effective_index: &str,
@@ -420,7 +426,8 @@ fn run_initial_search(
     })
 }
 
-/// TODO: Document rerun_search_for_rule_geo.
+/// Re-executes the search with a wider fetch window when query rules inject geo
+/// parameters (aroundLatLng/aroundRadius) that were not present in the original request.
 fn rerun_search_for_rule_geo(
     invocation: SearchInvocation<'_>,
     effective_index: &str,
@@ -451,7 +458,8 @@ fn rerun_search_for_rule_geo(
     Ok(result)
 }
 
-/// TODO: Document execute_core_search.
+/// Orchestrates the full core search: applies hybrid fetch window, resolves
+/// relevancy strictness, runs initial search, and re-runs for rule-injected geo.
 fn execute_core_search(
     context: CoreSearchContext<'_>,
 ) -> Result<(SearchResult, Option<ExperimentContext>, bool), FlapjackError> {
@@ -501,7 +509,9 @@ fn execute_core_search(
 // Orchestrator
 // ---------------------------------------------------------------------------
 
-/// TODO: Document search_single_with_secured_hits_per_page_cap.
+/// Top-level single-index search orchestrator: validates the request, resolves
+/// experiment/personalization/hybrid context, executes search on a blocking thread,
+/// applies post-search transforms, and assembles the Algolia-compatible JSON response.
 pub(super) async fn search_single_with_secured_hits_per_page_cap(
     State(state): State<Arc<AppState>>,
     index_name: String,
@@ -679,7 +689,6 @@ struct ExtractedRequestContext {
 }
 
 impl ExtractedRequestContext {
-    /// TODO: Document ExtractedRequestContext.from_request.
     fn from_request(request: &axum::extract::Request) -> Self {
         let secured_restrictions = request
             .extensions()

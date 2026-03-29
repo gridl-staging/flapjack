@@ -101,7 +101,8 @@ fn ensure_key_is_not_expired(api_key: &ApiKey) -> Option<Response> {
     None
 }
 
-/// TODO: Document ensure_route_acl_allows_request.
+/// Checks if the API key's ACL grants access to the requested route, returning 403 if not.
+/// Admin routes require an admin key or a self-read of the key's own `/1/keys/{value}` path.
 fn ensure_route_acl_allows_request(
     key_store: &KeyStore,
     api_key: &ApiKey,
@@ -127,7 +128,8 @@ fn ensure_route_acl_allows_request(
     }
 }
 
-/// TODO: Document ensure_referer_is_allowed.
+/// Validates the request Referer header against the API key's allowed referer patterns.
+/// Returns 403 if the key has a non-empty referers list and the request's Referer doesn't match.
 fn ensure_referer_is_allowed(request: &Request, api_key: &ApiKey) -> Option<Response> {
     if api_key.referers.is_empty() {
         return None;
@@ -146,7 +148,8 @@ fn ensure_referer_is_allowed(request: &Request, api_key: &ApiKey) -> Option<Resp
     }
 }
 
-/// TODO: Document ensure_sources_allow_request.
+/// Validates the client IP and referer against the API key's `restrictSources` list
+/// and any secured-key source restrictions. Returns 403 if the client is not allowed.
 fn ensure_sources_allow_request(
     request: &Request,
     api_key: &ApiKey,
@@ -176,7 +179,8 @@ fn ensure_sources_allow_request(
     None
 }
 
-/// TODO: Document ensure_rate_limit_allows_request.
+/// Enforces per-key, per-IP hourly rate limiting via `maxQueriesPerIPPerHour`.
+/// Returns 429 if the limit is exceeded for this key+IP combination.
 fn ensure_rate_limit_allows_request(
     request: &Request,
     api_key: &ApiKey,
@@ -202,7 +206,8 @@ fn ensure_rate_limit_allows_request(
     None
 }
 
-/// TODO: Document ensure_index_access_is_allowed.
+/// Checks that the API key (and any secured-key index restrictions) permits access
+/// to the index named in the URL path. Returns 403 if the index is not allowed.
 fn ensure_index_access_is_allowed(
     path: &str,
     api_key: &ApiKey,

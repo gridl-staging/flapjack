@@ -95,7 +95,9 @@ fn build_plural_language_specs(
         .collect()
 }
 
-/// TODO: Document build_plural_language_spec.
+/// Build a `PluralLanguageSpec` for a language by checking built-in plural support
+/// and loading custom plural sets from the dictionary manager. Returns `None` if
+/// neither source provides plural data.
 fn build_plural_language_spec(
     tenant_id: &str,
     language: &str,
@@ -122,7 +124,8 @@ fn build_plural_language_spec(
     }
 }
 
-/// TODO: Document read_builtin_plural_setting.
+/// Query the dictionary manager for whether built-in plural rules are enabled for
+/// a language. Defaults to `true` on error.
 fn read_builtin_plural_setting(
     dictionary_manager: &crate::dictionaries::manager::DictionaryManager,
     tenant_id: &str,
@@ -141,7 +144,8 @@ fn read_builtin_plural_setting(
     }
 }
 
-/// TODO: Document read_custom_plural_sets.
+/// Load custom plural word sets from the dictionary manager for a language. Returns
+/// an empty vec on error, falling back to built-in rules only.
 fn read_custom_plural_sets(
     dictionary_manager: &crate::dictionaries::manager::DictionaryManager,
     tenant_id: &str,
@@ -167,7 +171,8 @@ fn read_custom_plural_sets(
     }
 }
 
-/// TODO: Document build_plural_expansion_map.
+/// Build a map from each query word to its plural forms across all language specs.
+/// Only includes words that expand to more than one form.
 fn build_plural_expansion_map(
     query_text_stopped: &str,
     plural_specs: &[PluralLanguageSpec],
@@ -187,7 +192,8 @@ fn build_plural_expansion_map(
     }
 }
 
-/// TODO: Document plural_forms_for_word.
+/// Collect all plural forms for a word: built-in language-specific expansions plus
+/// any custom sets containing the word. Deduplicates across sources.
 fn plural_forms_for_word(word: &str, plural_specs: &[PluralLanguageSpec]) -> Vec<String> {
     let mut forms = vec![word.to_string()];
     for spec in plural_specs {
@@ -220,7 +226,9 @@ fn build_decompound_language_specs(
         .collect()
 }
 
-/// TODO: Document build_decompound_language_spec.
+/// Build a `DecompoundLanguageSpec` for a language by checking the built-in
+/// decompound setting and loading custom compound word mappings from the
+/// dictionary manager.
 #[cfg(feature = "decompound")]
 fn build_decompound_language_spec(
     tenant_id: &str,
@@ -249,7 +257,9 @@ fn build_decompound_language_spec(
     }
 }
 
-/// TODO: Document read_builtin_decompound_setting.
+/// Query the dictionary manager for whether the built-in compound dictionary is
+/// enabled for a language. Checks the `Compounds` dictionary-name flag; defaults
+/// to `true` on error.
 #[cfg(feature = "decompound")]
 fn read_builtin_decompound_setting(
     dictionary_manager: &crate::dictionaries::manager::DictionaryManager,
@@ -273,7 +283,8 @@ fn read_builtin_decompound_setting(
     }
 }
 
-/// TODO: Document read_custom_decompound_map.
+/// Load custom compound-word decomposition mappings from the dictionary manager.
+/// Returns an empty map on error, falling back to built-in behavior only.
 #[cfg(feature = "decompound")]
 fn read_custom_decompound_map(
     dictionary_manager: &crate::dictionaries::manager::DictionaryManager,
@@ -301,7 +312,8 @@ fn read_custom_decompound_map(
     }
 }
 
-/// TODO: Document decompound_parts_for_word.
+/// Decompose a word into its constituent parts using both custom mappings and
+/// (if enabled) the built-in decompound dictionary. Normalizes the word before lookup.
 #[cfg(feature = "decompound")]
 fn decompound_parts_for_word(
     word: &str,
@@ -364,8 +376,6 @@ fn append_unique_terms_for_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// TODO: Document plural_forms_for_word_merges_builtin_and_custom_without_duplicates.
     #[test]
     fn plural_forms_for_word_merges_builtin_and_custom_without_duplicates() {
         let plural_specs = vec![
@@ -390,7 +400,6 @@ mod tests {
         assert_eq!(forms, vec!["shoe", "shoes", "chaussure"]);
     }
 
-    /// TODO: Document decompound_parts_for_word_merges_custom_and_normalized_keys.
     #[cfg(feature = "decompound")]
     #[test]
     fn decompound_parts_for_word_merges_custom_and_normalized_keys() {

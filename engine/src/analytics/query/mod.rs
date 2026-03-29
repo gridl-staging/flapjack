@@ -239,7 +239,8 @@ impl AnalyticsQueryEngine {
         Ok(indices)
     }
 
-    /// TODO: Document AnalyticsQueryEngine.collect_overview_metrics_for_index.
+    /// Gather search totals, daily breakdown, user counts, and click counts for a single
+    /// index within the given time range by querying both search and event parquet tables.
     async fn collect_overview_metrics_for_index(
         &self,
         index_name: &str,
@@ -284,7 +285,8 @@ impl AnalyticsQueryEngine {
         }
     }
 
-    /// TODO: Document AnalyticsQueryEngine.query_rows_or_skip_sql.
+    /// Execute SQL against the session context, returning `None` on SQL compilation
+    /// errors (missing table) and propagating execution errors.
     async fn query_rows_or_skip_sql(
         &self,
         ctx: &SessionContext,
@@ -601,7 +603,8 @@ fn map_query_ids_to_queries(rows: &[serde_json::Value]) -> HashMap<String, Strin
         .collect()
 }
 
-/// TODO: Document aggregate_counts_by_query_id.
+/// Sum a numeric field (e.g. click_count) across rows, grouping by the resolved query
+/// text via the query-ID-to-query mapping.
 fn aggregate_counts_by_query_id(
     rows: &[serde_json::Value],
     qid_to_query: &HashMap<String, String>,
@@ -622,7 +625,8 @@ fn aggregate_counts_by_query_id(
     counts_by_query
 }
 
-/// TODO: Document aggregate_click_positions_by_query.
+/// Parse the JSON `positions` array from each row and accumulate per-query position
+/// sums and counts for computing average click position.
 fn aggregate_click_positions_by_query(
     rows: &[serde_json::Value],
     qid_to_query: &HashMap<String, String>,
@@ -651,7 +655,8 @@ fn aggregate_click_positions_by_query(
     (position_sums, position_counts)
 }
 
-/// TODO: Document enrich_rows_with_click_metrics.
+/// Merge click analytics (tracked count, clicks, conversions, average position,
+/// click-through rate, conversion rate) into each search result row.
 fn enrich_rows_with_click_metrics(
     rows: Vec<serde_json::Value>,
     tracked_by_query: &HashMap<String, i64>,

@@ -21,7 +21,9 @@ pub(super) struct RankedDoc {
     doc: ScoredDocument,
 }
 
-/// TODO: Document compare_builtin_ranking_criteria.
+/// Compare two documents across the configured ranking criteria (typo, proximity,
+/// attribute, exact, words, geo, filters) in order, returning the first non-equal
+/// comparison. Falls through to custom ranking if all built-in criteria tie.
 fn compare_builtin_ranking_criteria(
     a: &RankedDoc,
     b: &RankedDoc,
@@ -132,7 +134,9 @@ pub(super) fn compute_proximity_score(
     total
 }
 
-/// TODO: Document sort_results_with_stage2_ranking.
+/// Re-rank search results using the full ranking pipeline (built-in criteria,
+/// custom ranking, optional filters, BM25 tie-breaking). Builds a
+/// `Stage2RankingContext` once and sorts in place.
 pub(super) fn sort_results_with_stage2_ranking(
     all_results: &mut Vec<ScoredDocument>,
     params: Stage2RankingContext<'_>,

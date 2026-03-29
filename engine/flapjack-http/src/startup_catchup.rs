@@ -15,28 +15,26 @@ pub fn spawn_startup_catchup(state: Arc<AppState>) {
 }
 
 /// Legacy delayed startup catch-up path. Public for testing.
-#[allow(clippy::cognitive_complexity)]
 pub async fn run_startup_catchup(state: Arc<AppState>) {
     if state.replication_manager.is_none() {
         return; // Standalone mode — nothing to do
     }
+    delayed_catchup_from_peers(&state).await;
+}
 
-    // Wait briefly so the server is accepting requests before catch-up starts.
-    // This avoids log noise during normal single-node startup.
+/// Sleep briefly then run best-effort catch-up from peers. Used by the legacy
+/// delayed startup path so the server is already accepting requests before
+/// catch-up traffic begins.
+async fn delayed_catchup_from_peers(state: &AppState) {
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
     tracing::info!("[REPL-catchup] Starting startup catch-up from peers");
-    if let Err(error) = catchup_all_tenants(&state, "REPL-catchup", false).await {
+    if let Err(error) = catchup_all_tenants(state, "REPL-catchup", false).await {
         tracing::debug!("[REPL-catchup] delayed startup catch-up skipped: {}", error);
     }
     tracing::info!("[REPL-catchup] Startup catch-up complete");
 }
 
-/// Run catch-up as a blocking pre-serve barrier: no delay, with configurable
-/// timeout. Waits for all enqueued writes to commit before returning so the
-/// node does not serve stale data. If catch-up cannot complete within the
-/// timeout, startup fails instead of serving a stale replica.
-#[allow(clippy::cognitive_complexity)]
 pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
     let has_peers = state
         .replication_manager
@@ -50,18 +48,35 @@ pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(30);
+    let strict_bootstrap = startup_catchup_strict_bootstrap_enabled();
     let timeout = tokio::time::Duration::from_secs(timeout_secs);
 
     tracing::info!(
         "[REPL-catchup] Pre-serve catch-up starting (timeout={}s)",
         timeout_secs
     );
+    if !strict_bootstrap {
+        tracing::warn!(
+            "[REPL-catchup] strict bootstrap disabled via FLAPJACK_STARTUP_CATCHUP_STRICT; node may start before all peers are reachable"
+        );
+    }
 
+    execute_timed_catchup(state, timeout, timeout_secs).await?;
+    wait_for_write_queues(state, timeout, timeout_secs).await
+}
+
+/// Run `catchup_all_tenants` with a timeout, returning a descriptive error
+/// on catch-up failure or timeout.
+async fn execute_timed_catchup(
+    state: &AppState,
+    timeout: tokio::time::Duration,
+    timeout_secs: u64,
+) -> Result<(), String> {
     match tokio::time::timeout(timeout, catchup_all_tenants(state, "REPL-catchup", true)).await {
-        Ok(Ok(())) => {}
+        Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => {
             tracing::error!("[REPL-catchup] Pre-serve catch-up failed: {}", error);
-            return Err(error);
+            Err(error)
         }
         Err(_) => {
             let error = format!(
@@ -69,11 +84,17 @@ pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
                 timeout_secs
             );
             tracing::error!("[REPL-catchup] {}", error);
-            return Err(error);
+            Err(error)
         }
     }
+}
 
-    // Wait for all write queues to commit the enqueued catch-up ops.
+/// Wait for all write queues to commit enqueued catch-up ops before serving.
+async fn wait_for_write_queues(
+    state: &AppState,
+    timeout: tokio::time::Duration,
+    timeout_secs: u64,
+) -> Result<(), String> {
     if state.manager.wait_for_pending_tasks(timeout).await {
         tracing::info!("[REPL-catchup] Pre-serve catch-up complete");
         Ok(())
@@ -84,6 +105,25 @@ pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
         );
         tracing::error!("[REPL-catchup] {}", error);
         Err(error)
+    }
+}
+
+fn startup_catchup_strict_bootstrap_enabled() -> bool {
+    parse_strict_bootstrap_override(
+        std::env::var("FLAPJACK_STARTUP_CATCHUP_STRICT")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_strict_bootstrap_override(raw_value: Option<&str>) -> bool {
+    match raw_value
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("0") | Some("false") => false,
+        _ => true,
     }
 }
 
@@ -178,7 +218,8 @@ fn retention_gap_detected(local_seq: u64, response: &GetOpsResponse) -> bool {
         .is_some_and(|oldest_retained| local_seq < oldest_retained)
 }
 
-/// TODO: Document restore_tenant_from_snapshot.
+/// Downloads a snapshot from a replication peer and installs it as the tenant's
+/// data directory, used during startup catchup when the local tenant is missing or stale.
 async fn restore_tenant_from_snapshot(
     state: &AppState,
     repl_mgr: &Arc<flapjack_replication::manager::ReplicationManager>,
@@ -211,7 +252,8 @@ async fn restore_tenant_from_snapshot(
     Ok(())
 }
 
-/// TODO: Document install_snapshot_bytes.
+/// Atomically installs a compressed snapshot as a tenant's data directory: extracts
+/// to a staging path, backs up the existing tenant dir, then renames staging into place.
 pub(crate) fn install_snapshot_bytes(
     manager: &flapjack::IndexManager,
     tenant_id: &str,
@@ -274,7 +316,8 @@ fn validate_tenant_id(tenant_id: &str) -> Result<(), String> {
     flapjack::validate_index_name(tenant_id)
         .map_err(|error| format!("invalid tenant id '{}': {}", tenant_id, error))
 }
-/// TODO: Document recover_interrupted_snapshot_restore.
+/// Recovers from a crash during snapshot restore: if a backup dir exists but the
+/// tenant dir is missing, restores from the backup to avoid data loss.
 fn recover_interrupted_snapshot_restore(
     tenant_path: &std::path::Path,
     backup_path: &std::path::Path,
@@ -311,8 +354,32 @@ fn remove_path_if_exists(path: &std::path::Path) -> Result<(), String> {
     }
 }
 
-/// TODO: Document catchup_single_tenant.
-#[allow(clippy::cognitive_complexity)]
+/// Handle a fetch-ops failure: strict mode returns an error to abort catch-up,
+/// lenient mode logs and returns `Ok(())` so the caller can skip this tenant.
+fn handle_fetch_error(
+    error: String,
+    log_prefix: &str,
+    tenant_id: &str,
+    strict_bootstrap: bool,
+) -> Result<(), String> {
+    if strict_bootstrap {
+        Err(format!(
+            "[{}] failed to fetch missed ops for tenant '{}': {}",
+            log_prefix, tenant_id, error
+        ))
+    } else {
+        tracing::debug!(
+            "[{}] Could not reach peer for '{}': {}",
+            log_prefix,
+            tenant_id,
+            error
+        );
+        Ok(())
+    }
+}
+
+/// Catches up a single tenant by fetching missed oplog entries from a replication
+/// peer, falling back to full snapshot download if the peer's log has been truncated.
 async fn catchup_single_tenant(
     state: &AppState,
     repl_mgr: &Arc<flapjack_replication::manager::ReplicationManager>,
@@ -326,19 +393,7 @@ async fn catchup_single_tenant(
     let response = match fetch_missed_ops(repl_mgr, tenant_id, local_seq).await {
         Ok(response) => response,
         Err(error) => {
-            if strict_bootstrap {
-                return Err(format!(
-                    "[{}] failed to fetch missed ops for tenant '{}': {}",
-                    log_prefix, tenant_id, error
-                ));
-            }
-            tracing::debug!(
-                "[{}] Could not reach peer for '{}': {}",
-                log_prefix,
-                tenant_id,
-                error
-            );
-            return Ok(());
+            return handle_fetch_error(error, log_prefix, tenant_id, strict_bootstrap);
         }
     };
 
@@ -379,7 +434,8 @@ async fn fetch_missed_ops(
         .await
 }
 
-/// TODO: Document apply_and_log_ops.
+/// Applies a batch of oplog entries to a tenant via the index manager and logs
+/// the resulting sequence number or error.
 async fn apply_and_log_ops(
     manager: &flapjack::IndexManager,
     tenant_id: &str,
@@ -405,10 +461,29 @@ async fn apply_and_log_ops(
 
 #[cfg(test)]
 mod tests {
-    use super::{install_snapshot_bytes, retention_gap_detected};
+    use super::{install_snapshot_bytes, parse_strict_bootstrap_override, retention_gap_detected};
     use flapjack::index::snapshot::export_to_bytes;
     use flapjack_replication::types::GetOpsResponse;
     use tempfile::TempDir;
+
+    #[test]
+    fn strict_bootstrap_override_defaults_true() {
+        assert!(parse_strict_bootstrap_override(None));
+    }
+
+    #[test]
+    fn strict_bootstrap_override_accepts_false_values() {
+        assert!(!parse_strict_bootstrap_override(Some("0")));
+        assert!(!parse_strict_bootstrap_override(Some("false")));
+        assert!(!parse_strict_bootstrap_override(Some("FALSE")));
+    }
+
+    #[test]
+    fn strict_bootstrap_override_keeps_true_for_other_values() {
+        assert!(parse_strict_bootstrap_override(Some("1")));
+        assert!(parse_strict_bootstrap_override(Some("true")));
+        assert!(parse_strict_bootstrap_override(Some("unexpected")));
+    }
 
     #[test]
     fn retention_gap_true_when_local_seq_before_oldest_retained() {
@@ -468,8 +543,6 @@ mod tests {
         // oldest retained entry — definitely not a gap.
         assert!(!retention_gap_detected(250, &response));
     }
-
-    /// TODO: Document retention_gap_true_even_when_ops_present.
     #[test]
     fn retention_gap_true_even_when_ops_present() {
         let dummy_op = flapjack::index::oplog::OpLogEntry {
@@ -491,8 +564,6 @@ mod tests {
         // full snapshot restore is needed.
         assert!(retention_gap_detected(150, &response));
     }
-
-    /// TODO: Document install_snapshot_bytes_keeps_existing_tenant_on_invalid_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_keeps_existing_tenant_on_invalid_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -510,8 +581,6 @@ mod tests {
             "existing tenant data should remain if snapshot import fails"
         );
     }
-
-    /// TODO: Document install_snapshot_bytes_replaces_existing_tenant_on_valid_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_replaces_existing_tenant_on_valid_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -538,8 +607,6 @@ mod tests {
             "restored tenant should contain snapshot content"
         );
     }
-
-    /// TODO: Document install_snapshot_bytes_restores_backup_before_retrying_failed_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_restores_backup_before_retrying_failed_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -564,8 +631,6 @@ mod tests {
             "restored backup should be moved back to the active tenant path"
         );
     }
-
-    /// TODO: Document install_snapshot_bytes_rejects_path_traversal_tenant_id.
     #[tokio::test]
     async fn install_snapshot_bytes_rejects_path_traversal_tenant_id() {
         let tmp = TempDir::new().unwrap();

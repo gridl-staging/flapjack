@@ -94,7 +94,8 @@ fn should_emit_concat_token(pending_parts: usize, concat_text: &str) -> bool {
     pending_parts >= 2 && concat_text.len() >= 3
 }
 
-/// TODO: Document push_normalized_token.
+/// Normalize a raw text fragment (stripping diacritics per config) and append it as a
+/// positioned token; skips empty results from normalization.
 fn push_normalized_token(
     tokens: &mut Vec<Token>,
     position: &mut usize,
@@ -123,7 +124,8 @@ fn push_normalized_token(
     *position += 1;
 }
 
-/// TODO: Document flush_pending_concat_token.
+/// Emit the accumulated multi-part concatenation token (e.g. "note" + "book" → "notebook")
+/// if at least two parts were joined and the result is ≥3 bytes; resets the pending state.
 fn flush_pending_concat_token(
     tokens: &mut Vec<Token>,
     position: &mut usize,
@@ -151,7 +153,8 @@ fn flush_pending_concat_token(
     );
 }
 
-/// TODO: Document read_alphanumeric_word.
+/// Consume consecutive alphanumeric characters (skipping CJK when splitting is enabled)
+/// and return the byte-offset range and collected word.
 fn read_alphanumeric_word(
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
     cjk_splitting: bool,
@@ -173,7 +176,8 @@ fn read_alphanumeric_word(
     (start, end, word)
 }
 
-/// TODO: Document update_pending_concat.
+/// Track word parts separated by non-word characters for potential concatenation.
+/// If a separator was seen, append to the existing pending buffer; otherwise start a new one.
 fn update_pending_concat(
     pending_concat: &mut Option<(usize, String)>,
     pending_parts: &mut usize,

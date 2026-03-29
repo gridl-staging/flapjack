@@ -139,7 +139,6 @@ impl<'a> SearchOptions<'a> {
 }
 
 impl<'a> Default for SearchOptions<'a> {
-    /// TODO: Document SearchOptions.default.
     fn default() -> Self {
         SearchOptions {
             filter: None,

@@ -66,9 +66,6 @@ export function splitCommaSeparatedValues(input: string): string[] {
 
 let dictionaryObjectIdSequence = 0;
 
-/**
- * TODO: Document buildObjectIdSuffix.
- */
 function buildObjectIdSuffix(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
     return globalThis.crypto.randomUUID();
@@ -111,9 +108,6 @@ export function buildEntryDescription(entry: DictionaryEntry): string {
   return `${entry.word} -> ${entry.decomposition.join(' + ')}`;
 }
 
-/**
- * TODO: Document buildDialogEntry.
- */
 export function buildDialogEntry(
   dictName: DictionaryName,
   stopwordForm: StopwordFormState,

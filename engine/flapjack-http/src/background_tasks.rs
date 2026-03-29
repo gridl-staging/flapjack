@@ -49,7 +49,7 @@ async fn list_s3_tenant_snapshots(
     Some(tenant_ids)
 }
 
-/// TODO: Document fetch_s3_tenant_prefixes.
+/// Fetches tenant prefixes from S3 for discovery of remotely-backed tenants.
 async fn fetch_s3_tenant_prefixes(
     s3_config: &flapjack::index::s3::S3Config,
 ) -> Option<Vec<String>> {
@@ -80,7 +80,8 @@ async fn fetch_s3_tenant_prefixes(
     Some(ids)
 }
 
-/// TODO: Document restore_tenant_from_s3.
+/// Downloads and imports the latest S3 snapshot for a tenant during startup,
+/// logging errors but not failing the boot sequence.
 async fn restore_tenant_from_s3(
     s3_config: &flapjack::index::s3::S3Config,
     tid: &str,
@@ -120,7 +121,8 @@ pub(crate) async fn scheduled_s3_backups(
     }
 }
 
-/// TODO: Document run_scheduled_s3_backup_pass.
+/// Runs a single scheduled S3 backup pass: iterates all tenant directories and
+/// uploads a fresh snapshot for each to the configured S3 bucket.
 async fn run_scheduled_s3_backup_pass(
     s3_config: &flapjack::index::s3::S3Config,
     data_path: &std::path::Path,
@@ -145,7 +147,7 @@ async fn run_scheduled_s3_backup_pass(
     );
 }
 
-/// TODO: Document backup_tenant_to_s3.
+/// Backs up a single tenant's index data to S3 via snapshot.
 async fn backup_tenant_to_s3(
     s3_config: &flapjack::index::s3::S3Config,
     tenant: &str,
@@ -202,7 +204,7 @@ fn spawn_ssl_renewal(infrastructure: &InfrastructureState) {
     }
 }
 
-/// TODO: Document spawn_analytics_tasks.
+/// Spawns background tasks for analytics rollup and retention cleanup.
 fn spawn_analytics_tasks(infrastructure: &InfrastructureState) {
     if !infrastructure.analytics_config.enabled {
         tracing::info!("[analytics] Analytics disabled");
@@ -244,7 +246,7 @@ fn spawn_analytics_tasks(infrastructure: &InfrastructureState) {
     }
 }
 
-/// TODO: Document spawn_s3_backup_task.
+/// Spawns a periodic S3 snapshot backup task for all tenants.
 fn spawn_s3_backup_task(infrastructure: &InfrastructureState) {
     if let Some(s3_config) = infrastructure.s3_config.as_ref() {
         if let Some(interval_secs) = infrastructure.s3_snapshot_interval_secs {
@@ -263,7 +265,7 @@ fn spawn_s3_backup_task(infrastructure: &InfrastructureState) {
     }
 }
 
-/// TODO: Document spawn_replication_tasks.
+/// Spawns replication health probe and periodic peer-sync tasks.
 fn spawn_replication_tasks(state: &Arc<AppState>, infrastructure: &InfrastructureState) {
     if let Some(replication_manager) = infrastructure.replication_manager.as_ref() {
         replication_manager.start_health_probe(10);
@@ -281,7 +283,7 @@ fn spawn_replication_tasks(state: &Arc<AppState>, infrastructure: &Infrastructur
     }
 }
 
-/// TODO: Document spawn_usage_rollup_task.
+/// Spawns a periodic task to flush in-memory usage counters to disk.
 fn spawn_usage_rollup_task(state: &Arc<AppState>) {
     if let Some(persistence) = state.usage_persistence.clone() {
         let counters = Arc::clone(&state.usage_counters);
@@ -310,7 +312,7 @@ fn spawn_usage_rollup_task(state: &Arc<AppState>) {
     }
 }
 
-/// TODO: Document spawn_metrics_refresh_task.
+/// Spawns a periodic task to refresh per-index Prometheus metric gauges.
 fn spawn_metrics_refresh_task(state: &Arc<AppState>) {
     let manager = Arc::clone(&state.manager);
     if let Some(ms) = state.metrics_state.clone() {
@@ -328,7 +330,7 @@ fn spawn_metrics_refresh_task(state: &Arc<AppState>) {
     }
 }
 
-/// TODO: Document spawn_usage_alert_task.
+/// Spawns a periodic task to check usage thresholds and send alert notifications.
 fn spawn_usage_alert_task(state: &Arc<AppState>) {
     let search_threshold: u64 = std::env::var("FLAPJACK_USAGE_ALERT_THRESHOLD_SEARCHES")
         .ok()

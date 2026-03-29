@@ -167,7 +167,8 @@ impl serde::Serialize for RemoveStopWordsValue {
 }
 
 impl<'de> serde::Deserialize<'de> for RemoveStopWordsValue {
-    /// TODO: Document RemoveStopWordsValue.deserialize.
+    /// Deserialize from either a boolean (enable/disable with defaults), a list of
+    /// language codes, or a map with explicit language lists.
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {

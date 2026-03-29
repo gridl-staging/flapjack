@@ -99,8 +99,6 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], b"ok:my-index");
     }
-
-    /// TODO: Document extractor_rejects_path_traversal_with_400_json.
     #[tokio::test]
     async fn extractor_rejects_path_traversal_with_400_json() {
         let resp = test_router()
@@ -118,8 +116,6 @@ mod tests {
         assert_eq!(json["status"], 400);
         assert!(json["message"].as_str().unwrap().contains("path traversal"));
     }
-
-    /// TODO: Document extractor_rejects_null_byte_with_400.
     #[tokio::test]
     async fn extractor_rejects_null_byte_with_400() {
         let app = Router::new().route(

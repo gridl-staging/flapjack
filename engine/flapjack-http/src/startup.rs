@@ -3,7 +3,6 @@ use fs2::FileExt;
 use std::fs::OpenOptions;
 use std::path::Path;
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 
 use crate::admin_key_persistence::{
@@ -86,15 +85,6 @@ pub(crate) fn shutdown_timeout_secs_from_env() -> u64 {
     )
 }
 
-/// Build the fmt layer for tracing, selecting JSON or text based on `LogFormat`.
-/// Returns a boxed layer so the caller uses a single init path regardless of format.
-pub(crate) fn build_log_layer<S>() -> Box<dyn Layer<S> + Send + Sync + 'static>
-where
-    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-{
-    build_log_layer_with_writer(std::io::stdout)
-}
-
 fn build_log_layer_with_writer<S, W>(writer: W) -> Box<dyn Layer<S> + Send + Sync + 'static>
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
@@ -106,6 +96,92 @@ where
     }
 }
 
+fn build_env_filter() -> tracing_subscriber::EnvFilter {
+    tracing_subscriber::EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
+}
+
+fn install_global_tracing_dispatch(dispatch: tracing::Dispatch) {
+    tracing::dispatcher::set_global_default(dispatch)
+        .expect("global tracing subscriber already set");
+}
+
+/// Build a tracing subscriber `Dispatch` suitable for use with
+/// `tracing::dispatcher::set_global_default`. Composes `EnvFilter` (from
+/// `RUST_LOG`) and the fmt layer. Accepts a writer for testability.
+#[cfg(not(feature = "otel"))]
+pub(crate) fn build_tracing_subscriber<W>(make_writer: W) -> tracing::Dispatch
+where
+    W: for<'writer> tracing_subscriber::fmt::MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let subscriber = tracing_subscriber::registry()
+        .with(build_env_filter())
+        .with(build_log_layer_with_writer(make_writer));
+    tracing::Dispatch::new(subscriber)
+}
+
+/// Build a tracing subscriber `Dispatch` with an optional OTEL layer composed in.
+/// Returns the dispatch and the OTEL shutdown guard (None when endpoint is unset).
+#[cfg(feature = "otel")]
+pub(crate) fn build_tracing_subscriber<W>(
+    make_writer: W,
+) -> (tracing::Dispatch, Option<crate::otel::OtelGuard>)
+where
+    W: for<'writer> tracing_subscriber::fmt::MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let (otel_layer, guard) = crate::otel::try_init_otel_layer().unzip();
+
+    let subscriber = tracing_subscriber::registry()
+        .with(build_env_filter())
+        .with(build_log_layer_with_writer(make_writer))
+        .with(otel_layer);
+
+    (tracing::Dispatch::new(subscriber), guard)
+}
+
+/// Initialize the global tracing subscriber. Call once at server startup,
+/// before any tracing macros are used.
+#[cfg(not(feature = "otel"))]
+pub(crate) fn init_tracing() {
+    install_global_tracing_dispatch(build_tracing_subscriber(std::io::stdout));
+}
+
+/// Initialize the global tracing subscriber with optional OTEL layer.
+/// Returns the OTEL shutdown guard when `OTEL_EXPORTER_OTLP_ENDPOINT` is configured.
+#[cfg(feature = "otel")]
+pub(crate) fn init_tracing() -> Option<crate::otel::OtelGuard> {
+    let (dispatch, guard) = build_tracing_subscriber(std::io::stdout);
+    install_global_tracing_dispatch(dispatch);
+    log_otel_startup_status(guard.is_some());
+    guard
+}
+
+#[cfg(feature = "otel")]
+fn log_otel_startup_status(otel_enabled: bool) {
+    let status_message = if otel_enabled {
+        "[otel] OTEL tracing initialized from OTEL_EXPORTER_OTLP_ENDPOINT"
+    } else {
+        "[otel] OTEL tracing disabled (OTEL_EXPORTER_OTLP_ENDPOINT unset, empty, or invalid)"
+    };
+    tracing::info!("{status_message}");
+}
+
+/// Log memory allocator and budget configuration. Extracted from
+/// `load_server_config` so tracing init and post-init logging are separate concerns.
+pub(crate) fn log_memory_configuration() {
+    let observer = flapjack::MemoryObserver::global();
+    let stats = observer.stats();
+    let budget = flapjack::get_global_budget();
+    tracing::info!(
+        allocator = stats.allocator,
+        memory_limit_mb = stats.system_limit_bytes / (1024 * 1024),
+        limit_source = %stats.limit_source,
+        high_watermark_pct = stats.high_watermark_pct,
+        critical_pct = stats.critical_pct,
+        max_concurrent_writers = budget.max_concurrent_writers(),
+        "Memory configuration loaded"
+    );
+}
+
 pub(crate) struct ServerConfig {
     pub env_mode: String,
     pub no_auth: bool,
@@ -115,7 +191,9 @@ pub(crate) struct ServerConfig {
     pub _data_dir_lock: DataDirProcessLock,
 }
 
-/// TODO: Document load_server_config.
+/// Loads startup configuration from environment variables for mode/auth, optional
+/// admin key, data directory, and bind address, then initializes logging and
+/// acquires the per-process data directory lock.
 pub(crate) fn load_server_config() -> ServerConfig {
     let env_mode = std::env::var("FLAPJACK_ENV").unwrap_or_else(|_| "development".into());
     let no_auth = std::env::var("FLAPJACK_NO_AUTH")
@@ -144,28 +222,6 @@ pub(crate) fn load_server_config() -> ServerConfig {
             std::process::exit(1);
         }
         _ => {}
-    }
-
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
-        ))
-        .with(build_log_layer())
-        .init();
-
-    {
-        let observer = flapjack::MemoryObserver::global();
-        let stats = observer.stats();
-        let budget = flapjack::get_global_budget();
-        tracing::info!(
-            allocator = stats.allocator,
-            memory_limit_mb = stats.system_limit_bytes / (1024 * 1024),
-            limit_source = %stats.limit_source,
-            high_watermark_pct = stats.high_watermark_pct,
-            critical_pct = stats.critical_pct,
-            max_concurrent_writers = budget.max_concurrent_writers(),
-            "Memory configuration loaded"
-        );
     }
 
     let data_dir = std::env::var("FLAPJACK_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
@@ -212,7 +268,8 @@ pub(crate) fn initialize_key_store(
     (key_store, admin_key, key_is_new)
 }
 
-/// TODO: Document resolve_admin_key.
+/// Resolves the admin API key: from env var, persisted key file, or generates a new
+/// random key. Returns the key value and whether it was newly generated.
 fn resolve_admin_key(
     server_config: &ServerConfig,
     admin_key_file: &Path,
@@ -423,7 +480,7 @@ pub(crate) fn format_capabilities_line() -> String {
     )
 }
 
-/// TODO: Document print_new_key_banner.
+/// Prints the first-run banner showing the auto-generated admin API key.
 fn print_new_key_banner(key: &str, url: &str, data_dir: &str) {
     use colored::Colorize;
 
@@ -512,7 +569,7 @@ fn print_auth_disabled_banner() {
     );
 }
 
-/// TODO: Document print_startup_banner.
+/// Prints the server startup banner with bind address, auth status, and timing.
 pub(crate) fn print_startup_banner(
     bind_addr: &str,
     auth: AuthStatus,
@@ -571,9 +628,9 @@ pub(crate) fn print_startup_banner(
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_data_dir_process_lock, build_log_layer_with_writer, cors_origins_from_value,
-        initialize_key_store, log_format_from_value, normalize_admin_key, read_admin_key,
-        shutdown_timeout_secs_from_value, CorsMode, LogFormat, ServerConfig,
+        acquire_data_dir_process_lock, build_log_layer_with_writer, build_tracing_subscriber,
+        cors_origins_from_value, initialize_key_store, log_format_from_value, normalize_admin_key,
+        read_admin_key, shutdown_timeout_secs_from_value, CorsMode, LogFormat, ServerConfig,
     };
     use axum::http::HeaderValue;
     use serde_json::Value;
@@ -618,7 +675,23 @@ mod tests {
 
     static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// TODO: Document with_log_format_env.
+    fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
+        match previous {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+
+    fn capture_log_output(action: impl FnOnce()) -> String {
+        let writer = TestWriter::new();
+        let subscriber =
+            tracing_subscriber::registry().with(build_log_layer_with_writer(writer.clone()));
+
+        tracing::subscriber::with_default(subscriber, action);
+
+        writer.output()
+    }
+
     fn with_log_format_env<T>(value: Option<&str>, action: impl FnOnce() -> T) -> T {
         let _guard = ENV_MUTEX.lock().expect("env mutex should lock");
         let previous = std::env::var("FLAPJACK_LOG_FORMAT").ok();
@@ -656,8 +729,6 @@ mod tests {
         assert_eq!(log_format_from_value(Some("xml")), LogFormat::Text);
         assert_eq!(log_format_from_value(Some("bogus")), LogFormat::Text);
     }
-
-    /// TODO: Document flapjack_log_format_env_selects_json_layer.
     #[test]
     fn flapjack_log_format_env_selects_json_layer() {
         with_log_format_env(Some("json"), || {
@@ -679,8 +750,6 @@ mod tests {
             assert_eq!(parsed["fields"]["message"], "env-selected json logging");
         });
     }
-
-    /// TODO: Document flapjack_log_format_env_defaults_to_text_layer_for_invalid_values.
     #[test]
     fn flapjack_log_format_env_defaults_to_text_layer_for_invalid_values() {
         with_log_format_env(Some("bogus"), || {
@@ -768,8 +837,6 @@ mod tests {
     }
 
     // --- JSON output format tests ---
-
-    /// TODO: Document json_mode_emits_valid_json_with_expected_fields.
     #[test]
     fn json_mode_emits_valid_json_with_expected_fields() {
         let writer = TestWriter::new();
@@ -810,8 +877,6 @@ mod tests {
             assert_eq!(fields["message"], "test message");
         }
     }
-
-    /// TODO: Document json_mode_includes_span_context.
     #[test]
     fn json_mode_includes_span_context() {
         let writer = TestWriter::new();
@@ -846,8 +911,6 @@ mod tests {
     }
 
     // --- Text output format test ---
-
-    /// TODO: Document text_mode_emits_human_readable_non_json_output.
     #[test]
     fn text_mode_emits_human_readable_non_json_output() {
         let writer = TestWriter::new();
@@ -877,8 +940,6 @@ mod tests {
     }
 
     // --- request_id in JSON span context test ---
-
-    /// TODO: Document json_mode_includes_request_id_from_span.
     #[test]
     fn json_mode_includes_request_id_from_span() {
         let writer = TestWriter::new();
@@ -938,7 +999,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document initialize_key_store_persists_env_admin_key_with_restrictive_permissions.
     #[cfg(unix)]
     #[test]
     fn initialize_key_store_persists_env_admin_key_with_restrictive_permissions() {
@@ -961,7 +1021,6 @@ mod tests {
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
     }
 
-    /// TODO: Document shared_admin_key_persistence_sets_restrictive_permissions.
     #[cfg(unix)]
     #[test]
     fn shared_admin_key_persistence_sets_restrictive_permissions() {
@@ -1028,6 +1087,106 @@ mod tests {
             "capabilities line should contain '{}', got: {}",
             local_expected,
             line
+        );
+    }
+
+    // --- Tracing subscriber builder tests ---
+
+    #[test]
+    fn build_tracing_subscriber_produces_working_dispatch() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex");
+        let prev_rust_log = std::env::var_os("RUST_LOG");
+        let prev_log_format = std::env::var_os("FLAPJACK_LOG_FORMAT");
+        std::env::set_var("RUST_LOG", "info");
+        std::env::remove_var("FLAPJACK_LOG_FORMAT");
+
+        let writer = TestWriter::new();
+
+        #[cfg(not(feature = "otel"))]
+        let dispatch = build_tracing_subscriber(writer.clone());
+        #[cfg(feature = "otel")]
+        let (dispatch, _otel_guard) = build_tracing_subscriber(writer.clone());
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info!("subscriber-init-smoke-test");
+        });
+
+        let output = writer.output();
+        assert!(
+            output.contains("subscriber-init-smoke-test"),
+            "expected subscriber to capture log output, got: {output}"
+        );
+
+        restore_env_var("RUST_LOG", prev_rust_log);
+        restore_env_var("FLAPJACK_LOG_FORMAT", prev_log_format);
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn build_tracing_subscriber_returns_none_guard_without_endpoint() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex");
+        let prev_rust_log = std::env::var_os("RUST_LOG");
+        let prev_otel = std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::set_var("RUST_LOG", "info");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("FLAPJACK_LOG_FORMAT");
+
+        let writer = TestWriter::new();
+        let (_dispatch, otel_guard) = build_tracing_subscriber(writer);
+
+        assert!(
+            otel_guard.is_none(),
+            "expected no OtelGuard when OTEL_EXPORTER_OTLP_ENDPOINT is unset"
+        );
+
+        restore_env_var("RUST_LOG", prev_rust_log);
+        restore_env_var("OTEL_EXPORTER_OTLP_ENDPOINT", prev_otel);
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn otel_startup_status_logs_initialized_message() {
+        let output = capture_log_output(|| {
+            super::log_otel_startup_status(true);
+        });
+
+        assert!(
+            output.contains("[otel] OTEL tracing initialized"),
+            "expected OTEL startup initialization log line, got: {output}"
+        );
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn otel_startup_status_logs_disabled_message() {
+        let output = capture_log_output(|| {
+            super::log_otel_startup_status(false);
+        });
+
+        assert!(
+            output.contains("OTEL_EXPORTER_OTLP_ENDPOINT unset, empty, or invalid"),
+            "expected OTEL disabled log line to describe all disabled cases, got: {output}"
+        );
+    }
+
+    /// Verifies the doc comment on load_server_config only claims fields it actually loads.
+    #[test]
+    fn load_server_config_doc_lists_only_fields_loaded_here() {
+        let source = include_str!("startup.rs");
+        let expected_doc =
+            "/// Loads startup configuration from environment variables for mode/auth, optional\n\
+/// admin key, data directory, and bind address, then initializes logging and\n\
+/// acquires the per-process data directory lock.";
+        let stale_doc =
+            "/// Loads server configuration from environment variables: data directory, bind address,\n\
+/// auth mode, admin key, SSL settings, replication config, and operational flags.";
+        assert!(
+            source.contains(&format!("{expected_doc}\npub(crate) fn load_server_config()")),
+            "load_server_config doc should describe only the config fields and setup performed here"
+        );
+        assert!(
+            !source.contains(&format!("{stale_doc}\npub(crate) fn load_server_config()")),
+            "load_server_config doc must not claim SSL/replication/operational flags loading"
         );
     }
 }

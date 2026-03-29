@@ -16,7 +16,8 @@ pub(super) fn write_valid_documents(
     Ok(valid_docs_json)
 }
 
-/// TODO: Document append_batch_to_oplog.
+/// Append upsert and delete operations to the oplog as a single batch. No-ops
+/// if the oplog is `None` or if the batch is empty.
 pub(super) fn append_batch_to_oplog(
     oplog: Option<&Arc<crate::index::oplog::OpLog>>,
     valid_docs_json: &[(String, serde_json::Value)],
@@ -46,7 +47,9 @@ pub(super) fn append_batch_to_oplog(
     }
 }
 
-/// TODO: Document commit_writer_with_panic_guard.
+/// Commit the Tantivy writer, catching panics via `catch_unwind` to prevent
+/// process abort. Returns commit wall-time in seconds on success; wraps
+/// panics and errors into `FlapjackError`.
 pub(super) fn commit_writer_with_panic_guard(
     writer: &mut crate::index::ManagedIndexWriter,
     tenant_id: &str,
@@ -121,7 +124,8 @@ fn refresh_search_state(
     Ok(())
 }
 
-/// TODO: Document save_vector_index.
+/// Persist the in-memory VectorIndex to disk and save the embedder fingerprint
+/// for change detection. Skips entirely when no vectors were modified in the batch.
 #[cfg(feature = "vector-search")]
 fn save_vector_index(context: &WriteFinalizationContext<'_>, prepared: &PreparedWriteOperation) {
     if !prepared.vectors_modified {
@@ -163,7 +167,9 @@ fn save_vector_index(context: &WriteFinalizationContext<'_>, prepared: &Prepared
     }
 }
 
-/// TODO: Document update_lww_state.
+/// Record the current timestamp and node ID in the LWW map for every primary
+/// upsert and delete, enabling last-writer-wins conflict resolution during
+/// replication.
 fn update_lww_state(
     lww_map: &super::super::LwwMap,
     tenant_id: &str,
@@ -187,7 +193,8 @@ fn update_lww_state(
     }
 }
 
-/// TODO: Document persist_oplog_commit_state.
+/// Write the committed sequence number to disk and truncate oplog entries older
+/// than the retention window (`FLAPJACK_OPLOG_RETENTION`, default 1000 entries).
 fn persist_oplog_commit_state(
     oplog: Option<&Arc<crate::index::oplog::OpLog>>,
     base_path: &std::path::Path,
@@ -216,7 +223,8 @@ fn persist_oplog_commit_state(
     }
 }
 
-/// TODO: Document mark_task_succeeded.
+/// Update the task status to `Succeeded` with indexed and rejected document
+/// counts. Writes to both the string task ID and numeric ID entries.
 pub(super) fn mark_task_succeeded(
     tasks: &Arc<dashmap::DashMap<String, TaskInfo>>,
     prepared: &PreparedWriteOperation,
@@ -344,8 +352,6 @@ mod tests {
             "tenants with no primary upsert/delete ids should not create LWW state entries"
         );
     }
-
-    /// TODO: Document update_lww_state_tracks_primary_upserts_and_deletes.
     #[test]
     fn update_lww_state_tracks_primary_upserts_and_deletes() {
         let lww_map: super::super::super::LwwMap = Arc::new(dashmap::DashMap::new());

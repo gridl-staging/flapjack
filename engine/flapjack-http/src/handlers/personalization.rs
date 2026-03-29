@@ -606,8 +606,6 @@ mod tests {
         let (status, _) = send_get(&app, "/1/strategies/personalization").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
-
-    /// TODO: Document test_delete_strategy_then_get_returns_404.
     #[tokio::test]
     async fn test_delete_strategy_then_get_returns_404() {
         let tmp = TempDir::new().unwrap();
@@ -636,8 +634,6 @@ mod tests {
         let (get_status, _) = send_get(&app, "/1/strategies/personalization").await;
         assert_eq!(get_status, StatusCode::NOT_FOUND);
     }
-
-    /// TODO: Document test_delete_strategy_is_idempotent_when_not_configured.
     #[tokio::test]
     async fn test_delete_strategy_is_idempotent_when_not_configured() {
         let tmp = TempDir::new().unwrap();
