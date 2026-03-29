@@ -768,8 +768,7 @@ fn promote_mode_b_settings(
 ) -> Result<(), String> {
     use flapjack::index::settings::IndexSettings;
 
-    flapjack::validate_index_name(main_index)
-        .map_err(|e| format!("invalid index name: {}", e))?;
+    flapjack::validate_index_name(main_index).map_err(|e| format!("invalid index name: {}", e))?;
     flapjack::validate_index_name(variant_index)
         .map_err(|e| format!("invalid index name: {}", e))?;
 
@@ -806,8 +805,7 @@ fn promote_mode_a_overrides(
 ) -> Result<(), String> {
     use flapjack::index::settings::IndexSettings;
 
-    flapjack::validate_index_name(main_index)
-        .map_err(|e| format!("invalid index name: {}", e))?;
+    flapjack::validate_index_name(main_index).map_err(|e| format!("invalid index name: {}", e))?;
 
     let main_settings_path = state
         .manager
