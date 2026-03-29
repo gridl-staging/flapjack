@@ -161,6 +161,9 @@ pub struct ConcludedExperimentResponse {
     pub interleaving: Option<bool>,
 }
 
+/// Extracts the conclusion payload from a concluded experiment, returning a
+/// structured response or an error Response if the conclusion is missing.
+#[allow(clippy::result_large_err)] // Response is inherently large in axum; boxing adds indirection without benefit at a single call site
 fn concluded_experiment_response(
     experiment: Experiment,
 ) -> Result<ConcludedExperimentResponse, Response> {

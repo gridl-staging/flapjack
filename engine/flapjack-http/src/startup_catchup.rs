@@ -117,14 +117,13 @@ fn startup_catchup_strict_bootstrap_enabled() -> bool {
 }
 
 fn parse_strict_bootstrap_override(raw_value: Option<&str>) -> bool {
-    match raw_value
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("0") | Some("false") => false,
-        _ => true,
-    }
+    !matches!(
+        raw_value
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("0") | Some("false")
+    )
 }
 
 /// Run one round of catch-up from peers for all local tenants.
