@@ -3785,57 +3785,6 @@ async fn conclude_without_promote_does_not_change_settings() {
 }
 
 #[tokio::test]
-async fn promote_mode_b_rejects_path_traversal_variant_index() {
-    let tmp = TempDir::new().unwrap();
-    let state = make_experiments_state(&tmp);
-
-    state.manager.create_tenant("products").unwrap();
-
-    let main_before = load_index_settings(&tmp, "products");
-    assert!(main_before.custom_ranking.is_none());
-
-    let escape_dir = tmp.path().join("../escape_promote_mode_b");
-    std::fs::create_dir_all(&escape_dir).unwrap();
-    let escape_settings_path = escape_dir.join("settings.json");
-    let mut escape_settings = main_before.clone();
-    escape_settings.custom_ranking = Some(vec!["desc(leaked)".to_string()]);
-    escape_settings.save(&escape_settings_path).unwrap();
-
-    let error = promote_mode_b_settings(&state, "products", "../escape_promote_mode_b")
-        .expect_err("path traversal variant index should be rejected");
-    assert!(
-        error.contains("invalid index name"),
-        "unexpected error for traversal attempt: {error}"
-    );
-
-    let main_after = load_index_settings(&tmp, "products");
-    assert!(
-        main_after.custom_ranking.is_none(),
-        "rejected traversal must not overwrite the main index settings"
-    );
-}
-
-#[tokio::test]
-async fn promote_mode_a_rejects_path_traversal_main_index() {
-    let tmp = TempDir::new().unwrap();
-    let state = make_experiments_state(&tmp);
-
-    let error = promote_mode_a_overrides(
-        &state,
-        "../escape_promote_mode_a",
-        &QueryOverrides {
-            custom_ranking: Some(vec!["desc(popularity)".to_string()]),
-            ..Default::default()
-        },
-    )
-    .expect_err("path traversal main index should be rejected");
-    assert!(
-        error.contains("invalid index name"),
-        "unexpected error for traversal attempt: {error}"
-    );
-}
-
-#[tokio::test]
 async fn promote_mode_a_applies_custom_ranking_to_main_index() {
     let tmp = TempDir::new().unwrap();
     let state = make_experiments_state(&tmp);
@@ -4281,37 +4230,6 @@ fn build_results_response_cuped_safety_fallback_when_adjusted_variance_not_lower
         "z-score should be unchanged when CUPED safety fallback triggers (raw={}, cuped={})",
         raw_sig.z_score,
         cuped_sig.z_score
-    );
-}
-
-#[test]
-fn collect_query_only_override_fields_returns_only_query_time_keys() {
-    let overrides = flapjack::experiments::config::QueryOverrides {
-        typo_tolerance: Some(serde_json::json!("strict")),
-        enable_synonyms: Some(true),
-        enable_rules: Some(false),
-        rule_contexts: Some(vec!["promo".to_string()]),
-        filters: Some("brand:apple".to_string()),
-        optional_filters: Some(vec!["price<1000".to_string()]),
-        custom_ranking: Some(vec!["desc(popularity)".to_string()]),
-        attribute_weights: Some(std::collections::HashMap::from([(
-            "name".to_string(),
-            2.0_f32,
-        )])),
-        remove_words_if_no_results: Some("lastWords".to_string()),
-    };
-
-    let query_only_fields = collect_query_only_override_fields(&overrides);
-    assert_eq!(
-        query_only_fields,
-        vec![
-            "typoTolerance",
-            "enableSynonyms",
-            "enableRules",
-            "ruleContexts",
-            "filters",
-            "optionalFilters",
-        ]
     );
 }
 

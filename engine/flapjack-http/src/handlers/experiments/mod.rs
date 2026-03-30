@@ -23,7 +23,9 @@ use super::dto_algolia::{
 use super::AppState;
 use crate::error_response::json_error;
 
+mod promote;
 mod schemas;
+use promote::promote_variant_settings;
 pub use schemas::{
     ArmResponse, BayesianResponse, ConcludeExperimentRequest, CreateExperimentRequest,
     GateResponse, GuardRailAlertResponse, InterleavingResponse, ListExperimentsQuery,
@@ -34,6 +36,8 @@ const DEFAULT_LIST_LIMIT: usize = 10;
 const DEFAULT_LIST_OFFSET: usize = 0;
 pub(super) const DEFAULT_ESTIMATE_DURATION_DAYS: i64 = 21;
 pub(super) const ESTIMATE_TRAFFIC_LOOKBACK_DAYS: i64 = 30;
+const EXPERIMENT_WARNING_HEADER_NAME: &str = "x-flapjack-warning";
+const VARIANT_PROMOTION_FAILED_WARNING: &str = "variant-promotion-failed";
 #[cfg(test)]
 const DEFAULT_MINIMUM_DAYS: u32 = dto_algolia::DEFAULT_MINIMUM_DAYS;
 
@@ -81,6 +85,34 @@ fn resolve_experiment_id(
         .get_numeric_id(id_str)
         .ok_or_else(|| ExperimentError::NotFound(id_str.to_string()))?;
     Ok((id_str.to_string(), numeric))
+}
+
+/// Shared implementation for start/stop/delete-style lifecycle endpoints that
+/// resolve an experiment, call a store method, and return an action response.
+fn lifecycle_action_response(
+    state: &AppState,
+    id_str: &str,
+    action: fn(&ExperimentStore, &str) -> Result<Experiment, ExperimentError>,
+) -> Response {
+    let store = match get_experiment_store(state) {
+        Some(store) => store,
+        None => return experiment_store_unavailable_response(),
+    };
+
+    let (uuid, numeric_id) = match resolve_experiment_id(store, id_str) {
+        Ok(pair) => pair,
+        Err(err) => return experiment_error_to_response(err),
+    };
+
+    match action(store, &uuid) {
+        Ok(experiment) => Json(AlgoliaAbTestActionResponse {
+            ab_test_id: numeric_id,
+            index: experiment.index_name,
+            task_id: numeric_id,
+        })
+        .into_response(),
+        Err(err) => experiment_error_to_response(err),
+    }
 }
 
 fn has_any_variant_metrics(metrics: &metrics::ExperimentMetrics) -> bool {
@@ -162,7 +194,8 @@ pub struct ConcludedExperimentResponse {
 }
 
 /// Extracts the conclusion payload from a concluded experiment, returning a
-/// structured response or an error Response if the conclusion is missing.
+/// structured response or an internal-error response when the store returns an
+/// impossible concluded experiment without a conclusion payload.
 #[allow(clippy::result_large_err)] // Response is inherently large in axum; boxing adds indirection without benefit at a single call site
 fn concluded_experiment_response(
     experiment: Experiment,
@@ -219,6 +252,19 @@ fn concluded_experiment_response(
         conclusion,
         interleaving,
     })
+}
+
+fn attach_experiment_warning_header(
+    mut response: Response,
+    warning: Option<&'static str>,
+) -> Response {
+    if let Some(warning) = warning {
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static(EXPERIMENT_WARNING_HEADER_NAME),
+            axum::http::HeaderValue::from_static(warning),
+        );
+    }
+    response
 }
 
 /// Create a new A/B test experiment with traffic splitting between a main index and variant.
@@ -598,25 +644,7 @@ pub async fn start_experiment(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
-    };
-
-    let (uuid, numeric_id) = match resolve_experiment_id(store, &id) {
-        Ok(pair) => pair,
-        Err(err) => return experiment_error_to_response(err),
-    };
-
-    match store.start(&uuid) {
-        Ok(experiment) => Json(AlgoliaAbTestActionResponse {
-            ab_test_id: numeric_id,
-            index: experiment.index_name,
-            task_id: numeric_id,
-        })
-        .into_response(),
-        Err(err) => experiment_error_to_response(err),
-    }
+    lifecycle_action_response(&state, &id, ExperimentStore::start)
 }
 
 /// Stop a running experiment, freezing its traffic assignment.
@@ -649,25 +677,7 @@ pub async fn stop_experiment(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
-    };
-
-    let (uuid, numeric_id) = match resolve_experiment_id(store, &id) {
-        Ok(pair) => pair,
-        Err(err) => return experiment_error_to_response(err),
-    };
-
-    match store.stop(&uuid) {
-        Ok(experiment) => Json(AlgoliaAbTestActionResponse {
-            ab_test_id: numeric_id,
-            index: experiment.index_name,
-            task_id: numeric_id,
-        })
-        .into_response(),
-        Err(err) => experiment_error_to_response(err),
-    }
+    lifecycle_action_response(&state, &id, ExperimentStore::stop)
 }
 
 /// Conclude a running experiment by selecting a winner and promoting the winning configuration.
@@ -722,6 +732,7 @@ pub async fn conclude_experiment(
 
     match store.conclude(&uuid, conclusion) {
         Ok(experiment) => {
+            let mut promotion_warning = None;
             if experiment.conclusion.as_ref().is_some_and(|c| c.promoted)
                 && experiment
                     .conclusion
@@ -730,136 +741,26 @@ pub async fn conclude_experiment(
                     == Some("variant")
             {
                 if let Err(e) = promote_variant_settings(&state, &experiment) {
-                    tracing::error!("failed to promote variant settings: {}", e);
+                    tracing::error!(
+                        experiment_id = %experiment.id,
+                        error = %e,
+                        "failed to promote variant settings"
+                    );
                     // Conclude succeeded, promotion failed — return the experiment
                     // with a warning header so the caller knows promotion was partial.
+                    promotion_warning = Some(VARIANT_PROMOTION_FAILED_WARNING);
                 }
             }
             match concluded_experiment_response(experiment) {
-                Ok(response) => Json(response).into_response(),
-                Err(response) => response,
+                Ok(response) => attach_experiment_warning_header(
+                    Json(response).into_response(),
+                    promotion_warning,
+                ),
+                Err(response) => attach_experiment_warning_header(response, promotion_warning),
             }
         }
         Err(err) => experiment_error_to_response(err),
     }
-}
-
-/// Apply the winning variant's settings to the main index. Mode B copies all settings from a dedicated variant index. Mode A applies promotable fields (custom_ranking, remove_words_if_no_results) from query overrides, logging any query-time-only fields that cannot be persisted. Invalidates the main index's settings cache.
-///
-/// # Arguments
-///
-/// * `state` - Application state with index manager and base path
-/// * `experiment` - The concluded experiment with variant settings to promote
-///
-/// # Returns
-///
-/// `Ok(())` on successful promotion, or `Err(msg)` if settings files cannot be loaded or saved.
-fn promote_variant_settings(state: &AppState, experiment: &Experiment) -> Result<(), String> {
-    let main_index = &experiment.index_name;
-
-    if let Some(variant_index) = experiment.variant.index_name.as_deref() {
-        promote_mode_b_settings(state, main_index, variant_index)?;
-    } else if let Some(overrides) = experiment.variant.query_overrides.as_ref() {
-        promote_mode_a_overrides(state, main_index, overrides)?;
-    }
-
-    Ok(())
-}
-
-fn promote_mode_b_settings(
-    state: &AppState,
-    main_index: &str,
-    variant_index: &str,
-) -> Result<(), String> {
-    use flapjack::index::settings::IndexSettings;
-
-    flapjack::validate_index_name(main_index).map_err(|e| format!("invalid index name: {}", e))?;
-    flapjack::validate_index_name(variant_index)
-        .map_err(|e| format!("invalid index name: {}", e))?;
-
-    let variant_settings_path = state
-        .manager
-        .base_path
-        .join(variant_index)
-        .join("settings.json");
-    let main_settings_path = state
-        .manager
-        .base_path
-        .join(main_index)
-        .join("settings.json");
-
-    let variant_settings = IndexSettings::load(&variant_settings_path)
-        .map_err(|error| format!("failed to load variant index settings: {}", error))?;
-    variant_settings
-        .save(&main_settings_path)
-        .map_err(|error| format!("failed to save promoted settings: {}", error))?;
-    state.manager.invalidate_settings_cache(main_index);
-
-    tracing::info!(
-        "promoted Mode B settings from {} to {}",
-        variant_index,
-        main_index
-    );
-    Ok(())
-}
-
-fn promote_mode_a_overrides(
-    state: &AppState,
-    main_index: &str,
-    overrides: &QueryOverrides,
-) -> Result<(), String> {
-    use flapjack::index::settings::IndexSettings;
-
-    flapjack::validate_index_name(main_index).map_err(|e| format!("invalid index name: {}", e))?;
-
-    let main_settings_path = state
-        .manager
-        .base_path
-        .join(main_index)
-        .join("settings.json");
-
-    let mut settings = IndexSettings::load(&main_settings_path)
-        .map_err(|error| format!("failed to load main index settings: {}", error))?;
-
-    if let Some(custom_ranking) = overrides.custom_ranking.as_ref() {
-        settings.custom_ranking = Some(custom_ranking.clone());
-    }
-    if let Some(remove_words_if_no_results) = overrides.remove_words_if_no_results.as_ref() {
-        settings.remove_words_if_no_results = remove_words_if_no_results.clone();
-    }
-
-    let query_only_fields = collect_query_only_override_fields(overrides);
-    if !query_only_fields.is_empty() {
-        tracing::warn!(
-            "Mode A promote: skipping query-time-only fields {:?} (no index-level equivalent)",
-            query_only_fields
-        );
-    }
-
-    settings
-        .save(&main_settings_path)
-        .map_err(|error| format!("failed to save promoted settings: {}", error))?;
-    state.manager.invalidate_settings_cache(main_index);
-
-    tracing::info!("promoted Mode A overrides to index {}", main_index);
-    Ok(())
-}
-
-fn collect_query_only_override_fields(overrides: &QueryOverrides) -> Vec<&'static str> {
-    [
-        overrides.typo_tolerance.as_ref().map(|_| "typoTolerance"),
-        overrides.enable_synonyms.as_ref().map(|_| "enableSynonyms"),
-        overrides.enable_rules.as_ref().map(|_| "enableRules"),
-        overrides.rule_contexts.as_ref().map(|_| "ruleContexts"),
-        overrides.filters.as_ref().map(|_| "filters"),
-        overrides
-            .optional_filters
-            .as_ref()
-            .map(|_| "optionalFilters"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
 }
 
 // ── Sub-modules ──────────────────────────────────────────────────
@@ -873,6 +774,84 @@ pub use results::get_experiment_results;
 use flapjack::experiments::stats;
 #[cfg(test)]
 use results::*;
+
+#[cfg(test)]
+mod review_regression_tests {
+    use super::*;
+    use crate::test_helpers::{body_json, send_empty_request, send_json_request, TestStateBuilder};
+    use axum::{
+        http::{Method, StatusCode},
+        routing::post,
+        Router,
+    };
+    use tempfile::TempDir;
+
+    fn conclude_test_router(state: Arc<AppState>) -> Router {
+        Router::new()
+            .route("/2/abtests", post(create_experiment))
+            .route("/2/abtests/:id/start", post(start_experiment))
+            .route("/2/abtests/:id/conclude", post(conclude_experiment))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn conclude_experiment_sets_warning_header_when_variant_promotion_fails() {
+        let tmp = TempDir::new().unwrap();
+        let state = TestStateBuilder::new(&tmp)
+            .with_experiments()
+            .build_shared();
+        let app = conclude_test_router(state.clone());
+
+        state.manager.create_tenant("products").unwrap();
+
+        let create_resp = send_json_request(
+            &app,
+            Method::POST,
+            "/2/abtests",
+            serde_json::json!({
+                "name": "Promotion warning test",
+                "variants": [
+                    { "index": "products", "trafficPercentage": 50, "description": "control" },
+                    { "index": "products_v2", "trafficPercentage": 50, "description": "variant" }
+                ],
+                "endAt": "2099-01-01T00:00:00Z",
+                "metrics": [{ "name": "clickThroughRate" }]
+            }),
+        )
+        .await;
+        assert_eq!(create_resp.status(), StatusCode::OK);
+        let id = body_json(create_resp).await["abTestID"].as_i64().unwrap();
+
+        let start_resp =
+            send_empty_request(&app, Method::POST, &format!("/2/abtests/{id}/start")).await;
+        assert_eq!(start_resp.status(), StatusCode::OK);
+
+        let conclude_resp = send_json_request(
+            &app,
+            Method::POST,
+            &format!("/2/abtests/{id}/conclude"),
+            serde_json::json!({
+                "winner": "variant",
+                "reason": "Promotion should warn when variant settings are missing",
+                "controlMetric": 0.12,
+                "variantMetric": 0.14,
+                "confidence": 0.97,
+                "significant": true,
+                "promoted": true
+            }),
+        )
+        .await;
+
+        assert_eq!(conclude_resp.status(), StatusCode::OK);
+        assert_eq!(
+            conclude_resp
+                .headers()
+                .get(EXPERIMENT_WARNING_HEADER_NAME)
+                .and_then(|value| value.to_str().ok()),
+            Some(VARIANT_PROMOTION_FAILED_WARNING)
+        );
+    }
+}
 
 #[cfg(test)]
 #[path = "../experiments_tests.rs"]

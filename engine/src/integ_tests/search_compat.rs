@@ -30,7 +30,6 @@ fn legacy_search_options<'a>(
 /// `search_full`) that transform positional parameters into a `SearchOptions` struct and delegate
 /// to `search_with_options`. Implemented by `IndexManager` to keep integration test call sites
 /// compiling during API migration.
-/// TODO: Document SearchCompat.
 #[allow(clippy::too_many_arguments)] // Test-only shim preserves legacy lib-test callsites while production stays `SearchOptions`-based.
 pub(crate) trait SearchCompat {
     fn search_with_facets(

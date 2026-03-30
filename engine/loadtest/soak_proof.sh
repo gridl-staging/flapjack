@@ -339,6 +339,23 @@ capture_consistency_snapshot() {
     fail "expected write index query hits during ${phase}, got ${write_index_hits}"
 }
 
+read_consistency_value() {
+  local key="$1"
+
+  awk -F= -v key="$key" '
+    $1 == key {
+      print substr($0, index($0, "=") + 1)
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
+    }
+  ' "$RESULTS_DIR/consistency.env"
+}
+
 write_summary() {
   local sample_count
   local rss_start
@@ -350,9 +367,23 @@ write_summary() {
   local heap_min
   local heap_max
   local max_pressure_level
+  local post_soak_read_doc_count
+  local post_soak_write_doc_count
+  local post_soak_macbook_hits
+  local post_soak_write_index_hits
+  local post_restart_read_doc_count
+  local post_restart_write_doc_count
+  local post_restart_macbook_hits
+  local post_restart_write_index_hits
 
-  # shellcheck disable=SC1090
-  source "$RESULTS_DIR/consistency.env"
+  post_soak_read_doc_count="$(read_consistency_value "post_soak_read_doc_count")"
+  post_soak_write_doc_count="$(read_consistency_value "post_soak_write_doc_count")"
+  post_soak_macbook_hits="$(read_consistency_value "post_soak_macbook_hits")"
+  post_soak_write_index_hits="$(read_consistency_value "post_soak_write_index_hits")"
+  post_restart_read_doc_count="$(read_consistency_value "post_restart_read_doc_count")"
+  post_restart_write_doc_count="$(read_consistency_value "post_restart_write_doc_count")"
+  post_restart_macbook_hits="$(read_consistency_value "post_restart_macbook_hits")"
+  post_restart_write_index_hits="$(read_consistency_value "post_restart_write_index_hits")"
   sample_count="$(awk 'NR > 1 { count += 1 } END { print count + 0 }' "$SAMPLE_PATH")"
   rss_start="$(awk -F, 'NR == 2 { print $2 }' "$SAMPLE_PATH")"
   rss_end="$(awk -F, 'END { print $2 }' "$SAMPLE_PATH")"
@@ -405,8 +436,23 @@ EOF
 }
 
 verify_restart_preserved_counts() {
-  # shellcheck disable=SC1090
-  source "$RESULTS_DIR/consistency.env"
+  local post_restart_read_doc_count
+  local post_soak_read_doc_count
+  local post_restart_write_doc_count
+  local post_soak_write_doc_count
+  local post_restart_macbook_hits
+  local post_soak_macbook_hits
+  local post_restart_write_index_hits
+  local post_soak_write_index_hits
+
+  post_restart_read_doc_count="$(read_consistency_value "post_restart_read_doc_count")"
+  post_soak_read_doc_count="$(read_consistency_value "post_soak_read_doc_count")"
+  post_restart_write_doc_count="$(read_consistency_value "post_restart_write_doc_count")"
+  post_soak_write_doc_count="$(read_consistency_value "post_soak_write_doc_count")"
+  post_restart_macbook_hits="$(read_consistency_value "post_restart_macbook_hits")"
+  post_soak_macbook_hits="$(read_consistency_value "post_soak_macbook_hits")"
+  post_restart_write_index_hits="$(read_consistency_value "post_restart_write_index_hits")"
+  post_soak_write_index_hits="$(read_consistency_value "post_soak_write_index_hits")"
 
   [[ "$post_restart_read_doc_count" == "$post_soak_read_doc_count" ]] || \
     fail "read index doc count changed across restart: pre=${post_soak_read_doc_count} post=${post_restart_read_doc_count}"

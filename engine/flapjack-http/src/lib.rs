@@ -54,6 +54,9 @@ mod openapi_export_tests;
 #[cfg(test)]
 pub(crate) mod openapi_test_helpers;
 #[cfg(test)]
+#[path = "openapi_tests_legacy_filter.rs"]
+mod openapi_tests;
+#[cfg(test)]
 mod router_tests;
 #[cfg(test)]
 pub(crate) mod test_helpers;

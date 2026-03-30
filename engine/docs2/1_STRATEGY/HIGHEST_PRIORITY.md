@@ -1,6 +1,6 @@
 # Highest Priority: Open-Source Launch Readiness
 
-**Updated: 2026-03-28 (OSS launch gate closed on run `23671792399`; Stage 3 proof pack and Stage 4-6 docs/proof now landed locally)**
+**Updated: 2026-03-30 (v1.0.0 released; OSS launch gate closed; all Tier 1/2 engineering complete; post-launch hardening phase)**
 
 ## Mission
 
@@ -19,27 +19,9 @@ Full checklist with per-item evidence lives in [`engine/docs2/FEATURES.md`](../F
 
 ## Current Gate
 
-Staging run `23660898127` was not a false alarm. It exposed two real launch regressions:
+**✅ Gate closed.** Staging run [`23671792399`](https://github.com/gridl-staging/flapjack/actions/runs/23671792399) on commit `745a059` completed `success` — all Rust tests, dashboard full e2e, Clippy, integration smoke, and cross-language SDK matrix passed. v1.0.0 released (run `23721789375`) with 5 binary targets + Docker image.
 
-1. **Dashboard full e2e drift** — the positive chat/navigation Playwright specs still assumed the chat UI became ready after only configuring a stub provider, but the dashboard now correctly requires a persisted embedder before rendering the composer.
-2. **API key create-status drift** — Rust tests and OpenAPI assertions still expected `201 Created` after the API contract had settled on `200 OK`.
-
-Those regressions were fixed locally, validated, committed in dev as `6160696e`, synced to staging, and pushed there as `1992167`.
-
-Replacement run `23662728127` then cleared the dashboard full e2e failure but exposed one more stale test expectation around `POST /2/abtests`. The first pass aligned the smoke test to the runtime’s `201 Created` response and unblocked the run, but launch review then confirmed that this alignment was backwards: Algolia’s current A/B testing create endpoint returns `200 OK`, so the handler, smoke test, and OpenAPI had all drifted together away from the external contract.
-
-Replacement run `23663387346` then cleared the dashboard full e2e and Rust fast-test failures but exposed one more release-surface gap: the staged/public mirror did not include the committed `engine/docs2/openapi.json` artifact, so `flapjack-http::openapi_export_tests::committed_docs2_openapi_matches_export_output` failed in CI. That sync fix was committed in dev as `db928f89`, synced to staging, and pushed there as `1accd59`.
-
-The pre-review staging run [`23664621314`](https://github.com/gridl-staging/flapjack/actions/runs/23664621314) completed `success` on staging commit `1accd59`, so it remains useful evidence for the dashboard and OpenAPI-sync fixes. It is not the final launch gate because it predates the corrected `/2/abtests` `200 OK` compatibility fix and the later deterministic-parity hardening that also corrected `POST /1/indexes/{indexName}` to `201 Created` and restored missing OpenAPI mutation-path coverage.
-
-That parity bundle did reach staging in rerun [`23670478503`](https://github.com/gridl-staging/flapjack/actions/runs/23670478503) on commit `ed0b64f`. That run cleared `Dashboard full e2e tests`, `Clippy`, `Integration smoke`, the dashboard matrix, and the language/SDK jobs. The only remaining failures were `Rust tests (fast)` and `Rust tests (all)`, both caused by the same stale assertion in `engine/tests/test_sdk_contract_crud.rs::multi_index_get_objects_returns_results_array`: its setup still expected `201 Created` while seeding with `PUT /1/indexes/{index}/{objectID}`, even though the runtime and neighboring CRUD tests correctly return `200 OK`.
-
-Follow-up rerun [`23671047087`](https://github.com/gridl-staging/flapjack/actions/runs/23671047087) on commit `18e168d` cleared that CRUD issue and again passed dashboard, Clippy, integration smoke, and the cross-language/sdk matrix. The only remaining failures were:
-
-1. `flapjack-server::crash_durability_test::acknowledged_batch_write_remains_searchable_after_crash_restart`, where the task-poll helper treated transient `Resource temporarily unavailable (os error 11)` transport errors as fatal inside its own retry loop.
-2. `flapjack-http::openapi::tests::personalization_and_experiment_lifecycle_use_typed_schemas`, where the test still expected `#/components/schemas/Experiment` after the conclude-A/B-test response had been intentionally tightened to `#/components/schemas/ConcludedExperimentResponse`.
-
-Gate-closing rerun [`23671792399`](https://github.com/gridl-staging/flapjack/actions/runs/23671792399) on commit `745a059` then completed `success`, including `Rust tests (fast)`, `Rust tests (all)`, and `Dashboard full e2e tests`. The OSS launch sign-off gate is now closed.
+The gate-closing process resolved several regressions across 6 staging CI iterations: dashboard e2e chat-UI readiness contracts, Algolia API status code parity (`/2/abtests` → `200 OK`, `POST /1/indexes/{indexName}` → `201 Created`), OpenAPI spec sync with debbie’s scrai-strip hook, crash-durability test transport error handling, and experiment schema tightening.
 
 ## Next Up After Launch Sign-Off
 

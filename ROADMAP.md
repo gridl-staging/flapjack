@@ -21,8 +21,9 @@ Launch sign-off is complete. The remaining open items are the standing post-laun
 | PR-11 | Distributed tracing (OpenTelemetry) | ✅ Done (2026-03-28) | OTLP gRPC export shipped behind the `otel` feature flag with runtime endpoint configuration via `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | — | TODO stub cleanup + HA soak | ✅ Done (2026-03-29) | ~601 stubs → real docs. HA soak test script. Doc-regression tests. Branch: `mar28_pm_3`. |
 | — | Codebase quality round 2 | ✅ Done (2026-03-29) | 15 error-leaking sites fixed, HandlerError migration, complexity decomposition, search_query refactor. Branch: `mar29`. |
-| — | Debbie sync to staging (post-cleanup) | Not started | Push all recent work (pm_3 + mar29 + otel + policy docs) to staging and verify CI green. |
-| — | GitHub release v1.0.0 | Not started | Tagged release, 5-target binary matrix, Docker image. |
+| — | File size violations | ✅ Done (2026-03-29) | 13 inline test modules extracted to `*_tests.rs`, 2 production code splits (`search_helpers.rs`, `promote.rs`). 0 files over 800-line guardrail. Branch: `mar29_pm_2`. |
+| — | Debbie sync to staging (post-cleanup) | ✅ Done (2026-03-29) | Synced, CI green on staging run `23721442173`. Root cause of prior CI failure: 18 TODO stubs on utoipa handlers caused OpenAPI mismatch after scrai strip. |
+| — | GitHub release v1.0.0 | ✅ Done (2026-03-29) | All 5 binary targets + Docker image published. Release run `23721789375`. |
 | PR-12 | Runbooks & incident response | In progress | Canonical operator docs now exist in `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`; continue refining from real incidents. |
 | PR-13 | Mobile / responsive dashboard | Not started | Desktop-first acceptable for admin tooling. |
 | — | OWASP full deep pass | Not started | Required before multi-tenant SaaS, not for OSS launch. |

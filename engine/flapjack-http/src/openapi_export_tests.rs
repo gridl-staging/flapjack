@@ -66,10 +66,19 @@ fn committed_docs2_openapi_matches_export_output() {
         .expect("committed engine/docs2/openapi.json must be readable");
     let expected = serde_json::to_string_pretty(&crate::openapi::ApiDoc::openapi())
         .expect("ApiDoc must serialize");
+    let committed_doc: serde_json::Value =
+        serde_json::from_str(&committed).expect("committed openapi.json must be valid json");
 
     assert_eq!(
         committed, expected,
         "committed engine/docs2/openapi.json must be regenerated from current ApiDoc when routes or schemas change"
+    );
+    assert_ne!(
+        committed_doc
+            .pointer("/paths/~12~1abtests~1{id}~1conclude/post/summary")
+            .and_then(|value| value.as_str()),
+        Some("TODO: Document conclude_experiment."),
+        "conclude_experiment summary should not ship as a placeholder in the committed OpenAPI export"
     );
 }
 #[test]
