@@ -1,6 +1,6 @@
 # Highest Priority: Open-Source Launch Readiness
 
-**Updated: 2026-03-30 (v1.0.0 released; OSS launch gate closed; all Tier 1/2 engineering complete; post-launch hardening phase)**
+**Updated: 2026-03-31 (v1.0.0 released; OSS launch gate closed; latest dev-main hardening merged; post-launch hardening phase)**
 
 ## Mission
 
@@ -19,15 +19,16 @@ Full checklist with per-item evidence lives in [`engine/docs2/FEATURES.md`](../F
 
 ## Current Gate
 
-**✅ Gate closed.** Staging run [`23671792399`](https://github.com/gridl-staging/flapjack/actions/runs/23671792399) on commit `745a059` completed `success` — all Rust tests, dashboard full e2e, Clippy, integration smoke, and cross-language SDK matrix passed. v1.0.0 released (run `23721789375`) with 5 binary targets + Docker image.
+**✅ Gate closed.** Gate-closing CI run `23671792399` on commit `745a059` completed `success` — all Rust tests, dashboard full e2e, Clippy, integration smoke, and cross-language SDK matrix passed. v1.0.0 released (run `23721789375`) with 5 binary targets + Docker image.
 
-The gate-closing process resolved several regressions across 6 staging CI iterations: dashboard e2e chat-UI readiness contracts, Algolia API status code parity (`/2/abtests` → `200 OK`, `POST /1/indexes/{indexName}` → `201 Created`), OpenAPI spec sync with debbie’s scrai-strip hook, crash-durability test transport error handling, and experiment schema tightening.
+The gate-closing process resolved several regressions across 6 staging CI iterations: dashboard e2e chat-UI readiness contracts, Algolia API status code parity (`/2/abtests` → `200 OK`, `POST /1/indexes/{indexName}` → `201 Created`), OpenAPI spec sync with debbie’s scrai-strip hook, crash-durability test transport error handling, and experiment schema tightening. Since then, current dev `main` also merged the public-doc sync-surface hardening pass plus a focused post-merge regression-gate follow-through (FastEmbed test nondeterminism fix and committed OpenAPI export re-sync).
 
 ## Next Up After Launch Sign-Off
 
-1. ~~**Stage 3 evidence interpretation**~~ — ✅ Resolved (2026-03-28). The 2h soak threshold breach was a classification problem, not an engine defect. Soak scenarios now use `SOAK_WRITE_THRESHOLDS` (relaxed for sustained overload) while short baselines keep `WRITE_THRESHOLDS` unchanged. See `engine/loadtest/BENCHMARKS.md` for the full rationale.
-2. **Stage 4/5/6 follow-through** — the docs/proof surfaces now exist (`engine/tests/upgrade_smoke.sh`, `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`, `engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`), but they should keep being refined from real incidents and future release cycles.
-3. **Post-launch hardening** — incident-response maturity and the deeper OWASP-style pass remain the main longer-range gaps. OpenTelemetry shipped (PR-11).
+1. **Debbie sync wave 3** — the latest dev-main hardening is not in staging/prod yet. The next sync should carry the tour closure truth-sync, HA proof retention/truth-sync, explicit public-doc sync contract + validators, regression-gate follow-through, and refreshed committed OpenAPI export together.
+2. **HA convergence/topology follow-up** — the Mar 30 soak proof retained the right evidence and wording, but the nginx-routed example topology still ends in `diverged` final document counts after restart rotation. Decide whether to harden the topology, add write-retry guidance, or document that boundary permanently.
+3. **Stage 4/5/6 follow-through** — the docs/proof surfaces now exist (`engine/tests/upgrade_smoke.sh`, `engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`, `engine/docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md`), but they should keep being refined from real incidents and future release cycles.
+4. **Post-launch hardening** — incident-response maturity and the deeper OWASP-style pass remain the main longer-range gaps. OpenTelemetry shipped (PR-11).
 
 ## Deterministic Parity Progress
 
@@ -45,10 +46,9 @@ That work already paid off by catching and fixing additional local drift that st
 - `/1/indexes/{indexName}/{objectID}/partial` was not exported in OpenAPI
 - `/2/abtests/{id}/conclude` was documented with a weaker response schema than the runtime guarantees
 
-Debbie identity-rewrite verification is now also complete for this staging tree:
+Debbie identity-rewrite verification is now also complete for the public sync targets:
 
-- staging README badges/releases URLs point at `gridl-staging/flapjack`
-- staging install commands point at `https://staging.flapjack.foo`
+- README badges/releases URLs and install commands now resolve to the target public repo/host
 - `.github/workflows/ci.yml` and `nightly.yml` are excluded from rewrite transforms (their check-repo guards use literal repo names for staging and prod only — the private dev repo is intentionally excluded to avoid burning paid Actions minutes)
 
 ## Stage 4-6 Progress

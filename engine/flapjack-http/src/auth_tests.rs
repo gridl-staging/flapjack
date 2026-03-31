@@ -1,3 +1,4 @@
+//! Stub summary for auth_tests.rs.
 use super::*;
 use crate::test_helpers::body_json;
 use axum::{
@@ -11,6 +12,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+/// TODO: Document test_search_api_key.
 fn test_search_api_key(description: &str) -> ApiKey {
     ApiKey {
         hash: String::new(),

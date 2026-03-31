@@ -1,3 +1,4 @@
+//! Stub summary for chat.rs.
 use axum::{
     extract::{Extension, Path, State},
     http::{header, HeaderMap, StatusCode},

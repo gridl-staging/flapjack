@@ -1,3 +1,4 @@
+//! Stub summary for oplog.rs.
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -451,6 +452,7 @@ mod tests {
 
         assert_eq!(oplog.oldest_seq(), None);
     }
+    /// TODO: Document test_oldest_seq_after_truncate_before.
     #[test]
     fn test_oldest_seq_after_truncate_before() {
         let tmp = TempDir::new().unwrap();

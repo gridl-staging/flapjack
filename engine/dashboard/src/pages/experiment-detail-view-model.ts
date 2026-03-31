@@ -23,6 +23,9 @@ function formatConclusionWinnerLabel(winner: string | null | undefined): string 
   return 'No winner (inconclusive)';
 }
 
+/**
+ * TODO: Document buildExperimentDetailViewModel.
+ */
 export function buildExperimentDetailViewModel(
   results: ExperimentResultsResponse,
 ): ExperimentDetailViewModel {

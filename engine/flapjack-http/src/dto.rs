@@ -336,9 +336,16 @@ impl SearchRequest {
         self.hits_per_page.unwrap_or(20)
     }
 
-    /// Validates this search request against Algolia-compatible limits (query length, page depth).
+    /// Validates this search request against Algolia-compatible limits and structural constraints.
     pub fn validate(&self) -> Result<(), FlapjackError> {
-        // Query length: Algolia enforces 512 bytes.
+        self.validate_request_limits()?;
+        self.validate_federation_options()?;
+        self.validate_structural_params()?;
+        Ok(())
+    }
+
+    /// Checks query length, hitsPerPage, pagination depth, filter length, and personalization impact.
+    fn validate_request_limits(&self) -> Result<(), FlapjackError> {
         if self.query.len() > MAX_QUERY_BYTES {
             return Err(FlapjackError::InvalidQuery(format!(
                 "Query exceeds maximum length of {} bytes (got {})",
@@ -347,7 +354,6 @@ impl SearchRequest {
             )));
         }
 
-        // hitsPerPage: Algolia caps at 1000.
         if let Some(hpp) = self.hits_per_page {
             if hpp > MAX_HITS_PER_PAGE {
                 return Err(FlapjackError::InvalidQuery(format!(
@@ -357,7 +363,6 @@ impl SearchRequest {
             }
         }
 
-        // Pagination depth: page * hitsPerPage must not exceed 20 000.
         let hpp = self.effective_hits_per_page();
         let offset = self.page.saturating_mul(hpp);
         if offset > MAX_PAGINATION_OFFSET {
@@ -367,7 +372,6 @@ impl SearchRequest {
             )));
         }
 
-        // Filter string length: cap at 4 KiB.
         if let Some(ref f) = self.filters {
             if f.len() > MAX_FILTER_BYTES {
                 return Err(FlapjackError::InvalidQuery(format!(
@@ -387,6 +391,11 @@ impl SearchRequest {
             }
         }
 
+        Ok(())
+    }
+
+    /// Checks that federation weight is finite and positive.
+    fn validate_federation_options(&self) -> Result<(), FlapjackError> {
         if let Some(federation_options) = self.federation_options.as_ref() {
             if !federation_options.weight.is_finite() || federation_options.weight <= 0.0 {
                 return Err(FlapjackError::InvalidQuery(
@@ -394,9 +403,12 @@ impl SearchRequest {
                 ));
             }
         }
+        Ok(())
+    }
 
-        // ── Stage 4: structural parameter validation ──
-
+    /// Validates advancedSyntaxFeatures, sortFacetValuesBy, exactOnSingleWordQuery,
+    /// alternativesAsExact, and minProximity.
+    fn validate_structural_params(&self) -> Result<(), FlapjackError> {
         if let Some(ref features) = self.advanced_syntax_features {
             for f in features {
                 if f != "exactPhrase" && f != "excludeWords" {

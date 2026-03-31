@@ -1,3 +1,4 @@
+//! Stub summary for criteria.rs.
 use super::super::*;
 
 #[derive(Clone, Copy)]
@@ -52,10 +53,7 @@ pub(in crate::index::manager) fn str_prefix_by_chars(input: &str, char_count: us
     input.chars().take(char_count).collect()
 }
 
-/// Computes typo distance between a query term and a candidate token.
-/// When `allow_prefix = true`, prefix matches (candidate starts with query) count as distance 0.
-/// When `allow_prefix = false`, only exact equality is distance 0; prefix matches are scored
-/// by full Damerau-Levenshtein distance.
+/// TODO: Document typo_distance_strict.
 pub(in crate::index::manager) fn typo_distance_strict(
     query_term: &str,
     candidate_token: &str,
@@ -72,17 +70,12 @@ pub(in crate::index::manager) fn typo_distance_strict(
     }
 
     let full_distance = strsim::damerau_levenshtein(query_term, candidate_token);
-    if candidate_len_chars >= query_len_chars {
+    if candidate_len_chars >= query_len_chars && allow_prefix {
         let prefix = str_prefix_by_chars(candidate_token, query_len_chars);
-        if allow_prefix && prefix == query_term {
+        if prefix == query_term {
             return 0;
         }
-        if allow_prefix {
-            let prefix_distance = strsim::damerau_levenshtein(query_term, &prefix);
-            return full_distance.min(prefix_distance);
-        }
-    } else {
-        return full_distance;
+        return full_distance.min(strsim::damerau_levenshtein(query_term, &prefix));
     }
     full_distance
 }
@@ -138,9 +131,7 @@ pub(in crate::index::manager) fn compute_typo_bucket_from_tokens(
     }
 }
 
-/// Returns `(typo_distance, is_prefix_only)` for a query term vs candidate token.
-/// `is_prefix_only` is true when the best match is a prefix match (candidate starts
-/// with query term but they are not equal) and there is no exact or fuzzy-exact match.
+/// TODO: Document classify_match.
 pub(in crate::index::manager) fn classify_match(
     query_term: &str,
     candidate_token: &str,
@@ -155,22 +146,20 @@ pub(in crate::index::manager) fn classify_match(
         return (usize::MAX, false);
     }
 
-    // Check prefix match: candidate is longer and starts with query
     if candidate_len_chars >= query_len_chars {
         let prefix = str_prefix_by_chars(candidate_token, query_len_chars);
         if prefix == query_term {
             return (0, true); // prefix match — distance 0 but prefix-only
         }
-    }
-
-    // Fall back to full edit distance (not a prefix match)
-    let full_distance = strsim::damerau_levenshtein(query_term, candidate_token);
-    if candidate_len_chars >= query_len_chars {
-        let prefix = str_prefix_by_chars(candidate_token, query_len_chars);
+        // Not a prefix match — compare full and prefix edit distances
+        let full_distance = strsim::damerau_levenshtein(query_term, candidate_token);
         let prefix_distance = strsim::damerau_levenshtein(query_term, &prefix);
         (full_distance.min(prefix_distance), false)
     } else {
-        (full_distance, false)
+        (
+            strsim::damerau_levenshtein(query_term, candidate_token),
+            false,
+        )
     }
 }
 
@@ -334,17 +323,124 @@ pub(in crate::index::manager) fn contains_contiguous_subsequence(
         .any(|window| window.iter().zip(sequence.iter()).all(|(a, b)| a == b))
 }
 
-/// Returns 0 if all prefix-eligible terms have exact matches, 1 if any
-/// prefix-eligible term's best match is prefix-only. Non-prefix-eligible terms
-/// are always treated as "exact" for this tier.
-///
-/// Exact-match semantics are controlled by `exact_on_single_word_query` (for single-term queries):
-///   - `"attribute"` (Algolia default): exact = query matches the ENTIRE attribute value (sole token).
-///   - `"word"`: exact = query matches any individual token in any attribute.
-///   - `"none"`: exact tier disabled for single-word queries → always returns 0.
-///
-/// Attributes listed in `disable_exact_on_attributes` are excluded from exact-tier consideration.
-/// Only non-disabled attribute tokens participate in both exact and prefix checks here.
+/// Check whether an attribute path is disabled for exact-tier consideration.
+/// Uses the nested-path rule: `d == path || path.starts_with("d.")`.
+fn is_path_disabled_for_exact(path: &str, disable_exact_on_attributes: &[String]) -> bool {
+    disable_exact_on_attributes
+        .iter()
+        .any(|d| d == path || path.starts_with(&format!("{}.", d)))
+}
+
+/// Partition document tokens into eligible and disabled sets based on
+/// `disable_exact_on_attributes`. Returns `(eligible, disabled)` where each
+/// entry is a slice of the document's tokens for that attribute.
+fn partition_tokens_by_exact_eligibility<'a>(
+    tokens_by_path: &'a [(usize, Vec<String>)],
+    searchable_paths: &[String],
+    disable_exact_on_attributes: &[String],
+) -> (Vec<&'a [String]>, Vec<&'a [String]>) {
+    let mut eligible: Vec<&[String]> = Vec::new();
+    let mut disabled: Vec<&[String]> = Vec::new();
+    for (path_idx, tokens) in tokens_by_path {
+        let path = searchable_paths
+            .get(*path_idx)
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        if is_path_disabled_for_exact(path, disable_exact_on_attributes) {
+            disabled.push(tokens.as_slice());
+        } else {
+            eligible.push(tokens.as_slice());
+        }
+    }
+    (eligible, disabled)
+}
+
+/// Split raw alternative forms (which may contain multi-word strings like "new york")
+/// into deduplicated single-word and multi-word alternative lists. Falls back to the
+/// original query term if no single-word alternatives remain.
+fn normalize_alternatives(
+    query_term: &str,
+    raw_alternatives: &[String],
+) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut single_word: Vec<String> = Vec::new();
+    let mut multi_word: Vec<Vec<String>> = Vec::new();
+    for alternative in raw_alternatives {
+        let tokens: Vec<String> = alternative
+            .split_whitespace()
+            .map(|part| part.to_string())
+            .collect();
+        if tokens.len() <= 1 {
+            if let Some(token) = tokens.first() {
+                if !single_word.contains(token) {
+                    single_word.push(token.clone());
+                }
+            }
+        } else if !multi_word.contains(&tokens) {
+            multi_word.push(tokens);
+        }
+    }
+    if single_word.is_empty() {
+        single_word.push(query_term.to_string());
+    }
+    (single_word, multi_word)
+}
+
+/// Check whether any eligible attribute satisfies the exact-match criterion.
+/// In "attribute" mode (single-word query), the entire attribute value must match.
+/// In "word" mode or multi-word queries, any individual token match counts.
+fn has_exact_match(
+    eligible: &[&[String]],
+    single_word_alts: &[String],
+    multi_word_alts: &[Vec<String>],
+    use_attribute_mode: bool,
+) -> bool {
+    if use_attribute_mode {
+        // Algolia "attribute" mode: attribute must contain ONLY this single term.
+        // For multi-word synonyms, the synonym must cover the entire attribute value.
+        eligible.iter().any(|tokens| {
+            (tokens.len() == 1
+                && single_word_alts
+                    .iter()
+                    .any(|alternative| tokens[0] == *alternative))
+                || multi_word_alts.iter().any(|alternative| {
+                    tokens.len() == alternative.len()
+                        && contains_contiguous_subsequence(tokens, alternative)
+                })
+        })
+    } else {
+        // "word" mode or multi-word query: any matching token counts.
+        eligible.iter().any(|tokens| {
+            tokens.iter().any(|token| {
+                single_word_alts
+                    .iter()
+                    .any(|alternative| token == alternative)
+            }) || multi_word_alts
+                .iter()
+                .any(|alternative| contains_contiguous_subsequence(tokens, alternative))
+        })
+    }
+}
+
+/// Check whether any token set contains a word-level exact or prefix match for the
+/// given alternatives. Used as the fallback when the mode-specific exact check fails:
+/// a match here means the term was found but doesn't qualify as "exact" → tier 1.
+fn any_fallback_match(
+    token_sets: &[&[String]],
+    single_word_alts: &[String],
+    multi_word_alts: &[Vec<String>],
+) -> bool {
+    token_sets.iter().any(|tokens| {
+        tokens.iter().any(|token| {
+            single_word_alts
+                .iter()
+                .any(|alternative| token == alternative || classify_match(alternative, token).1)
+        }) || multi_word_alts
+            .iter()
+            .any(|alternative| contains_contiguous_subsequence(tokens, alternative))
+    })
+}
+
+/// TODO: Document compute_exact_vs_prefix_bucket.
 pub(in crate::index::manager) fn compute_exact_vs_prefix_bucket(
     query_terms: &[String],
     tokens_by_path: &[(usize, Vec<String>)],
@@ -361,110 +457,41 @@ pub(in crate::index::manager) fn compute_exact_vs_prefix_bucket(
         return 0;
     }
 
-    let is_disabled_path = |path: &str| {
-        disable_exact_on_attributes
-            .iter()
-            .any(|d| d == path || path.starts_with(&format!("{}.", d)))
-    };
-
-    // Partition tokens once so we can detect "match only on disabled attribute".
-    let mut eligible: Vec<&[String]> = Vec::new();
-    let mut disabled: Vec<&[String]> = Vec::new();
-    for (path_idx, tokens) in tokens_by_path {
-        let path = searchable_paths
-            .get(*path_idx)
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        if is_disabled_path(path) {
-            disabled.push(tokens.as_slice());
-        } else {
-            eligible.push(tokens.as_slice());
-        }
-    }
+    let (eligible, disabled) = partition_tokens_by_exact_eligibility(
+        tokens_by_path,
+        searchable_paths,
+        disable_exact_on_attributes,
+    );
+    let use_attribute_mode = is_single_word && exact_on_single_word_query == "attribute";
 
     for (i, query_term) in query_terms.iter().enumerate() {
-        let is_prefix_eligible = prefix_eligible.get(i).copied().unwrap_or(false);
-        if !is_prefix_eligible {
+        if !prefix_eligible.get(i).copied().unwrap_or(false) {
             continue; // non-prefix terms can't produce prefix-tier distinctions
         }
 
-        let raw_alternatives = term_alternatives
+        let raw_alts = term_alternatives
             .get(i)
-            .filter(|alternatives| !alternatives.is_empty())
-            .map(|alternatives| alternatives.as_slice())
+            .filter(|alts| !alts.is_empty())
+            .map(|alts| alts.as_slice())
             .unwrap_or_else(|| std::slice::from_ref(query_term));
-        let mut single_word_alternatives: Vec<String> = Vec::new();
-        let mut multi_word_alternatives: Vec<Vec<String>> = Vec::new();
-        for alternative in raw_alternatives {
-            let tokens: Vec<String> = alternative
-                .split_whitespace()
-                .map(|part| part.to_string())
-                .collect();
-            if tokens.len() <= 1 {
-                if let Some(token) = tokens.first() {
-                    if !single_word_alternatives.contains(token) {
-                        single_word_alternatives.push(token.clone());
-                    }
-                }
-            } else if !multi_word_alternatives.contains(&tokens) {
-                multi_word_alternatives.push(tokens);
-            }
-        }
-        if single_word_alternatives.is_empty() {
-            single_word_alternatives.push(query_term.clone());
-        }
+        let (single_word_alts, multi_word_alts) = normalize_alternatives(query_term, raw_alts);
 
-        // Exact-match check — semantics depend on mode and query length.
-        let has_exact = if is_single_word && exact_on_single_word_query == "attribute" {
-            // Algolia "attribute" mode: the attribute must contain ONLY this single term.
-            // For multi-word synonyms, the synonym must cover the entire attribute value.
-            eligible.iter().any(|tokens| {
-                (tokens.len() == 1
-                    && single_word_alternatives
-                        .iter()
-                        .any(|alternative| tokens[0] == *alternative))
-                    || multi_word_alternatives.iter().any(|alternative| {
-                        tokens.len() == alternative.len()
-                            && contains_contiguous_subsequence(tokens, alternative)
-                    })
-            })
-        } else {
-            // "word" mode or multi-word query: any matching token counts.
-            eligible.iter().any(|tokens| {
-                tokens.iter().any(|token| {
-                    single_word_alternatives
-                        .iter()
-                        .any(|alternative| token == alternative)
-                }) || multi_word_alternatives
-                    .iter()
-                    .any(|alternative| contains_contiguous_subsequence(tokens, alternative))
-            })
-        };
-
-        if has_exact {
+        if has_exact_match(
+            &eligible,
+            &single_word_alts,
+            &multi_word_alts,
+            use_attribute_mode,
+        ) {
             continue; // exact match found for this term
         }
 
-        // No exact match by the current mode's definition.
-        // Check if there's ANY match (word-level exact or prefix) in eligible attributes.
-        // In "attribute" mode, a word-level exact match (e.g. "red" in "Red Shoes")
-        // is NOT an attribute-level exact, so it still produces tier 1 (non-exact).
-        let any_token_set_matches = |token_sets: &[&[String]]| {
-            token_sets.iter().any(|tokens| {
-                tokens.iter().any(|token| {
-                    single_word_alternatives.iter().any(|alternative| {
-                        token == alternative || classify_match(alternative, token).1
-                    })
-                }) || multi_word_alternatives
-                    .iter()
-                    .any(|alternative| contains_contiguous_subsequence(tokens, alternative))
-            })
-        };
-        if any_token_set_matches(&eligible) {
-            return 1; // matched but not "exact" by current mode's standard
+        // No exact match by the current mode's definition. A fallback match (word-level
+        // exact or prefix) in either eligible or disabled attributes → tier 1.
+        if any_fallback_match(&eligible, &single_word_alts, &multi_word_alts) {
+            return 1;
         }
-        if any_token_set_matches(&disabled) {
-            return 1; // only disabled attrs matched: this must not receive exact-tier credit
+        if any_fallback_match(&disabled, &single_word_alts, &multi_word_alts) {
+            return 1;
         }
     }
     0 // all prefix-eligible terms have exact matches (or no prefix-eligible terms)

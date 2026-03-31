@@ -1,3 +1,4 @@
+//! Stub summary for settings.rs.
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -347,124 +348,137 @@ pub async fn set_settings(
     Ok((status, Json(response)))
 }
 
-/// Merges a partial settings update payload into the current index settings, returning any replica entries that need processing.
-// clippy::cognitive_complexity fires at 34/25 here, but the function is a flat
-// sequence of `if let Some(v) = payload.field { settings.field = v; }` mappings
-// with no nested control flow. Splitting into helper layers or macros would add
-// indirection without reducing real decision complexity — this is the single
-// canonical field-mapping site for settings payloads.
-#[allow(clippy::cognitive_complexity)]
-fn merge_settings_payload(
-    settings: &mut IndexSettings,
-    payload: SetSettingsRequest,
-    index_name: &str,
-) -> Result<Option<Vec<flapjack::index::replica::ReplicaEntry>>, (StatusCode, String)> {
-    let distinct_value = parse_distinct_value(payload.distinct);
-
-    if let Some(facets) = payload.attributes_for_faceting {
-        settings.attributes_for_faceting = facets;
+/// Applies search-behavior fields from a settings payload to the index settings.
+///
+/// Covers fields that affect indexing, ranking, query interpretation, and search mode (15 fields).
+/// Each field is consumed via `.take()` so the caller retains ownership of remaining fields.
+fn apply_search_config_fields(settings: &mut IndexSettings, payload: &mut SetSettingsRequest) {
+    if let Some(v) = payload.attributes_for_faceting.take() {
+        settings.attributes_for_faceting = v;
     }
-    if let Some(searchable) = payload.searchable_attributes {
-        settings.searchable_attributes = Some(searchable);
+    if let Some(v) = payload.searchable_attributes.take() {
+        settings.searchable_attributes = Some(v);
     }
-    if let Some(ranking) = payload.ranking {
-        settings.ranking = Some(ranking);
+    if let Some(v) = payload.ranking.take() {
+        settings.ranking = Some(v);
     }
-    if let Some(custom) = payload.custom_ranking {
-        settings.custom_ranking = Some(custom);
+    if let Some(v) = payload.custom_ranking.take() {
+        settings.custom_ranking = Some(v);
     }
-    if let Some(retrieve) = payload.attributes_to_retrieve {
-        settings.attributes_to_retrieve = Some(retrieve);
-    }
-    if let Some(unretrievable) = payload.unretrievable_attributes {
-        settings.unretrievable_attributes = Some(unretrievable);
-    }
-    if let Some(v) = payload.pagination_limited_to {
+    if let Some(v) = payload.pagination_limited_to.take() {
         settings.pagination_limited_to = v;
     }
-    if let Some(v) = payload.attribute_for_distinct {
+    if let Some(v) = payload.remove_stop_words.take() {
+        settings.remove_stop_words = v;
+    }
+    if let Some(v) = payload.ignore_plurals.take() {
+        settings.ignore_plurals = v;
+    }
+    if let Some(v) = payload.query_languages.take() {
+        settings.query_languages = v;
+    }
+    if let Some(v) = payload.query_type.take() {
+        settings.query_type = v;
+    }
+    if let Some(v) = payload.numeric_attributes_for_filtering.take() {
+        settings.numeric_attributes_for_filtering = Some(v);
+    }
+    if let Some(v) = payload.allow_compression_of_integer_array.take() {
+        settings.allow_compression_of_integer_array = Some(v);
+    }
+    if let Some(v) = payload.relevancy_strictness.take() {
+        settings.relevancy_strictness = Some(v);
+    }
+    if let Some(v) = payload.mode.take() {
+        settings.mode = Some(v);
+    }
+    if let Some(v) = payload.semantic_search.take() {
+        settings.semantic_search = Some(v);
+    }
+    if let Some(v) = payload.enable_personalization.take() {
+        settings.enable_personalization = Some(v);
+    }
+}
+
+/// Applies response-shape and display-behavior fields from a settings payload.
+///
+/// Covers fields that control attribute retrieval, highlighting, snippeting,
+/// proximity tuning, typo tolerance overrides, and miscellaneous display options (17 fields).
+/// Each field is consumed via `.take()` so the caller retains ownership of remaining fields.
+fn apply_response_and_display_fields(
+    settings: &mut IndexSettings,
+    payload: &mut SetSettingsRequest,
+) {
+    if let Some(v) = payload.attributes_to_retrieve.take() {
+        settings.attributes_to_retrieve = Some(v);
+    }
+    if let Some(v) = payload.unretrievable_attributes.take() {
+        settings.unretrievable_attributes = Some(v);
+    }
+    if let Some(v) = payload.attribute_for_distinct.take() {
         settings.attribute_for_distinct = Some(v);
     }
+    if let Some(v) = payload.rendering_content.take() {
+        settings.rendering_content = Some(v);
+    }
+    if let Some(v) = payload.user_data.take() {
+        settings.user_data = Some(v);
+    }
+    if let Some(v) = payload.enable_rules.take() {
+        settings.enable_rules = Some(v);
+    }
+    if let Some(v) = payload.advanced_syntax_features.take() {
+        settings.advanced_syntax_features = Some(v);
+    }
+    if let Some(v) = payload.sort_facet_values_by.take() {
+        settings.sort_facet_values_by = Some(v);
+    }
+    if let Some(v) = payload.snippet_ellipsis_text.take() {
+        settings.snippet_ellipsis_text = Some(v);
+    }
+    if let Some(v) = payload.restrict_highlight_and_snippet_arrays.take() {
+        settings.restrict_highlight_and_snippet_arrays = Some(v);
+    }
+    if let Some(v) = payload.min_proximity.take() {
+        settings.min_proximity = Some(v);
+    }
+    if let Some(v) = payload.disable_exact_on_attributes.take() {
+        settings.disable_exact_on_attributes = Some(v);
+    }
+    if let Some(v) = payload.replace_synonyms_in_highlight.take() {
+        settings.replace_synonyms_in_highlight = Some(v);
+    }
+    if let Some(v) = payload.attribute_criteria_computed_by_min_proximity.take() {
+        settings.attribute_criteria_computed_by_min_proximity = Some(v);
+    }
+    if let Some(v) = payload.enable_re_ranking.take() {
+        settings.enable_re_ranking = Some(v);
+    }
+    if let Some(v) = payload.disable_typo_tolerance_on_words.take() {
+        settings.disable_typo_tolerance_on_words = Some(v);
+    }
+    if let Some(v) = payload.disable_typo_tolerance_on_attributes.take() {
+        settings.disable_typo_tolerance_on_attributes = Some(v);
+    }
+}
+
+/// TODO: Document merge_settings_payload.
+fn merge_settings_payload(
+    settings: &mut IndexSettings,
+    mut payload: SetSettingsRequest,
+    index_name: &str,
+) -> Result<Option<Vec<flapjack::index::replica::ReplicaEntry>>, (StatusCode, String)> {
+    let distinct_value = parse_distinct_value(payload.distinct.take());
     if let Some(dv) = distinct_value {
         settings.distinct = Some(dv);
     }
-    if let Some(v) = payload.remove_stop_words {
-        settings.remove_stop_words = v;
-    }
-    if let Some(v) = payload.ignore_plurals {
-        settings.ignore_plurals = v;
-    }
-    if let Some(v) = payload.query_languages {
-        settings.query_languages = v;
-    }
-    if let Some(v) = payload.query_type {
-        settings.query_type = v;
-    }
-    if let Some(v) = payload.numeric_attributes_for_filtering {
-        settings.numeric_attributes_for_filtering = Some(v);
-    }
-    if let Some(v) = payload.allow_compression_of_integer_array {
-        settings.allow_compression_of_integer_array = Some(v);
-    }
-    if let Some(v) = payload.relevancy_strictness {
-        settings.relevancy_strictness = Some(v);
-    }
 
-    apply_embedders_update(settings, payload.embedders);
+    apply_search_config_fields(settings, &mut payload);
+    apply_response_and_display_fields(settings, &mut payload);
+    apply_embedders_update(settings, payload.embedders.take());
 
-    if let Some(mode) = payload.mode {
-        settings.mode = Some(mode);
-    }
-    if let Some(ss) = payload.semantic_search {
-        settings.semantic_search = Some(ss);
-    }
-    if let Some(v) = payload.enable_personalization {
-        settings.enable_personalization = Some(v);
-    }
-    if let Some(rc) = payload.rendering_content {
-        settings.rendering_content = Some(rc);
-    }
-    if let Some(v) = payload.user_data {
-        settings.user_data = Some(v);
-    }
-    if let Some(v) = payload.enable_rules {
-        settings.enable_rules = Some(v);
-    }
-    if let Some(v) = payload.advanced_syntax_features {
-        settings.advanced_syntax_features = Some(v);
-    }
-    if let Some(v) = payload.sort_facet_values_by {
-        settings.sort_facet_values_by = Some(v);
-    }
-    if let Some(v) = payload.snippet_ellipsis_text {
-        settings.snippet_ellipsis_text = Some(v);
-    }
-    if let Some(v) = payload.restrict_highlight_and_snippet_arrays {
-        settings.restrict_highlight_and_snippet_arrays = Some(v);
-    }
-    if let Some(v) = payload.min_proximity {
-        settings.min_proximity = Some(v);
-    }
-    if let Some(v) = payload.disable_exact_on_attributes {
-        settings.disable_exact_on_attributes = Some(v);
-    }
-    if let Some(v) = payload.replace_synonyms_in_highlight {
-        settings.replace_synonyms_in_highlight = Some(v);
-    }
-    if let Some(v) = payload.attribute_criteria_computed_by_min_proximity {
-        settings.attribute_criteria_computed_by_min_proximity = Some(v);
-    }
-    if let Some(v) = payload.enable_re_ranking {
-        settings.enable_re_ranking = Some(v);
-    }
-    if let Some(v) = payload.disable_typo_tolerance_on_words {
-        settings.disable_typo_tolerance_on_words = Some(v);
-    }
-    if let Some(v) = payload.disable_typo_tolerance_on_attributes {
-        settings.disable_typo_tolerance_on_attributes = Some(v);
-    }
-
-    let validated_replicas = validate_and_apply_replicas(settings, payload.replicas, index_name)?;
+    let validated_replicas =
+        validate_and_apply_replicas(settings, payload.replicas.take(), index_name)?;
     warn_neural_without_embedders(settings);
     Ok(validated_replicas)
 }
@@ -539,6 +553,7 @@ fn warn_neural_without_embedders(settings: &IndexSettings) {
     }
 }
 
+/// TODO: Document log_embedder_changes.
 fn log_embedder_changes(
     old: &Option<HashMap<String, serde_json::Value>>,
     settings: &IndexSettings,

@@ -8,20 +8,22 @@ capability, configuring embedders, and running your first hybrid search query.
 
 ## 1. Build with vector search
 
-Vector search requires the `vector-search` feature flag at compile time:
+The default `flapjack-server` build now includes both vector search and local
+embedding support:
 
 ```bash
 cd engine
-cargo build -p flapjack-server --release --features vector-search
+cargo build -p flapjack-server --release
 ```
 
-For local embedding with FastEmbed, add the `vector-search-local` flag:
+If you intentionally want a lean text-only binary, opt out of default features:
 
 ```bash
-cargo build -p flapjack-server --release --features vector-search-local
+cargo build -p flapjack-server --release --no-default-features
 ```
 
-`vector-search-local` implies `vector-search`.
+To force an explicit vector-enabled build on top of a `--no-default-features`
+workflow, use `--features vector-search-local`.
 
 ## 2. Verify capabilities
 
@@ -31,16 +33,16 @@ After starting the server, check `/health`:
 curl -s http://127.0.0.1:7700/health | jq '.capabilities'
 ```
 
-Expected output with `--features vector-search`:
+Expected output for a lean text-only build:
 
 ```json
 {
-  "vectorSearch": true,
+  "vectorSearch": false,
   "vectorSearchLocal": false
 }
 ```
 
-Expected output with `--features vector-search-local`:
+Expected output for the default build:
 
 ```json
 {
@@ -114,7 +116,7 @@ curl -s -X PUT http://127.0.0.1:7700/1/indexes/products/settings \
 
 ### Option D: Local embedding with FastEmbed
 
-Requires a binary built with `--features vector-search-local`.
+Available in the default `flapjack-server` build.
 
 ```bash
 curl -s -X PUT http://127.0.0.1:7700/1/indexes/products/settings \

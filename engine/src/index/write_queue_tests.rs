@@ -1,3 +1,4 @@
+//! Stub summary for write_queue_tests.rs.
 use super::*;
 use crate::index::memory::{MemoryBudget, MemoryBudgetConfig};
 use std::collections::HashMap;
@@ -399,6 +400,7 @@ async fn test_create_write_queue_with_vector_indices() {
 mod auto_embed_tests {
     use super::*;
     use crate::types::FieldValue;
+    use serial_test::serial;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -418,16 +420,21 @@ mod auto_embed_tests {
         Arc<crate::index::oplog::OpLog>,
     );
 
-    /// Helper to create a write queue with embedder settings and shared vector indices.
-    fn setup_write_queue_with_embedder(
+    /// Shared core: creates tenant dir, writes settings, builds WriteQueueContext.
+    fn setup_write_queue_core(
         tmp: &tempfile::TempDir,
         tenant_id: &str,
         embedder_settings: Option<HashMap<String, serde_json::Value>>,
-    ) -> EmbedderWriteQueueSetup {
+        oplog: Option<Arc<crate::index::oplog::OpLog>>,
+    ) -> (
+        WriteQueue,
+        tokio::task::JoinHandle<crate::error::Result<()>>,
+        Arc<dashmap::DashMap<String, TaskInfo>>,
+        VectorIndicesMap,
+    ) {
         let tenant_path = tmp.path().join(tenant_id);
         std::fs::create_dir_all(&tenant_path).unwrap();
 
-        // Write settings with embedder config
         let settings = crate::index::settings::IndexSettings {
             embedders: embedder_settings,
             ..Default::default()
@@ -443,7 +450,6 @@ mod auto_embed_tests {
         let facet_cache = Arc::new(dashmap::DashMap::new());
         let lww_map = Arc::new(dashmap::DashMap::new());
         let vector_indices: VectorIndicesMap = Arc::new(dashmap::DashMap::new());
-
         let vector_ctx = VectorWriteContext::new(Arc::clone(&vector_indices));
 
         let (tx, handle) = create_write_queue(WriteQueueContext {
@@ -452,13 +458,22 @@ mod auto_embed_tests {
             _writers: writers,
             tasks: Arc::clone(&tasks),
             base_path: tmp.path().to_path_buf(),
-            oplog: None,
+            oplog,
             facet_cache,
             lww_map,
             vector_ctx,
         });
 
         (tx, handle, tasks, vector_indices)
+    }
+
+    /// Helper to create a write queue with embedder settings (no oplog).
+    fn setup_write_queue_with_embedder(
+        tmp: &tempfile::TempDir,
+        tenant_id: &str,
+        embedder_settings: Option<HashMap<String, serde_json::Value>>,
+    ) -> EmbedderWriteQueueSetup {
+        setup_write_queue_core(tmp, tenant_id, embedder_settings, None)
     }
 
     /// Create REST embedder config JSON (single-input template).
@@ -1517,8 +1532,7 @@ mod auto_embed_tests {
 
     // ── Oplog vector storage tests (8.7) ──
 
-    /// Helper that creates a write queue with an oplog (unlike setup_write_queue_with_embedder
-    /// which passes None for oplog). Returns the oplog Arc so tests can read entries back.
+    /// TODO: Document setup_write_queue_with_oplog.
     fn setup_write_queue_with_oplog(
         tmp: &tempfile::TempDir,
         tenant_id: &str,
@@ -1527,43 +1541,37 @@ mod auto_embed_tests {
         let tenant_path = tmp.path().join(tenant_id);
         std::fs::create_dir_all(&tenant_path).unwrap();
 
-        let settings = crate::index::settings::IndexSettings {
-            embedders: embedder_settings,
-            ..Default::default()
-        };
-        let settings_json = serde_json::to_string_pretty(&settings).unwrap();
-        std::fs::write(tenant_path.join("settings.json"), settings_json).unwrap();
-
-        let schema = crate::index::schema::Schema::builder().build();
-        let index = Arc::new(crate::index::Index::create(&tenant_path, schema).unwrap());
-
-        let writers = Arc::new(dashmap::DashMap::new());
-        let tasks: Arc<dashmap::DashMap<String, TaskInfo>> = Arc::new(dashmap::DashMap::new());
-        let facet_cache = Arc::new(dashmap::DashMap::new());
-        let lww_map = Arc::new(dashmap::DashMap::new());
-        let vector_indices: VectorIndicesMap = Arc::new(dashmap::DashMap::new());
-        let vector_ctx = VectorWriteContext::new(Arc::clone(&vector_indices));
-
         let oplog_dir = tenant_path.join("oplog");
         let oplog =
             Arc::new(crate::index::oplog::OpLog::open(&oplog_dir, tenant_id, "test_node").unwrap());
 
-        let (tx, handle) = create_write_queue(WriteQueueContext {
-            tenant_id: tenant_id.to_string(),
-            index,
-            _writers: writers,
-            tasks: Arc::clone(&tasks),
-            base_path: tmp.path().to_path_buf(),
-            oplog: Some(Arc::clone(&oplog)),
-            facet_cache,
-            lww_map,
-            vector_ctx,
-        });
+        let (tx, handle, tasks, vector_indices) =
+            setup_write_queue_core(tmp, tenant_id, embedder_settings, Some(Arc::clone(&oplog)));
 
         (tx, handle, tasks, vector_indices, oplog)
     }
 
-    /// Verify that vectors computed by the REST embedder are injected into the oplog body under `_vectors` so replicas can rebuild the vector index without re-calling the embedding API.
+    /// Extract vectors for a named embedder from the first upsert entry in the oplog.
+    fn extract_oplog_vectors(oplog: &crate::index::oplog::OpLog, embedder_name: &str) -> Vec<f64> {
+        let entries = oplog.read_since(0).unwrap();
+        let upsert = entries
+            .iter()
+            .find(|e| e.op_type == "upsert")
+            .expect("should have an upsert entry");
+        let body = upsert.payload.get("body").expect("upsert should have body");
+        let vectors = body.get("_vectors").expect("body should contain _vectors");
+        let embedder_vec = vectors
+            .get(embedder_name)
+            .unwrap_or_else(|| panic!("_vectors should have '{embedder_name}' embedder"));
+        embedder_vec
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    }
+
+    /// TODO: Document test_computed_vectors_stored_in_oplog.
     #[tokio::test]
     async fn test_computed_vectors_stored_in_oplog() {
         let server = MockServer::start().await;
@@ -1604,33 +1612,14 @@ mod auto_embed_tests {
         handle.await.unwrap().unwrap();
 
         // Read oplog and verify computed vectors are stored
-        let entries = oplog.read_since(0).unwrap();
-        let upsert = entries
-            .iter()
-            .find(|e| e.op_type == "upsert")
-            .expect("should have an upsert entry");
-
-        let body = upsert.payload.get("body").expect("upsert should have body");
-        let vectors = body
-            .get("_vectors")
-            .expect("body should contain _vectors after embedding");
-        let default_vec = vectors
-            .get("default")
-            .expect("_vectors should have 'default' embedder");
-
-        let vec_array: Vec<f64> = default_vec
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_f64().unwrap())
-            .collect();
+        let vec_array = extract_oplog_vectors(&oplog, "default");
         assert_eq!(vec_array.len(), 3);
         assert!((vec_array[0] - 0.1).abs() < 0.01);
         assert!((vec_array[1] - 0.2).abs() < 0.01);
         assert!((vec_array[2] - 0.3).abs() < 0.01);
     }
 
-    /// Verify that user-provided vectors submitted via `_vectors` are preserved verbatim in the oplog body for recovery without re-embedding.
+    /// TODO: Document test_user_provided_vectors_preserved_in_oplog.
     #[tokio::test]
     async fn test_user_provided_vectors_preserved_in_oplog() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1679,28 +1668,11 @@ mod auto_embed_tests {
         handle.await.unwrap().unwrap();
 
         // Read oplog and verify user-provided vectors are preserved
-        let entries = oplog.read_since(0).unwrap();
-        let upsert = entries
-            .iter()
-            .find(|e| e.op_type == "upsert")
-            .expect("should have an upsert entry");
-
-        let body = upsert.payload.get("body").unwrap();
-        let vectors = body.get("_vectors").expect("body should preserve _vectors");
-        let default_vec = vectors
-            .get("default")
-            .expect("_vectors should have 'default'");
-
-        let vec_array: Vec<f64> = default_vec
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_f64().unwrap())
-            .collect();
+        let vec_array = extract_oplog_vectors(&oplog, "default");
         assert_eq!(vec_array, vec![1.0, 0.0, 0.0]);
     }
 
-    /// Verify that when multiple embedders are configured, the oplog `_vectors` object contains entries for every embedder that produced a result.
+    /// TODO: Document test_oplog_vectors_contain_all_embedder_results.
     #[tokio::test]
     async fn test_oplog_vectors_contain_all_embedder_results() {
         let server = MockServer::start().await;
@@ -1746,41 +1718,10 @@ mod auto_embed_tests {
         handle.await.unwrap().unwrap();
 
         // Read oplog and verify both embedders' vectors are present
-        let entries = oplog.read_since(0).unwrap();
-        let upsert = entries
-            .iter()
-            .find(|e| e.op_type == "upsert")
-            .expect("should have an upsert entry");
-
-        let body = upsert.payload.get("body").unwrap();
-        let vectors = body
-            .get("_vectors")
-            .expect("body should contain _vectors with all embedders");
-
-        assert!(
-            vectors.get("embedder_a").is_some(),
-            "_vectors should contain embedder_a"
-        );
-        assert!(
-            vectors.get("embedder_b").is_some(),
-            "_vectors should contain embedder_b"
-        );
-
-        // Both should have 3-dimensional vectors
-        let vec_a: Vec<f64> = vectors["embedder_a"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_f64().unwrap())
-            .collect();
+        let vec_a = extract_oplog_vectors(&oplog, "embedder_a");
         assert_eq!(vec_a.len(), 3);
 
-        let vec_b: Vec<f64> = vectors["embedder_b"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_f64().unwrap())
-            .collect();
+        let vec_b = extract_oplog_vectors(&oplog, "embedder_b");
         assert_eq!(vec_b.len(), 3);
     }
 
@@ -1852,6 +1793,10 @@ mod auto_embed_tests {
     /// Verify that the local FastEmbed model (BGESmallENV15) automatically embeds a document on add and produces 384-dimensional vectors in the VectorIndex.
     #[cfg(feature = "vector-search-local")]
     #[tokio::test]
+    // Concurrent ONNX model cache initialization can race and flake with
+    // "Failed to retrieve onnx/model.onnx" when these tests run in parallel.
+    /// TODO: Document test_fastembed_auto_embed_on_add.
+    #[serial]
     async fn test_fastembed_auto_embed_on_add() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut embedders = HashMap::new();
@@ -1904,9 +1849,10 @@ mod auto_embed_tests {
         );
     }
 
-    /// Verify that vectors computed by the local FastEmbed model are injected into the oplog body so replicas can rebuild without re-running inference.
+    /// TODO: Document test_fastembed_vectors_in_oplog.
     #[cfg(feature = "vector-search-local")]
     #[tokio::test]
+    #[serial]
     async fn test_fastembed_vectors_in_oplog() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut embedders = HashMap::new();
@@ -1938,26 +1884,7 @@ mod auto_embed_tests {
         handle.await.unwrap().unwrap();
 
         // Read oplog and verify computed vectors are stored
-        let entries = oplog.read_since(0).unwrap();
-        let upsert = entries
-            .iter()
-            .find(|e| e.op_type == "upsert")
-            .expect("should have an upsert entry");
-
-        let body = upsert.payload.get("body").expect("upsert should have body");
-        let vectors = body
-            .get("_vectors")
-            .expect("body should contain _vectors after fastembed embedding");
-        let default_vec = vectors
-            .get("default")
-            .expect("_vectors should have 'default' embedder");
-
-        let vec_array: Vec<f64> = default_vec
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_f64().unwrap())
-            .collect();
+        let vec_array = extract_oplog_vectors(&oplog, "default");
         assert_eq!(
             vec_array.len(),
             384,

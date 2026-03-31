@@ -1,3 +1,4 @@
+//! Stub summary for server.rs.
 use std::path::Path;
 use std::sync::Arc;
 
@@ -255,6 +256,7 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    /// TODO: Document shutdown_wait_helper_returns_drained_when_manager_completes_before_deadline.
     #[tokio::test]
     async fn shutdown_wait_helper_returns_drained_when_manager_completes_before_deadline() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -277,6 +279,7 @@ mod tests {
             ["analytics-flushed", "manager-wait-begins"]
         );
     }
+    /// TODO: Document shutdown_wait_helper_returns_timed_out_when_manager_exceeds_deadline.
     #[tokio::test]
     async fn shutdown_wait_helper_returns_timed_out_when_manager_exceeds_deadline() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -300,6 +303,7 @@ mod tests {
         );
     }
 
+    /// TODO: Document full_graceful_shutdown_calls_otel_after_manager_drain.
     #[tokio::test]
     async fn full_graceful_shutdown_calls_otel_after_manager_drain() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -326,6 +330,7 @@ mod tests {
         );
     }
 
+    /// TODO: Document full_graceful_shutdown_calls_otel_even_after_timeout.
     #[tokio::test]
     async fn full_graceful_shutdown_calls_otel_even_after_timeout() {
         let events = Arc::new(Mutex::new(Vec::new()));

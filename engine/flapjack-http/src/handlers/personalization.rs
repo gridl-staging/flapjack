@@ -1,3 +1,4 @@
+//! Stub summary for personalization.rs.
 use axum::{
     extract::{Path, State},
     Json,

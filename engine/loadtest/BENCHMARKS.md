@@ -6,8 +6,7 @@
 
 - Run date (UTC): 2026-03-28T05:06:35Z
 - Run date (local): 2026-03-28 01:06:35 EDT
-- Mixed-soak results directory: `engine/loadtest/results/20260328T050635Z-mixed-soak/`
-- Write-soak results directory: `engine/loadtest/results/20260328T050635Z-write-soak/`
+- Results: stored locally under `engine/loadtest/results/` (gitignored, not included in the repository)
 - Mixed-soak command: `cd engine/loadtest && FLAPJACK_LOADTEST_BASE_URL=http://127.0.0.1:7701 FLAPJACK_LOADTEST_SOAK_DURATION=2h bash soak_proof.sh --scenario mixed-soak`
 - Write-soak command: `cd engine/loadtest && FLAPJACK_LOADTEST_BASE_URL=http://127.0.0.1:7702 FLAPJACK_LOADTEST_SOAK_DURATION=2h bash soak_proof.sh --scenario write-soak`
 - Release binary: `engine/target/release/flapjack`
@@ -70,29 +69,21 @@ The canonical threshold definitions live in `engine/loadtest/lib/throughput.js`.
 ### Soak Evidence Sources
 
 - `engine/loadtest/soak_proof.sh`
-- `engine/loadtest/results/20260328T050635Z-mixed-soak/summary.md`
-- `engine/loadtest/results/20260328T050635Z-mixed-soak/mixed-soak.stdout.txt`
-- `engine/loadtest/results/20260328T050635Z-mixed-soak/mixed-soak.json.gz`
-- `engine/loadtest/results/20260328T050635Z-mixed-soak/memory_samples.csv`
-- `engine/loadtest/results/20260328T050635Z-write-soak/summary.md`
-- `engine/loadtest/results/20260328T050635Z-write-soak/write-soak.stdout.txt`
-- `engine/loadtest/results/20260328T050635Z-write-soak/write-soak.json.gz`
-- `engine/loadtest/results/20260328T050635Z-write-soak/memory_samples.csv`
+- Run artifacts stored locally under `engine/loadtest/results/` (gitignored)
 
 ---
 
-## Stage 5 HA Soak Proof (Mar 29, 2026)
+## HA Soak Proof (Mar 30, 2026)
 
 ### Run Metadata
 
-- Run date (UTC): 2026-03-29
-- Harness: `engine/_dev/s/manual-tests/ha-soak-test.sh`
-- Validation command: `bash engine/_dev/s/manual-tests/ha-soak-test.sh` (default 2h)
-- Short smoke: `FLAPJACK_LOADTEST_SOAK_DURATION=2m FLAPJACK_HA_SOAK_RESTART_INTERVAL_SECONDS=30 bash engine/_dev/s/manual-tests/ha-soak-test.sh`
+- Run date (UTC): 2026-03-30
+- Harness: dev-repo HA soak harness
+- Validation command: dev-repo HA soak harness (default 2h)
+- Short smoke: dev-repo HA soak harness with `FLAPJACK_LOADTEST_SOAK_DURATION=2m` and `FLAPJACK_HA_SOAK_RESTART_INTERVAL_SECONDS=30`
 - Compose target: `engine/examples/ha-cluster/docker-compose.yml`
 - Load scenario: `engine/loadtest/scenarios/mixed-soak.js` (15 read VUs + 4 write VUs)
-- Validation-run results directory: `engine/loadtest/results/20260329T020325Z-ha-soak/`
-- Full-duration results directory: `engine/loadtest/results/20260329T041111Z-ha-soak/`
+- Results: stored locally under `engine/loadtest/results/` (gitignored)
 
 ### Hardware and OS
 
@@ -112,85 +103,70 @@ The canonical threshold definitions live in `engine/loadtest/lib/throughput.js`.
 | Convergence timeout | `120s` | `FLAPJACK_HA_SOAK_CONVERGENCE_TIMEOUT_SECONDS` |
 | k6 per-request JSON | Disabled | Cluster evidence comes from CSV/log artifacts, not per-request metrics |
 
-### What This Soak Proves
+### Harness Classification
 
-- The 3-node nginx-routed compose topology survives continuous write+search traffic while nodes restart in rotation
+| Field | Value |
+|---|---|
+| Final classification | `warning-findings` |
+| Convergence result | `diverged` |
+| k6 exit code | `99` |
+| Restart count | `39` |
+
+The harness classifies via `classify_soak_result()`: `PASS` requires convergence reached AND k6 exit 0; `warning-findings` indicates either divergence or non-zero k6 exit without hard failure. This run received `warning-findings` because document counts diverged across the three nodes and k6 thresholds breached under sustained overload.
+
+### What This Soak Demonstrates
+
+- The 3-node nginx-routed compose topology survives 2h of continuous write+search traffic while nodes restart in rotation (39 restarts across 3 nodes)
 - Each restarted node returns to healthy state and resumes serving traffic (pre-serve catch-up via `run_pre_serve_catchup`)
 - nginx `proxy_next_upstream` reroutes around failed nodes within 1-2 requests
 - The harness automatically records restart timestamps, node health, per-node document counts, and cluster status at each restart and post-soak
+- All three nodes remained healthy (`ok`) throughout the entire 2h run
 
 ### What This Soak Does Not Prove
 
+- **Document convergence** — per-node counts diverged (see finding below)
 - Leader election or automatic promotion (this compose topology has none)
 - Load-balancer redundancy (nginx is a single point of failure in this example)
 - Hardware-independent SLOs
 - That all HA failure modes are covered (only single-node restart rotation is tested)
 
-### Validation Run (2m, completed)
-
-The 2m validation run proves the harness end-to-end with a compressed restart cadence (30s intervals):
-
-| Metric | Value |
-|---|---|
-| Duration | 2m |
-| Restart interval | 30s |
-| Total iterations | 229,168 |
-| Throughput | ~1,909 req/s |
-| 5xx rate | 0.01% |
-| Restarts completed | 3 (node-a, node-b, node-c) |
-| All nodes healthy post-restart | Yes |
-| k6 exit code | 99 (thresholds breached — expected under sustained overload) |
-| Convergence result | Diverged |
-
-**Restart events (validation run):**
-
-| Timestamp (UTC) | Node | Event | Time to healthy |
-|---|---|---|---|
-| 2026-03-29T02:04:01Z | node-a | restart_started | 11s |
-| 2026-03-29T02:04:43Z | node-b | restart_started | 12s |
-| 2026-03-29T02:05:25Z | node-c | restart_started | 11s |
-
-**Per-node document counts (validation run, `loadtest_write` index):**
-
-| Sample | Phase | node-a | node-b | node-c |
-|---|---|---:|---:|---:|
-| post_seed | initial | 0 | 0 | 0 |
-| post_restart | node-a | 1,290 | 898 | 1,244 |
-| post_restart | node-b | 2,205 | 2,009 | 2,545 |
-| post_restart | node-c | 3,526 | 3,076 | 3,845 |
-| post_soak | final | 3,560 | 3,111 | 3,845 |
-
 ### Per-Node Consistency Finding
 
-Document counts diverge across nodes because nginx drops in-flight writes to restarting nodes — the write response returns an error and the document is not replicated. This is a **structural property of the nginx-routed topology**, not a bug in the replication engine:
+Document counts remained diverged across nodes at the end of the post-soak convergence window. The retained proof establishes a real topology/runtime gap, but it does **not** isolate a single root cause yet. The current evidence and code paths point to an interaction between nginx-routed restart windows and the current async replication/catch-up behavior:
 
-- Writes that reach a healthy node are replicated to peers via oplog
-- Writes routed to a restarting node fail at the nginx layer (connection refused or timeout) before reaching the engine
-- The lost writes are never acknowledged to the client (the k6 scenario correctly counts these as failed requests)
-- Post-restart catch-up only replays ops that were committed to a peer's oplog, not writes that nginx never forwarded
+- Writes can fail at the nginx layer while a target node is restarting (connection refused or timeout), so some client-visible write attempts are not committed.
+- Replication to peers is asynchronous, and catch-up only replays operations that already exist in some peer oplog.
+- The remaining follow-up is therefore a real product/topology decision: harden the example topology, add stronger client retry/write guidance, improve replication/catch-up behavior, or document the limitation as a boundary.
 
-This finding is consistent across all validation runs. The divergence magnitude scales with write rate × restart duration × number of restarts.
+**Final post-soak document counts (`loadtest_write` index):**
 
-### Full-Duration Run (2h)
+| node-a | node-b | node-c |
+|---:|---:|---:|
+| 65,323 | 67,309 | 66,724 |
 
-The full-duration run uses default configuration (2h duration, 180s restart interval). Evidence artifacts are captured automatically by the harness to `engine/loadtest/results/<timestamp>-ha-soak/`:
+The divergence magnitude scales with write rate × restart duration × number of restarts. Over 39 restarts across 2h, the max divergence was ~1,986 docs (~3% of the highest count).
 
-- `cluster_samples.csv` — timestamped per-node health and document counts at each restart and post-soak
-- `restart_events.csv` — restart start/healthy timestamps for each node
-- `cluster_status_snapshots.log` — full cluster status JSON at each sample point
-- `mixed-soak.stdout.txt` — k6 progress and final summary
-- `summary.md` — machine-generated run summary with all metadata
+### Artifact Pack
+
+Evidence artifacts (stored locally, gitignored):
+
+| File | Contents |
+|---|---|
+| `summary.md` | Machine-generated run metadata and canonical classification fields |
+| `cluster_samples.csv` | Timestamped per-node health and document counts at each restart and post-soak |
+| `restart_events.csv` | Restart start/healthy timestamps per node |
+| `cluster_status_snapshots.log` | Full cluster status JSON at each sample point |
+| `mixed-soak.stdout.txt` | Full k6 progress output and final summary |
 
 ### Evidence Sources
 
-- `engine/_dev/s/manual-tests/ha-soak-test.sh`
+- dev-repo HA soak harness
 - `engine/loadtest/lib/loadtest_soak_helpers.sh`
 - `engine/loadtest/scenarios/mixed-soak.js`
 - `engine/loadtest/lib/config.js` (sharedLoadtestConfig)
 - `engine/loadtest/lib/throughput.js` (SOAK_WRITE_THRESHOLDS)
 - `engine/loadtest/tests/ha_soak_acceptance.sh`
-- `engine/loadtest/results/20260329T020325Z-ha-soak/` (validation run artifacts)
-- `engine/loadtest/results/20260329T041111Z-ha-soak/` (full-duration run artifacts)
+- Local 2h soak run artifacts (gitignored)
 
 ---
 
@@ -200,7 +176,7 @@ The full-duration run uses default configuration (2h duration, 180s restart inte
 
 - Run date (UTC): 2026-03-21T02:54:26Z
 - Run date (local): 2026-03-20 22:54:26 EDT
-- Results directory: `engine/loadtest/results/20260321T025426Z/`
+- Results: stored locally under `engine/loadtest/results/` (gitignored)
 - Runner command: `cd engine/loadtest && FLAPJACK_LOADTEST_BASE_URL=http://127.0.0.1:7701 ./run.sh`
 - Release build command: `cd engine && cargo build --release -p flapjack-server`
 - Release binary: `engine/target/release/flapjack` (executable)
@@ -308,7 +284,7 @@ The canonical threshold source is `engine/loadtest/lib/throughput.js` — `WRITE
 
 ## Reproduction
 
-See `engine/loadtest/README.md` for the canonical run procedure and configuration contract.
+Loadtest scripts and configuration are in the `engine/loadtest/` directory. This document serves as the committed benchmark summary.
 
 ## Evidence Sources
 
@@ -321,16 +297,7 @@ See `engine/loadtest/README.md` for the canonical run procedure and configuratio
 - `engine/loadtest/scenarios/mixed-workload.js`
 - `engine/loadtest/scenarios/spike.js`
 - `engine/loadtest/scenarios/memory-pressure.js`
-- `engine/loadtest/results/.gitignore`
-- `engine/loadtest/results/20260321T025426Z/smoke.stdout.txt`
-- `engine/loadtest/results/20260321T025426Z/search-throughput.stdout.txt`
-- `engine/loadtest/results/20260321T025426Z/write-throughput.stdout.txt`
-- `engine/loadtest/results/20260321T025426Z/mixed-workload.stdout.txt`
-- `engine/loadtest/results/20260321T025426Z/spike.stdout.txt`
-- `engine/loadtest/results/20260321T025426Z/memory-pressure.stdout.txt`
-- `engine/loadtest/results/20260321T025426Z/write-throughput.json`
-- `engine/loadtest/results/20260321T025426Z/mixed-workload.json`
-- `engine/loadtest/results/20260321T025426Z/server.log`
+- Run artifacts stored locally under `engine/loadtest/results/` (gitignored)
 
 ---
 
@@ -391,12 +358,4 @@ See `engine/loadtest/README.md` for the canonical run procedure and configuratio
 - k6 command: `bash engine/loadtest/run.sh`
 
 ## Evidence Sources
-- import artifact: engine/loadtest/results/20260323T155255Z/import_benchmark.json
-- search artifact: engine/loadtest/results/20260323T155318Z/search_benchmark.json
-- dashboard report: not available
-- k6 smoke: json=engine/loadtest/results/20260323T164412Z/smoke.json; stdout=engine/loadtest/results/20260323T164412Z/smoke.stdout.txt
-- k6 search-throughput: json=engine/loadtest/results/20260323T164412Z/search-throughput.json; stdout=engine/loadtest/results/20260323T164412Z/search-throughput.stdout.txt
-- k6 write-throughput: json=engine/loadtest/results/20260323T164412Z/write-throughput.json; stdout=engine/loadtest/results/20260323T164412Z/write-throughput.stdout.txt
-- k6 mixed-workload: json=engine/loadtest/results/20260323T164412Z/mixed-workload.json; stdout=engine/loadtest/results/20260323T164412Z/mixed-workload.stdout.txt
-- k6 spike: json=engine/loadtest/results/20260323T164412Z/spike.json; stdout=engine/loadtest/results/20260323T164412Z/spike.stdout.txt
-- k6 memory-pressure: json=engine/loadtest/results/20260323T164412Z/memory-pressure.json; stdout=engine/loadtest/results/20260323T164412Z/memory-pressure.stdout.txt
+- Run artifacts (import, search, k6 scenarios) stored locally under `engine/loadtest/results/` (gitignored)

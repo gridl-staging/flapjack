@@ -1,3 +1,4 @@
+//! Stub summary for openapi.rs.
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]

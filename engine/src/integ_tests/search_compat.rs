@@ -1,3 +1,4 @@
+//! Stub summary for search_compat.rs.
 use crate::index::SearchOptions;
 use crate::types::{FacetRequest, Filter, SearchResult, Sort};
 use crate::{error::Result, IndexManager};
@@ -30,46 +31,9 @@ fn legacy_search_options<'a>(
 /// `search_full`) that transform positional parameters into a `SearchOptions` struct and delegate
 /// to `search_with_options`. Implemented by `IndexManager` to keep integration test call sites
 /// compiling during API migration.
+/// TODO: Document SearchCompat.
 #[allow(clippy::too_many_arguments)] // Test-only shim preserves legacy lib-test callsites while production stays `SearchOptions`-based.
 pub(crate) trait SearchCompat {
-    fn search_with_facets(
-        &self,
-        tenant_id: &str,
-        query_text: &str,
-        filter: Option<&Filter>,
-        sort: Option<&Sort>,
-        limit: usize,
-        offset: usize,
-        facets: Option<&[FacetRequest]>,
-    ) -> Result<SearchResult>;
-
-    fn search_with_facets_and_distinct(
-        &self,
-        tenant_id: &str,
-        query_text: &str,
-        filter: Option<&Filter>,
-        sort: Option<&Sort>,
-        limit: usize,
-        offset: usize,
-        facets: Option<&[FacetRequest]>,
-        distinct: Option<u32>,
-    ) -> Result<SearchResult>;
-
-    fn search_full(
-        &self,
-        tenant_id: &str,
-        query_text: &str,
-        filter: Option<&Filter>,
-        sort: Option<&Sort>,
-        limit: usize,
-        offset: usize,
-        facets: Option<&[FacetRequest]>,
-        distinct: Option<u32>,
-        max_values_per_facet: Option<usize>,
-    ) -> Result<SearchResult>;
-}
-
-impl SearchCompat for IndexManager {
     fn search_with_facets(
         &self,
         tenant_id: &str,
@@ -101,6 +65,21 @@ impl SearchCompat for IndexManager {
         )
     }
 
+    fn search_full(
+        &self,
+        tenant_id: &str,
+        query_text: &str,
+        filter: Option<&Filter>,
+        sort: Option<&Sort>,
+        limit: usize,
+        offset: usize,
+        facets: Option<&[FacetRequest]>,
+        distinct: Option<u32>,
+        max_values_per_facet: Option<usize>,
+    ) -> Result<SearchResult>;
+}
+
+impl SearchCompat for IndexManager {
     /// Bridge the old test helper signature into `search_with_options`.
     fn search_full(
         &self,
@@ -133,6 +112,7 @@ mod tests {
     use crate::types::{FieldValue, SortOrder};
     use tempfile::TempDir;
 
+    /// TODO: Document legacy_search_options_maps_all_legacy_fields.
     #[test]
     fn legacy_search_options_maps_all_legacy_fields() {
         let filter = Filter::Equals {
@@ -170,6 +150,7 @@ mod tests {
         assert!(!options.sum_or_filters_scores);
     }
 
+    /// TODO: Document search_full_matches_explicit_search_options_path.
     #[tokio::test]
     async fn search_full_matches_explicit_search_options_path() {
         let temp_dir = TempDir::new().unwrap();

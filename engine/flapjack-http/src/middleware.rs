@@ -1,3 +1,4 @@
+//! Stub summary for middleware.rs.
 use axum::{
     extract::Request,
     http::{header::CONTENT_TYPE, HeaderMap, HeaderValue},

@@ -61,6 +61,7 @@ fn build_test_router_for_data_dir(
     build_test_router_with_state_for_data_dir(tmp, key_store, data_dir).0
 }
 
+/// TODO: Document build_test_router_with_state_for_data_dir.
 fn build_test_router_with_state_for_data_dir(
     tmp: &TempDir,
     key_store: Option<Arc<KeyStore>>,
@@ -106,6 +107,7 @@ async fn body_text(resp: axum::http::Response<axum::body::Body>) -> String {
         .unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
 }
+/// TODO: Document build_router_open_mode_allows_protected_routes_without_auth_layer.
 #[tokio::test]
 async fn build_router_open_mode_allows_protected_routes_without_auth_layer() {
     let tmp = TempDir::new().unwrap();
@@ -135,6 +137,7 @@ async fn build_router_open_mode_allows_protected_routes_without_auth_layer() {
         "search response should include hits"
     );
 }
+/// TODO: Document build_router_open_mode_allows_dictionary_routes_without_auth_layer.
 #[tokio::test]
 async fn build_router_open_mode_allows_dictionary_routes_without_auth_layer() {
     let tmp = TempDir::new().unwrap();
@@ -182,6 +185,7 @@ async fn build_router_open_mode_does_not_expose_internal_routes() {
     let response = send_empty_request(&app, Method::GET, "/internal/storage").await;
     assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
 }
+/// TODO: Document build_router_does_not_log_trusted_proxy_initialization.
 #[tokio::test]
 async fn build_router_does_not_log_trusted_proxy_initialization() {
     let tmp = TempDir::new().unwrap();
@@ -201,6 +205,7 @@ async fn build_router_does_not_log_trusted_proxy_initialization() {
         "router construction should not re-log trusted proxy initialization"
     );
 }
+/// TODO: Document cors_preflight_returns_expected_allow_origin_for_restricted_and_permissive_modes.
 #[tokio::test]
 async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_permissive_modes() {
     let restricted_router = Router::new()
@@ -250,6 +255,7 @@ async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_permiss
         .and_then(|value| value.to_str().ok());
     assert_eq!(permissive_origin, Some("https://allowed.example"));
 }
+/// TODO: Document cors_preflight_rejects_blocked_origins_in_restricted_mode.
 #[tokio::test]
 async fn cors_preflight_rejects_blocked_origins_in_restricted_mode() {
     let app = Router::new()
@@ -308,6 +314,7 @@ async fn metrics_returns_403_without_auth_headers() {
         })
     );
 }
+/// TODO: Document metrics_returns_200_with_admin_key_only.
 #[tokio::test]
 async fn metrics_returns_200_with_admin_key_only() {
     use axum::body::Body;

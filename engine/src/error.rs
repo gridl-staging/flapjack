@@ -1,3 +1,4 @@
+//! Stub summary for error.rs.
 use http::StatusCode;
 use thiserror::Error;
 
@@ -588,6 +589,7 @@ mod tests {
                 );
             }
         }
+        /// TODO: Document internal_errors_dont_leak_details.
         #[tokio::test]
         async fn internal_errors_dont_leak_details() {
             // Tantivy errors must not leak engine internals

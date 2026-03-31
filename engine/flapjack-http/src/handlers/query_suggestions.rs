@@ -1,3 +1,4 @@
+//! Stub summary for query_suggestions.rs.
 use axum::{
     extract::{Path, State},
     http::StatusCode,

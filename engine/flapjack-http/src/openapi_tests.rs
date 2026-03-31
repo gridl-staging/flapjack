@@ -7,6 +7,7 @@ fn openapi_json() -> serde_json::Value {
     serde_json::to_value(ApiDoc::openapi()).unwrap()
 }
 
+/// TODO: Document key_endpoints_use_concrete_schema_components.
 #[test]
 fn key_endpoints_use_concrete_schema_components() {
     let doc = openapi_json();
@@ -192,6 +193,7 @@ fn experiments_endpoints_are_documented() {
     assert_path_method(&doc, "/2/abtests/{id}/results", "get");
 }
 
+/// TODO: Document high_risk_mutation_openapi_contracts_match_shared_matrix.
 #[test]
 fn high_risk_mutation_openapi_contracts_match_shared_matrix() {
     let doc = openapi_json();

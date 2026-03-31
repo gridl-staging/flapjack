@@ -1,3 +1,4 @@
+//! Stub summary for settings_tests.rs.
 use super::*;
 use crate::test_helpers::TestStateBuilder;
 use axum::body::Body;
@@ -53,6 +54,7 @@ async fn get_settings_json(app: &Router) -> serde_json::Value {
     serde_json::from_slice(&body).unwrap()
 }
 
+/// TODO: Document test_get_settings_corrupt_settings_file_returns_sanitized_500.
 #[tokio::test]
 async fn test_get_settings_corrupt_settings_file_returns_sanitized_500() {
     let tmp = TempDir::new().unwrap();
@@ -99,6 +101,7 @@ async fn test_get_settings_corrupt_settings_file_returns_sanitized_500() {
     );
 }
 
+/// TODO: Document test_set_settings_when_tenant_path_is_file_returns_sanitized_500.
 #[tokio::test]
 async fn test_set_settings_when_tenant_path_is_file_returns_sanitized_500() {
     let tmp = TempDir::new().unwrap();
@@ -421,6 +424,48 @@ async fn test_set_settings_preserves_embedders_on_other_update() {
         json["embedders"]["default"]["dimensions"], 384,
         "embedders should be preserved when not in payload"
     );
+}
+
+/// Verify that a partial settings update preserves previously stored fields that are omitted from the payload.
+#[tokio::test]
+async fn test_merge_settings_payload_partial_update_preserves_omitted_fields() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = settings_router(state);
+
+    // Seed a multi-field baseline that spans regular fields plus merge-sensitive embedders/replicas.
+    let resp = post_settings(
+        &app,
+        r#"{
+            "searchableAttributes": ["title", "description"],
+            "queryType": "prefixNone",
+            "embedders": {"default": {"source": "userProvided", "dimensions": 384}},
+            "replicas": ["products_price_asc"]
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Update only one field; omitted baseline fields must remain unchanged.
+    let resp = post_settings(&app, r#"{"paginationLimitedTo": 75}"#).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = get_settings_json(&app).await;
+    assert_eq!(
+        json["searchableAttributes"],
+        serde_json::json!(["title", "description"])
+    );
+    assert_eq!(json["queryType"], serde_json::json!("prefixNone"));
+    assert_eq!(json["replicas"], serde_json::json!(["products_price_asc"]));
+    assert_eq!(
+        json["embedders"]["default"]["source"],
+        serde_json::json!("userProvided")
+    );
+    assert_eq!(
+        json["embedders"]["default"]["dimensions"],
+        serde_json::json!(384)
+    );
+    assert_eq!(json["paginationLimitedTo"], serde_json::json!(75));
 }
 
 // ── Mode and SemanticSearch handler tests (5.8) ──
@@ -2379,6 +2424,7 @@ async fn test_query_type_persists_to_disk() {
         "queryType should be persisted to disk"
     );
 }
+/// TODO: Document test_ranking_roundtrip_is_supported.
 #[tokio::test]
 async fn test_ranking_roundtrip_is_supported() {
     let tmp = TempDir::new().unwrap();
@@ -2417,6 +2463,7 @@ async fn test_ranking_roundtrip_is_supported() {
         "ranking should persist through GET after update"
     );
 }
+/// TODO: Document test_stage4_structural_settings_roundtrip_is_supported.
 #[tokio::test]
 async fn test_stage4_structural_settings_roundtrip_is_supported() {
     let tmp = TempDir::new().unwrap();
@@ -2479,6 +2526,7 @@ async fn test_stage4_structural_settings_roundtrip_is_supported() {
         serde_json::json!(["sku"])
     );
 }
+/// TODO: Document test_forward_to_replicas_rejects_invalid_boolean_value.
 #[tokio::test]
 async fn test_forward_to_replicas_rejects_invalid_boolean_value() {
     let tmp = TempDir::new().unwrap();
@@ -2495,6 +2543,7 @@ async fn test_forward_to_replicas_rejects_invalid_boolean_value() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
+/// TODO: Document test_synonyms_batch_rejects_invalid_forward_to_replicas_boolean_value.
 #[tokio::test]
 async fn test_synonyms_batch_rejects_invalid_forward_to_replicas_boolean_value() {
     let tmp = TempDir::new().unwrap();
@@ -2511,6 +2560,7 @@ async fn test_synonyms_batch_rejects_invalid_forward_to_replicas_boolean_value()
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
+/// TODO: Document test_synonyms_batch_rejects_invalid_replace_existing_boolean_value.
 #[tokio::test]
 async fn test_synonyms_batch_rejects_invalid_replace_existing_boolean_value() {
     let tmp = TempDir::new().unwrap();
@@ -2527,6 +2577,7 @@ async fn test_synonyms_batch_rejects_invalid_replace_existing_boolean_value() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
+/// TODO: Document test_rules_batch_rejects_invalid_forward_to_replicas_boolean_value.
 #[tokio::test]
 async fn test_rules_batch_rejects_invalid_forward_to_replicas_boolean_value() {
     let tmp = TempDir::new().unwrap();
@@ -2543,6 +2594,7 @@ async fn test_rules_batch_rejects_invalid_forward_to_replicas_boolean_value() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
+/// TODO: Document test_rules_batch_rejects_invalid_clear_existing_boolean_value.
 #[tokio::test]
 async fn test_rules_batch_rejects_invalid_clear_existing_boolean_value() {
     let tmp = TempDir::new().unwrap();

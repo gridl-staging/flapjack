@@ -155,7 +155,6 @@ Current product behavior:
 
 Useful references:
 
-- `engine/loadtest/README.md`
 - `engine/loadtest/BENCHMARKS.md`
 
 ### Snapshot restore
@@ -218,10 +217,10 @@ Operators can rely on the following today:
 | `x-request-id` | Always present on responses; echoed when supplied by the client |
 | Structured JSON logs | Enabled by `FLAPJACK_LOG_FORMAT=json` |
 | Request latency histograms | Exported in `/metrics` as request-duration metrics |
+| OpenTelemetry export | Available when the server is built with `--features otel` and `OTEL_EXPORTER_OTLP_ENDPOINT` is set |
 
 Not yet shipped:
 
-- distributed tracing / OpenTelemetry export
 - richer release-proof packaging beyond checklist/proof-pack docs
 
 ## Documentation rule

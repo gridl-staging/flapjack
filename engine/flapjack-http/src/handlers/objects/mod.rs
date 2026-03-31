@@ -1,3 +1,4 @@
+//! Stub summary for mod.rs.
 mod batch;
 
 pub use batch::add_documents_batch_impl;

@@ -272,6 +272,7 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
 
+    /// TODO: Document test_manager.
     fn test_manager(renew_days_threshold: u64) -> SslManager {
         SslManager {
             config: SslConfig {

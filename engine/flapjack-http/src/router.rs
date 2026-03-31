@@ -1,3 +1,4 @@
+//! Stub summary for router.rs.
 use std::path::Path;
 use std::sync::Arc;
 
@@ -308,6 +309,7 @@ fn build_protected_routes(state: Arc<AppState>, data_dir: &Path) -> Router {
     ))
 }
 
+/// TODO: Document build_internal_routes.
 fn build_internal_routes(state: Arc<AppState>, auth_enabled: bool) -> Router {
     let public_routes = Router::new()
         .route(

@@ -13,7 +13,7 @@ variables in the shipped Flapjack server stack.
 
 ## Verified Example Paths
 
-- Single-node smoke + restart persistence: `engine/_dev/s/manual-tests/cli_smoke.sh`
+- Single-node smoke + restart persistence: the repo's CLI smoke harness (public entrypoint: `./s/test --e2e`)
 - 3-node nginx-routed topology: `engine/examples/ha-cluster/test_ha.sh`
 - 2-node replication + analytics fan-out: `engine/examples/replication/test_replication.sh`
 - Single-node S3 snapshots (MinIO): `engine/examples/s3-snapshot/test_snapshots.sh`

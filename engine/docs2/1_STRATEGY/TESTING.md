@@ -21,7 +21,7 @@ cp flapjack.local.conf.example flapjack.local.conf
 
 Important:
 - Dashboard Playwright + Vite config read this repo-local file.
-- `_dev` runners (`engine/_dev/s/test`, `engine/_dev/s/run-all-tests.sh`) also read this file.
+- The canonical `./s/test` runner also reads this repo-local file; an older internal wrapper does too in the dev repo.
 - `flapjack.local.conf` can use either `KEY=value` or `export KEY=value` syntax (inline `# comments` are supported).
 - Do not run multiple active test suites against the same backend port or same `data_dir`.
 - If running multiple explicit server processes, use unique instance/data-dir per process.
@@ -62,13 +62,9 @@ Important:
 ./s/test --list           # print all flags and exit
 ```
 
-### Legacy scripts (still work, prefer ./s/test)
+### Legacy note
 
-```bash
-./_dev/s/run-all-tests.sh           # Rust + dashboard unit + dashboard smoke
-./_dev/s/run-all-tests.sh --full    # + dashboard full e2e (Playwright)
-./_dev/s/run-all-tests.sh --sdk     # + Go/PHP SDK tests (NOT JS SDK)
-```
+An older internal wrapper still exists in the dev repo, but the public and maintained entrypoint is `./s/test`.
 
 ---
 
@@ -129,8 +125,8 @@ Dashboard testing is covered by the browser smoke/full suites and the HTTP-only 
 - **JS SDK tests** (`sdk_test/`): Uses `algoliasearch` npm package against running server. Run via `./s/test --sdk` (test.js + contract_tests.js) or `./s/test --sdk-algolia` (needs Algolia creds).
 - **SDK bootstrap decoupling:** `engine/sdk_test` is self-contained with its own `package.json`; bootstrap now runs local `npm ci` in `sdk_test` instead of depending on `dashboard/node_modules`.
 - **Go SDK** (`sdks/go/`): Unit tests, run via `./s/test --go`.
-- **Other SDKs** (PHP, Python, Ruby, Java, C#): CI only, require their runtimes. The legacy `run-all-tests.sh --sdk` runs Go + PHP only.
-- **Note:** `run-all-tests.sh --sdk` does NOT run JS SDK tests. Use `./s/test --sdk` for that.
+- **Other SDKs** (PHP, Python, Ruby, Java, C#): CI only, require their runtimes. A legacy aggregate runner covers Go + PHP only.
+- **Note:** The legacy aggregate runner does NOT run JS SDK tests. Use `./s/test --sdk` for that.
 
 ---
 
@@ -338,7 +334,7 @@ JavaScript tests using the official `algoliasearch` npm package against a runnin
 
 All automated SDK tests require a running server (`./s/test --sdk` handles this automatically).
 
-## Manual Tests (`s/manual-tests/`)
+## Manual Tests
 
 | Script | Requires | Tests | Automated? |
 |--------|----------|-------|------------|
@@ -346,7 +342,7 @@ All automated SDK tests require a running server (`./s/test --sdk` handles this 
 | `test_s3.sh` | Server + AWS creds + S3 | Snapshot upload, list, delete+restore, retention | No |
 | `test_s3_backup_restore.sh` | Server + AWS creds + S3 | Full DR pipeline | No |
 | `perf_search.sh` | Server with data | 11 query scenarios, timing benchmarks | No |
-| `ha-confidence-test.sh` | Docker (3-node cluster) | 124+ assertions: replication, failover, catch-up, document identity verification, search result + ranking symmetry, analytics fan-out, rate merges, HLL dedup, partial failure, LWW, concurrent writes, double failover (+10 latency-specific with `--latency`) | No — `./ha-confidence-test.sh --docker` |
+| HA confidence test | Docker (3-node cluster) | 124+ assertions: replication, failover, catch-up, document identity verification, search result + ranking symmetry, analytics fan-out, rate merges, HLL dedup, partial failure, LWW, concurrent writes, double failover (+10 latency-specific with `--latency`) | No |
 
 ---
 
@@ -380,7 +376,7 @@ All automated SDK tests require a running server (`./s/test --sdk` handles this 
 3. **~14 engine/src/ modules tightly coupled to I/O/async** — manager.rs, collector.rs, writer.rs, s3.rs, etc. Not unit-testable without major refactoring.
 4. **flapjack-http untested pure functions** — extractable logic in insights.rs, tasks.rs, dashboard.rs, memory_middleware.rs.
 5. **HA replication trigger coverage** — `add_record_auto_id`, `partial_update_object`, `delete_by_query` now call `trigger_replication()` (session 23), but no integration test verifies replication is actually triggered by these endpoints (low priority — code paths are simple and similar to the covered `put_object`/`delete_object` paths).
-6. ~~**No real two-node E2E test**~~ — **ADDRESSED**: `ha-confidence-test.sh` runs a full 3-node Docker cluster with 124+ assertions covering replication, failover, catch-up, document identity verification (IDs + content + ranking order across nodes), analytics fan-out, rate merges, HLL dedup, LWW conflict resolution, concurrent writes, and double failover. Cross-region latency stress test available via `./ha-confidence-test.sh --latency` (adds ~10 latency-specific assertions with tc/netem). **P0 periodic anti-entropy sync implemented (session 31)** with 3 Rust integration tests. Remaining gap: Docker-based iptables partition test (Phase 18) for full partition→heal→converge validation.
+6. ~~**No real two-node E2E test**~~ — **ADDRESSED**: The HA confidence test runs a full 3-node Docker cluster with 124+ assertions covering replication, failover, catch-up, document identity verification (IDs + content + ranking order across nodes), analytics fan-out, rate merges, HLL dedup, LWW conflict resolution, concurrent writes, and double failover. A cross-region latency stress variant adds ~10 latency-specific assertions with tc/netem. **P0 periodic anti-entropy sync implemented (session 31)** with 3 Rust integration tests. Remaining gap: Docker-based iptables partition test (Phase 18) for full partition→heal→converge validation.
 8. **QS `trigger_build` 409-while-running untested** — `POST /1/configs/:name/build` returns 409 if a build is already running. Now also covered indirectly by `update_config_while_building_returns_409`. Direct mid-build trigger_build interception remains timing-dependent, low risk.
 
 ## Known Flaky Tests

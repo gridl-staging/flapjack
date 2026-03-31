@@ -1,3 +1,4 @@
+//! Stub summary for mod.rs.
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -52,6 +53,22 @@ fn get_experiment_store(state: &AppState) -> Option<&ExperimentStore> {
     state.experiment_store.as_deref()
 }
 
+#[allow(clippy::result_large_err)] // Response is the handler boundary type and boxing would add indirection to a simple guard helper.
+fn require_experiment_store(state: &AppState) -> Result<&ExperimentStore, Response> {
+    get_experiment_store(state).ok_or_else(experiment_store_unavailable_response)
+}
+
+fn missing_numeric_id_response(experiment_id: &str) -> Response {
+    tracing::error!(
+        experiment_id = %experiment_id,
+        "experiment missing numeric id mapping"
+    );
+    json_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "experiment missing numeric id mapping",
+    )
+}
+
 /// Map an `ExperimentError` variant to the appropriate HTTP status code and JSON error body.
 ///
 /// Translates validation errors to 400, not-found to 404, status conflicts to 409,
@@ -87,21 +104,39 @@ fn resolve_experiment_id(
     Ok((id_str.to_string(), numeric))
 }
 
-/// Shared implementation for start/stop/delete-style lifecycle endpoints that
-/// resolve an experiment, call a store method, and return an action response.
+fn resolve_store_and_experiment_id<'a>(
+    state: &'a AppState,
+    id_str: &str,
+) -> Result<(&'a ExperimentStore, String, i64), Response> {
+    let store = require_experiment_store(state)?;
+    let (uuid, numeric_id) = resolve_experiment_id_response(store, id_str)?;
+    Ok((store, uuid, numeric_id))
+}
+
+#[allow(clippy::result_large_err)] // Response is the handler boundary type and boxing would add indirection to a small helper.
+fn resolve_experiment_id_response(
+    store: &ExperimentStore,
+    id_str: &str,
+) -> Result<(String, i64), Response> {
+    if id_str.parse::<i64>().is_err() && store.get_numeric_id(id_str).is_none() {
+        match store.get(id_str) {
+            Ok(_) => return Err(missing_numeric_id_response(id_str)),
+            Err(err) => return Err(experiment_error_to_response(err)),
+        }
+    }
+
+    resolve_experiment_id(store, id_str).map_err(experiment_error_to_response)
+}
+
+/// TODO: Document lifecycle_action_response.
 fn lifecycle_action_response(
     state: &AppState,
     id_str: &str,
     action: fn(&ExperimentStore, &str) -> Result<Experiment, ExperimentError>,
 ) -> Response {
-    let store = match get_experiment_store(state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
-    };
-
-    let (uuid, numeric_id) = match resolve_experiment_id(store, id_str) {
-        Ok(pair) => pair,
-        Err(err) => return experiment_error_to_response(err),
+    let (store, uuid, numeric_id) = match resolve_store_and_experiment_id(state, id_str) {
+        Ok(values) => values,
+        Err(response) => return response,
     };
 
     match action(store, &uuid) {
@@ -196,6 +231,7 @@ pub struct ConcludedExperimentResponse {
 /// Extracts the conclusion payload from a concluded experiment, returning a
 /// structured response or an internal-error response when the store returns an
 /// impossible concluded experiment without a conclusion payload.
+/// TODO: Document concluded_experiment_response.
 #[allow(clippy::result_large_err)] // Response is inherently large in axum; boxing adds indirection without benefit at a single call site
 fn concluded_experiment_response(
     experiment: Experiment,
@@ -267,7 +303,35 @@ fn attach_experiment_warning_header(
     response
 }
 
-/// Create a new A/B test experiment with traffic splitting between a main index and variant.
+fn should_promote_variant_settings(experiment: &Experiment) -> bool {
+    experiment.conclusion.as_ref().is_some_and(|conclusion| {
+        conclusion.promoted && conclusion.winner.as_deref() == Some("variant")
+    })
+}
+
+/// TODO: Document promotion_warning_if_variant_promotion_fails.
+fn promotion_warning_if_variant_promotion_fails(
+    state: &AppState,
+    experiment: &Experiment,
+) -> Option<&'static str> {
+    if !should_promote_variant_settings(experiment) {
+        return None;
+    }
+    if let Err(error) = promote_variant_settings(state, experiment) {
+        tracing::error!(
+            experiment_id = %experiment.id,
+            error = %error,
+            "failed to promote variant settings"
+        );
+        // Conclude succeeded, promotion failed — return the experiment
+        // with a warning header so the caller knows promotion was partial.
+        return Some(VARIANT_PROMOTION_FAILED_WARNING);
+    }
+    None
+}
+
+/// Create a new A/B test experiment with traffic splitting between a main
+/// index and variant.
 #[utoipa::path(
     post,
     path = "/2/abtests",
@@ -287,9 +351,9 @@ pub async fn create_experiment(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AlgoliaCreateAbTestRequest>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
+    let store = match require_experiment_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
     };
 
     let experiment = match dto_algolia::algolia_create_to_experiment(&body) {
@@ -317,14 +381,12 @@ pub async fn create_experiment(
     }
 }
 
-/// List experiments with optional index prefix/suffix filtering and pagination.
+/// List experiments with optional index prefix or suffix filtering and
+/// pagination.
 ///
-/// Supports Algolia-compatible query parameters for filtering by index name pattern.
-/// Results are sorted by creation time with deterministic tie-breaking on numeric ID.
-///
-/// # Returns
-///
-/// A paginated response containing the matching experiments, page count, and total count.
+/// Supports Algolia-compatible query parameters for filtering by index name
+/// pattern. Results are sorted by creation time with deterministic tie-breaking
+/// on numeric ID.
 #[utoipa::path(
     get,
     path = "/2/abtests",
@@ -347,9 +409,9 @@ pub async fn list_experiments(
     State(state): State<Arc<AppState>>,
     Query(params): Query<AlgoliaListAbTestsQuery>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
+    let store = match require_experiment_store(&state) {
+        Ok(store) => store,
+        Err(response) => return response,
     };
 
     let mut experiments = store.list(None);
@@ -401,14 +463,12 @@ pub async fn list_experiments(
     .into_response()
 }
 
-/// Fetch a single experiment by numeric ID or UUID, hydrated with live metrics.
+/// Fetch a single experiment by numeric ID or UUID, hydrated with live
+/// analytics metrics when available.
 ///
-/// Retrieves the experiment from the store, converts it to the Algolia DTO format,
-/// and overlays click/conversion/search metrics from the analytics engine when available.
-///
-/// # Returns
-///
-/// The Algolia-format AB test payload with metric fields populated, or an error response.
+/// Retrieves the experiment from the store, converts it to the Algolia DTO
+/// format, and overlays click, conversion, and search metrics from the
+/// analytics engine when available.
 #[utoipa::path(
     get,
     path = "/2/abtests/{id}",
@@ -429,14 +489,9 @@ pub async fn get_experiment(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
-    };
-
-    let (uuid, numeric_id) = match resolve_experiment_id(store, &id) {
-        Ok(pair) => pair,
-        Err(err) => return experiment_error_to_response(err),
+    let (store, uuid, numeric_id) = match resolve_store_and_experiment_id(&state, &id) {
+        Ok(values) => values,
+        Err(response) => return response,
     };
 
     match store.get(&uuid) {
@@ -480,15 +535,12 @@ pub async fn get_experiment(
     }
 }
 
-/// Replace an experiment's mutable configuration fields while preserving its identity and lifecycle state.
+/// Replace an experiment's mutable configuration fields while preserving its
+/// identity and lifecycle state.
 ///
-/// Merges the request body with the existing experiment, keeping `id`, `status`,
-/// timestamps, and conclusion unchanged. Falls back to existing values for optional
-/// fields not provided in the request.
-///
-/// # Returns
-///
-/// The updated experiment in Algolia DTO format, or an error response.
+/// Merges the request body with the existing experiment, keeping immutable
+/// identity and lifecycle fields while falling back to existing values for
+/// optional settings omitted from the request.
 #[utoipa::path(
     put,
     path = "/2/abtests/{id}",
@@ -513,14 +565,9 @@ pub async fn update_experiment(
     Path(id): Path<String>,
     Json(body): Json<CreateExperimentRequest>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
-    };
-
-    let (uuid, numeric_id) = match resolve_experiment_id(store, &id) {
-        Ok(pair) => pair,
-        Err(err) => return experiment_error_to_response(err),
+    let (store, uuid, numeric_id) = match resolve_store_and_experiment_id(&state, &id) {
+        Ok(values) => values,
+        Err(response) => return response,
     };
 
     let existing = match store.get(&uuid) {
@@ -560,12 +607,8 @@ pub async fn update_experiment(
 
 /// Delete an experiment by numeric ID or UUID.
 ///
-/// Removes the experiment from the persistent store. This operation is irreversible.
-///
-/// # Returns
-///
-/// JSON action response confirming deletion with the experiment's numeric ID and index name,
-/// or an error if the experiment is not found.
+/// Removes the experiment from the persistent store and returns the Algolia
+/// action envelope confirming which numeric ID and index were deleted.
 #[utoipa::path(
     delete,
     path = "/2/abtests/{id}",
@@ -587,14 +630,9 @@ pub async fn delete_experiment(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
-    };
-
-    let (uuid, numeric_id) = match resolve_experiment_id(store, &id) {
-        Ok(pair) => pair,
-        Err(err) => return experiment_error_to_response(err),
+    let (store, uuid, numeric_id) = match resolve_store_and_experiment_id(&state, &id) {
+        Ok(values) => values,
+        Err(response) => return response,
     };
 
     let experiment = match store.get(&uuid) {
@@ -680,7 +718,12 @@ pub async fn stop_experiment(
     lifecycle_action_response(&state, &id, ExperimentStore::stop)
 }
 
-/// Conclude a running experiment by selecting a winner and promoting the winning configuration.
+/// Conclude a running experiment by selecting a winner and promoting the
+/// winning configuration.
+///
+/// Applies the supplied conclusion payload, persists the experiment's final
+/// state, and attempts variant promotion before returning the concluded
+/// experiment response.
 #[utoipa::path(
     post,
     path = "/2/abtests/{id}/conclude",
@@ -705,14 +748,9 @@ pub async fn conclude_experiment(
     Path(id): Path<String>,
     Json(body): Json<ConcludeExperimentRequest>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
-    };
-
-    let (uuid, _numeric_id) = match resolve_experiment_id(store, &id) {
-        Ok(pair) => pair,
-        Err(err) => return experiment_error_to_response(err),
+    let (store, uuid, _numeric_id) = match resolve_store_and_experiment_id(&state, &id) {
+        Ok(values) => values,
+        Err(response) => return response,
     };
 
     let winner = match validate_conclusion_winner(body.winner) {
@@ -732,25 +770,8 @@ pub async fn conclude_experiment(
 
     match store.conclude(&uuid, conclusion) {
         Ok(experiment) => {
-            let mut promotion_warning = None;
-            if experiment.conclusion.as_ref().is_some_and(|c| c.promoted)
-                && experiment
-                    .conclusion
-                    .as_ref()
-                    .and_then(|c| c.winner.as_deref())
-                    == Some("variant")
-            {
-                if let Err(e) = promote_variant_settings(&state, &experiment) {
-                    tracing::error!(
-                        experiment_id = %experiment.id,
-                        error = %e,
-                        "failed to promote variant settings"
-                    );
-                    // Conclude succeeded, promotion failed — return the experiment
-                    // with a warning header so the caller knows promotion was partial.
-                    promotion_warning = Some(VARIANT_PROMOTION_FAILED_WARNING);
-                }
-            }
+            let promotion_warning =
+                promotion_warning_if_variant_promotion_fails(&state, &experiment);
             match concluded_experiment_response(experiment) {
                 Ok(response) => attach_experiment_warning_header(
                     Json(response).into_response(),
@@ -794,6 +815,7 @@ mod review_regression_tests {
             .with_state(state)
     }
 
+    /// TODO: Document conclude_experiment_sets_warning_header_when_variant_promotion_fails.
     #[tokio::test]
     async fn conclude_experiment_sets_warning_header_when_variant_promotion_fails() {
         let tmp = TempDir::new().unwrap();

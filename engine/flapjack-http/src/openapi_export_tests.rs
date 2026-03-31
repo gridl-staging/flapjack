@@ -1,27 +1,42 @@
+//! Stub summary for openapi_export_tests.rs.
 use std::path::PathBuf;
 
 use crate::openapi_test_helpers::{schema_composition_refs, schema_ref};
 use tempfile::TempDir;
 use utoipa::OpenApi;
 
+fn temp_output_path(relative: &str) -> (TempDir, PathBuf) {
+    let temp_dir = TempDir::new().expect("temp dir must be created");
+    let output_path = temp_dir.path().join(relative);
+    (temp_dir, output_path)
+}
+
+fn expected_openapi_json() -> String {
+    serde_json::to_string_pretty(&crate::openapi::ApiDoc::openapi()).expect("ApiDoc must serialize")
+}
+
+fn exported_openapi_doc() -> serde_json::Value {
+    let (_temp_dir, output_path) = temp_output_path("openapi.json");
+    crate::openapi_export::write_openapi_json(&output_path).expect("export should succeed");
+    let exported = std::fs::read_to_string(&output_path).expect("export output must be readable");
+    serde_json::from_str(&exported).expect("exported openapi must be valid json")
+}
+
 #[test]
 fn export_writes_apidoc_json_to_target_file() {
-    let temp_dir = TempDir::new().expect("temp dir must be created");
-    let output_path = temp_dir.path().join("openapi.json");
+    let (_temp_dir, output_path) = temp_output_path("openapi.json");
 
     crate::openapi_export::write_openapi_json(&output_path)
         .expect("export should write openapi.json");
 
     let written = std::fs::read_to_string(&output_path).expect("openapi.json must be readable");
-    let expected = serde_json::to_string_pretty(&crate::openapi::ApiDoc::openapi())
-        .expect("ApiDoc must serialize");
+    let expected = expected_openapi_json();
     assert_eq!(written, expected, "export must be sourced from ApiDoc");
 }
 
 #[test]
 fn export_output_is_deterministic_across_runs() {
-    let temp_dir = TempDir::new().expect("temp dir must be created");
-    let output_path = temp_dir.path().join("openapi.json");
+    let (_temp_dir, output_path) = temp_output_path("openapi.json");
 
     crate::openapi_export::write_openapi_json(&output_path).expect("first export should succeed");
     let first = std::fs::read(&output_path).expect("first export output must exist");
@@ -34,8 +49,7 @@ fn export_output_is_deterministic_across_runs() {
 
 #[test]
 fn export_creates_missing_parent_directories() {
-    let temp_dir = TempDir::new().expect("temp dir must be created");
-    let output_path = temp_dir.path().join("nested/docs/openapi.json");
+    let (_temp_dir, output_path) = temp_output_path("nested/docs/openapi.json");
 
     crate::openapi_export::write_openapi_json(&output_path)
         .expect("export should create parent directories");
@@ -59,13 +73,13 @@ fn default_output_path_targets_engine_docs2_openapi_json() {
     );
 }
 
+/// TODO: Document committed_docs2_openapi_matches_export_output.
 #[test]
 fn committed_docs2_openapi_matches_export_output() {
     let committed_path = crate::openapi_export::default_docs2_output_path();
     let committed = std::fs::read_to_string(&committed_path)
         .expect("committed engine/docs2/openapi.json must be readable");
-    let expected = serde_json::to_string_pretty(&crate::openapi::ApiDoc::openapi())
-        .expect("ApiDoc must serialize");
+    let expected = expected_openapi_json();
     let committed_doc: serde_json::Value =
         serde_json::from_str(&committed).expect("committed openapi.json must be valid json");
 
@@ -81,15 +95,10 @@ fn committed_docs2_openapi_matches_export_output() {
         "conclude_experiment summary should not ship as a placeholder in the committed OpenAPI export"
     );
 }
+/// TODO: Document export_output_covers_recommend_personalization_and_experiments_routes.
 #[test]
 fn export_output_covers_recommend_personalization_and_experiments_routes() {
-    let temp_dir = TempDir::new().expect("temp dir must be created");
-    let output_path = temp_dir.path().join("openapi.json");
-    crate::openapi_export::write_openapi_json(&output_path).expect("export should succeed");
-
-    let exported = std::fs::read_to_string(&output_path).expect("export output must be readable");
-    let doc: serde_json::Value =
-        serde_json::from_str(&exported).expect("exported openapi must be valid json");
+    let doc = exported_openapi_doc();
 
     for pointer in [
         "/paths/~11~1indexes~1*~1recommendations/post",
@@ -104,15 +113,10 @@ fn export_output_covers_recommend_personalization_and_experiments_routes() {
         );
     }
 }
+/// TODO: Document export_output_includes_federated_batch_contract_components.
 #[test]
 fn export_output_includes_federated_batch_contract_components() {
-    let temp_dir = TempDir::new().expect("temp dir must be created");
-    let output_path = temp_dir.path().join("openapi.json");
-    crate::openapi_export::write_openapi_json(&output_path).expect("export should succeed");
-
-    let exported = std::fs::read_to_string(&output_path).expect("export output must be readable");
-    let doc: serde_json::Value =
-        serde_json::from_str(&exported).expect("exported openapi must be valid json");
+    let doc = exported_openapi_doc();
 
     assert_eq!(
         doc.pointer("/paths/~11~1indexes~1{indexName}~1queries/post/requestBody/content/application~1json/schema/$ref")

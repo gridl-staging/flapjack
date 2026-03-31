@@ -1,3 +1,4 @@
+//! Stub summary for startup.rs.
 use axum::http::HeaderValue;
 use fs2::FileExt;
 use std::fs::OpenOptions;

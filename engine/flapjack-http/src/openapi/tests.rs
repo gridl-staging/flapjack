@@ -1,9 +1,11 @@
+//! Stub summary for tests.rs.
 use super::*;
 
 fn openapi_json() -> serde_json::Value {
     serde_json::to_value(ApiDoc::openapi()).unwrap()
 }
 
+/// TODO: Document schema_contains_type.
 fn schema_contains_type(schema: &serde_json::Value, expected_type: &str) -> bool {
     match schema {
         serde_json::Value::Object(map) => {
@@ -33,6 +35,7 @@ fn schema_contains_type(schema: &serde_json::Value, expected_type: &str) -> bool
     }
 }
 
+/// TODO: Document schema_contains_ref.
 fn schema_contains_ref(schema: &serde_json::Value, expected_ref: &str) -> bool {
     match schema {
         serde_json::Value::Object(map) => {
@@ -85,6 +88,7 @@ fn assert_parameter_in(parameters: &[serde_json::Value], name: &str, expected_in
     );
 }
 
+/// TODO: Document assert_required_string_path_parameter.
 fn assert_required_string_path_parameter(parameters: &[serde_json::Value], name: &str) {
     let parameter = named_parameter(parameters, name);
     assert_eq!(
@@ -111,6 +115,7 @@ fn assert_experiment_operation_tag(doc: &serde_json::Value, pointer: &str) {
     );
 }
 
+/// TODO: Document key_endpoints_use_concrete_schema_components.
 #[test]
 fn key_endpoints_use_concrete_schema_components() {
     let doc = openapi_json();
@@ -347,6 +352,7 @@ fn security_sources_endpoints_are_documented() {
     );
 }
 
+/// TODO: Document experiment_crud_lifecycle_endpoints_use_concrete_schemas.
 #[test]
 fn experiment_crud_lifecycle_endpoints_use_concrete_schemas() {
     let doc = openapi_json();

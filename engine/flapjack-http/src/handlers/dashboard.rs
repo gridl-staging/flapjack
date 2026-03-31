@@ -4,7 +4,11 @@ use axum::response::{Html, IntoResponse, Response};
 use rust_embed::Embed;
 
 #[derive(Embed)]
-#[folder = "../dashboard/dist/"]
+#[cfg_attr(flapjack_dashboard_dist, folder = "../dashboard/dist/")]
+#[cfg_attr(
+    not(flapjack_dashboard_dist),
+    folder = "src/handlers/dashboard_fallback/"
+)]
 struct DashboardAssets;
 
 /// Serve embedded dashboard assets with SPA-style client-side routing fallback.

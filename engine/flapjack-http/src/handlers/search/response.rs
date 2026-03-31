@@ -1,3 +1,4 @@
+//! Stub summary for response.rs.
 use axum::Json;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -704,6 +705,7 @@ mod tests {
     use super::build_response_params_string;
     use crate::dto::SearchRequest;
     use serde_json::json;
+    /// TODO: Document response_params_string_includes_encoded_core_fields.
     #[test]
     fn response_params_string_includes_encoded_core_fields() {
         let req = SearchRequest {

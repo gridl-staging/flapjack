@@ -1,3 +1,4 @@
+//! Stub summary for results.rs.
 use super::*;
 use flapjack::experiments::{metrics, stats};
 use std::collections::HashMap;
@@ -278,19 +279,15 @@ fn try_cuped_adjustment(
     }
 }
 
-/// Build the full results response from an experiment and its metrics.
-pub(super) fn build_results_response(
+/// Compute statistical gate state and progress response for the experiment.
+///
+/// Derives baseline rate from control arm metrics, computes required sample size,
+/// elapsed time, and progress percentage. Returns the raw `StatGate` (needed by
+/// downstream significance computation) alongside the fully-constructed `GateResponse`.
+fn compute_gate_and_progress(
     experiment: &Experiment,
     metrics: Option<&metrics::ExperimentMetrics>,
-    covariates: Option<&HashMap<String, f64>>,
-    interleaving_metrics: Option<&metrics::InterleavingMetrics>,
-) -> ResultsResponse {
-    let (control_arm, variant_arm) = match metrics {
-        Some(m) => (arm_to_response(&m.control), arm_to_response(&m.variant)),
-        None => (empty_arm_response("control"), empty_arm_response("variant")),
-    };
-
-    // Compute sample size requirement based on baseline CTR estimate
+) -> (stats::StatGate, GateResponse) {
     let baseline_rate = match metrics {
         Some(m) => arm_primary_metric(&m.control, &experiment.primary_metric).max(0.001),
         None => 0.1, // default baseline estimate
@@ -303,14 +300,13 @@ pub(super) fn build_results_response(
         experiment.traffic_split,
     );
 
-    // Compute elapsed days since start
     let elapsed_days = experiment.started_at.map_or(0.0, |started| {
         let now_ms = chrono::Utc::now().timestamp_millis();
         (now_ms - started) as f64 / (1000.0 * 60.0 * 60.0 * 24.0)
     });
 
-    let control_searches = control_arm.searches;
-    let variant_searches = variant_arm.searches;
+    let control_searches = metrics.map_or(0, |m| m.control.searches);
+    let variant_searches = metrics.map_or(0, |m| m.variant.searches);
     let min_searches = control_searches.min(variant_searches);
 
     let gate = stats::StatGate::new(
@@ -342,10 +338,30 @@ pub(super) fn build_results_response(
         None
     };
 
-    // Bayesian probability is always available when metrics exist.
-    // Uses the primary metric's count data for the beta-binomial computation.
-    let bayesian = metrics.map(|m| {
-        let (a_success, a_total, b_success, b_total) = match experiment.primary_metric {
+    let gate_response = GateResponse {
+        minimum_n_reached: gate.minimum_n_reached,
+        minimum_days_reached: gate.minimum_days_reached,
+        ready_to_read: gate.ready_to_read,
+        required_searches_per_arm: sample_estimate.per_arm,
+        current_searches_per_arm: min_searches,
+        progress_pct,
+        estimated_days_remaining,
+    };
+
+    (gate, gate_response)
+}
+
+/// Compute Bayesian probability that the variant outperforms control.
+///
+/// Uses the primary metric's count data for beta-binomial computation.
+/// For lower-is-better metrics (zero result rate, abandonment rate), the
+/// probability is flipped so that higher values always mean "variant is better."
+fn compute_bayesian(
+    metrics: Option<&metrics::ExperimentMetrics>,
+    primary_metric: &PrimaryMetric,
+) -> Option<BayesianResponse> {
+    metrics.map(|m| {
+        let (a_success, a_total, b_success, b_total) = match primary_metric {
             PrimaryMetric::Ctr => (
                 m.control.clicks,
                 m.control.searches,
@@ -391,7 +407,7 @@ pub(super) fn build_results_response(
             }
         };
         let prob = stats::beta_binomial_prob_b_greater_a(a_success, a_total, b_success, b_total);
-        let prob_variant_better = if metric_prefers_lower(&experiment.primary_metric) {
+        let prob_variant_better = if metric_prefers_lower(primary_metric) {
             1.0 - prob
         } else {
             prob
@@ -399,22 +415,23 @@ pub(super) fn build_results_response(
         BayesianResponse {
             prob_variant_better,
         }
-    });
+    })
+}
 
-    // SRM is always computed when metrics exist (early warning, independent of gate).
-    let srm = metrics.is_some_and(|m| {
-        stats::check_sample_ratio_mismatch(
-            m.control.searches,
-            m.variant.searches,
-            experiment.traffic_split,
-        )
-    });
-
-    // Compute frequentist significance when N is reached (soft gate).
-    // The minimum_days gate is a soft override — significance is available once
-    // the required sample size is met, but the UI warns about novelty effects
-    // if minimum_days hasn't elapsed yet.
-    let (significance, recommendation, cuped_applied) = if gate.minimum_n_reached {
+/// Compute frequentist significance and recommendation when sample gate is reached.
+///
+/// Applies CUPED variance reduction for ratio metrics when covariates are available,
+/// falls back to raw delta-method z-test or Welch t-test (revenue). Returns the
+/// significance response, a human-readable recommendation string, and whether
+/// CUPED adjustment was applied.
+fn compute_significance_and_recommendation(
+    experiment: &Experiment,
+    metrics: Option<&metrics::ExperimentMetrics>,
+    covariates: Option<&HashMap<String, f64>>,
+    gate: &stats::StatGate,
+    srm: bool,
+) -> (Option<SignificanceResponse>, Option<String>, bool) {
+    if gate.minimum_n_reached {
         if let Some(m) = metrics {
             // Try CUPED adjustment for ratio metrics (not revenue, which uses Welch t-test)
             let (cuped_applied, adj_ctrl, adj_var) = match experiment.primary_metric {
@@ -484,7 +501,109 @@ pub(super) fn build_results_response(
             None
         };
         (None, rec, false)
+    }
+}
+
+/// Check all metrics for guard-rail violations (>20% regression in variant vs control).
+fn compute_guard_rail_alerts(
+    metrics: Option<&metrics::ExperimentMetrics>,
+) -> Vec<GuardRailAlertResponse> {
+    let Some(m) = metrics else {
+        return Vec::new();
     };
+
+    const GUARD_RAIL_THRESHOLD: f64 = 0.20;
+
+    let metric_checks: Vec<(&str, f64, f64, bool)> = vec![
+        ("ctr", m.control.ctr, m.variant.ctr, false),
+        (
+            "conversionRate",
+            m.control.conversion_rate,
+            m.variant.conversion_rate,
+            false,
+        ),
+        (
+            "revenuePerSearch",
+            m.control.revenue_per_search,
+            m.variant.revenue_per_search,
+            false,
+        ),
+        (
+            "zeroResultRate",
+            m.control.zero_result_rate,
+            m.variant.zero_result_rate,
+            true,
+        ),
+        (
+            "abandonmentRate",
+            m.control.abandonment_rate,
+            m.variant.abandonment_rate,
+            true,
+        ),
+    ];
+
+    metric_checks
+        .into_iter()
+        .filter_map(|(name, ctrl, var, lower_is_better)| {
+            stats::check_guard_rail(name, ctrl, var, lower_is_better, GUARD_RAIL_THRESHOLD).map(
+                |alert| GuardRailAlertResponse {
+                    metric_name: alert.metric_name,
+                    control_value: alert.control_value,
+                    variant_value: alert.variant_value,
+                    drop_pct: alert.drop_pct,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Build interleaving preference response for team-draft interleaving experiments.
+fn compute_interleaving_response(
+    experiment: &Experiment,
+    interleaving_metrics: Option<&metrics::InterleavingMetrics>,
+) -> Option<InterleavingResponse> {
+    if experiment.interleaving != Some(true) {
+        return None;
+    }
+    interleaving_metrics.map(|m| InterleavingResponse {
+        delta_ab: m.preference.delta_ab,
+        wins_control: m.preference.wins_a,
+        wins_variant: m.preference.wins_b,
+        ties: m.preference.ties,
+        p_value: m.preference.p_value,
+        significant: m.preference.p_value < 0.05,
+        total_queries: m.total_queries,
+        data_quality_ok: m.first_team_a_ratio >= 0.45 && m.first_team_a_ratio <= 0.55,
+    })
+}
+
+/// TODO: Document build_results_response.
+pub(super) fn build_results_response(
+    experiment: &Experiment,
+    metrics: Option<&metrics::ExperimentMetrics>,
+    covariates: Option<&HashMap<String, f64>>,
+    interleaving_metrics: Option<&metrics::InterleavingMetrics>,
+) -> ResultsResponse {
+    let (control_arm, variant_arm) = match metrics {
+        Some(m) => (arm_to_response(&m.control), arm_to_response(&m.variant)),
+        None => (empty_arm_response("control"), empty_arm_response("variant")),
+    };
+
+    let (gate, gate_response) = compute_gate_and_progress(experiment, metrics);
+
+    let bayesian = compute_bayesian(metrics, &experiment.primary_metric);
+
+    // SRM is always computed when metrics exist (early warning, independent of gate).
+    let srm = metrics.is_some_and(|m| {
+        stats::check_sample_ratio_mismatch(
+            m.control.searches,
+            m.variant.searches,
+            experiment.traffic_split,
+        )
+    });
+
+    let (significance, recommendation, cuped_applied) =
+        compute_significance_and_recommendation(experiment, metrics, covariates, &gate, srm);
 
     let start_date = experiment.started_at.map(|ms| {
         chrono::DateTime::from_timestamp_millis(ms)
@@ -497,69 +616,8 @@ pub(super) fn build_results_response(
             .unwrap_or_default()
     });
 
-    // Guard rails: check primary metric + all secondary metrics for >20% regression.
-    let guard_rail_alerts = if let Some(m) = metrics {
-        const GUARD_RAIL_THRESHOLD: f64 = 0.20;
-
-        let metric_checks: Vec<(&str, f64, f64, bool)> = vec![
-            ("ctr", m.control.ctr, m.variant.ctr, false),
-            (
-                "conversionRate",
-                m.control.conversion_rate,
-                m.variant.conversion_rate,
-                false,
-            ),
-            (
-                "revenuePerSearch",
-                m.control.revenue_per_search,
-                m.variant.revenue_per_search,
-                false,
-            ),
-            (
-                "zeroResultRate",
-                m.control.zero_result_rate,
-                m.variant.zero_result_rate,
-                true,
-            ),
-            (
-                "abandonmentRate",
-                m.control.abandonment_rate,
-                m.variant.abandonment_rate,
-                true,
-            ),
-        ];
-
-        metric_checks
-            .into_iter()
-            .filter_map(|(name, ctrl, var, lower_is_better)| {
-                stats::check_guard_rail(name, ctrl, var, lower_is_better, GUARD_RAIL_THRESHOLD).map(
-                    |alert| GuardRailAlertResponse {
-                        metric_name: alert.metric_name,
-                        control_value: alert.control_value,
-                        variant_value: alert.variant_value,
-                        drop_pct: alert.drop_pct,
-                    },
-                )
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let interleaving = if experiment.interleaving == Some(true) {
-        interleaving_metrics.map(|m| InterleavingResponse {
-            delta_ab: m.preference.delta_ab,
-            wins_control: m.preference.wins_a,
-            wins_variant: m.preference.wins_b,
-            ties: m.preference.ties,
-            p_value: m.preference.p_value,
-            significant: m.preference.p_value < 0.05,
-            total_queries: m.total_queries,
-            data_quality_ok: m.first_team_a_ratio >= 0.45 && m.first_team_a_ratio <= 0.55,
-        })
-    } else {
-        None
-    };
+    let guard_rail_alerts = compute_guard_rail_alerts(metrics);
+    let interleaving = compute_interleaving_response(experiment, interleaving_metrics);
 
     ResultsResponse {
         experiment_id: experiment.id.clone(),
@@ -570,15 +628,7 @@ pub(super) fn build_results_response(
         ended_at,
         conclusion: experiment.conclusion.clone(),
         traffic_split: experiment.traffic_split,
-        gate: GateResponse {
-            minimum_n_reached: gate.minimum_n_reached,
-            minimum_days_reached: gate.minimum_days_reached,
-            ready_to_read: gate.ready_to_read,
-            required_searches_per_arm: sample_estimate.per_arm,
-            current_searches_per_arm: min_searches,
-            progress_pct,
-            estimated_days_remaining,
-        },
+        gate: gate_response,
         control: control_arm,
         variant: variant_arm,
         primary_metric: experiment.primary_metric.clone(),

@@ -937,7 +937,8 @@
         "tags": [
           "documents"
         ],
-        "summary": "Browse all documents in an index with pagination",
+        "summary": "Browse all documents in an index with cursor-based pagination.",
+        "description": "Supports Algolia-compatible browse payloads, including `params` overrides,\nstable cursor validation, filter parsing, and attribute projection for\nlarge index scans that should not rely on ranked search pagination.",
         "operationId": "browse_index",
         "parameters": [
           {
@@ -3333,8 +3334,8 @@
         "tags": [
           "experiments"
         ],
-        "summary": "List experiments with optional index prefix/suffix filtering and pagination.",
-        "description": "Supports Algolia-compatible query parameters for filtering by index name pattern.\nResults are sorted by creation time with deterministic tie-breaking on numeric ID.\n\n# Returns\n\nA paginated response containing the matching experiments, page count, and total count.",
+        "summary": "List experiments with optional index prefix or suffix filtering and\npagination.",
+        "description": "Supports Algolia-compatible query parameters for filtering by index name\npattern. Results are sorted by creation time with deterministic tie-breaking\non numeric ID.",
         "operationId": "list_experiments",
         "parameters": [
           {
@@ -3401,7 +3402,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Create a new A/B test experiment with traffic splitting between a main index and variant.",
+        "summary": "Create a new A/B test experiment with traffic splitting between a main\nindex and variant.",
         "operationId": "create_experiment",
         "requestBody": {
           "description": "A/B test creation payload",
@@ -3488,8 +3489,8 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Fetch a single experiment by numeric ID or UUID, hydrated with live metrics.",
-        "description": "Retrieves the experiment from the store, converts it to the Algolia DTO format,\nand overlays click/conversion/search metrics from the analytics engine when available.\n\n# Returns\n\nThe Algolia-format AB test payload with metric fields populated, or an error response.",
+        "summary": "Fetch a single experiment by numeric ID or UUID, hydrated with live\nanalytics metrics when available.",
+        "description": "Retrieves the experiment from the store, converts it to the Algolia DTO\nformat, and overlays click, conversion, and search metrics from the\nanalytics engine when available.",
         "operationId": "get_experiment",
         "parameters": [
           {
@@ -3530,8 +3531,8 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Replace an experiment's mutable configuration fields while preserving its identity and lifecycle state.",
-        "description": "Merges the request body with the existing experiment, keeping `id`, `status`,\ntimestamps, and conclusion unchanged. Falls back to existing values for optional\nfields not provided in the request.\n\n# Returns\n\nThe updated experiment in Algolia DTO format, or an error response.",
+        "summary": "Replace an experiment's mutable configuration fields while preserving its\nidentity and lifecycle state.",
+        "description": "Merges the request body with the existing experiment, keeping immutable\nidentity and lifecycle fields while falling back to existing values for\noptional settings omitted from the request.",
         "operationId": "update_experiment",
         "parameters": [
           {
@@ -3590,7 +3591,7 @@
           "experiments"
         ],
         "summary": "Delete an experiment by numeric ID or UUID.",
-        "description": "Removes the experiment from the persistent store. This operation is irreversible.\n\n# Returns\n\nJSON action response confirming deletion with the experiment's numeric ID and index name,\nor an error if the experiment is not found.",
+        "description": "Removes the experiment from the persistent store and returns the Algolia\naction envelope confirming which numeric ID and index were deleted.",
         "operationId": "delete_experiment",
         "parameters": [
           {
@@ -3636,7 +3637,8 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Conclude a running experiment by selecting a winner and promoting the winning configuration.",
+        "summary": "Conclude a running experiment by selecting a winner and promoting the\nwinning configuration.",
+        "description": "Applies the supplied conclusion payload, persists the experiment's final\nstate, and attempts variant promotion before returning the concluded\nexperiment response.",
         "operationId": "conclude_experiment",
         "parameters": [
           {

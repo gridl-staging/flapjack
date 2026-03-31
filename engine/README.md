@@ -84,12 +84,6 @@ flapjack --instance branch_b --auto-port --no-auth
 # Fully explicit:
 flapjack --data-dir /tmp/fj/agent_a --bind-addr 127.0.0.1:18110 --no-auth
 flapjack --data-dir /tmp/fj/agent_b --bind-addr 127.0.0.1:18111 --no-auth
-
-# Agent helper scripts (tracked PID/log + explicit instance identity):
-_dev/s/start-multi-instance.sh agent_a --auto-port --no-auth
-_dev/s/start-multi-instance.sh agent_b --auto-port --no-auth
-_dev/s/stop-multi-instance.sh agent_a
-_dev/s/stop-multi-instance.sh agent_b
 ```
 
 Never share the same `--data-dir` across concurrent processes.

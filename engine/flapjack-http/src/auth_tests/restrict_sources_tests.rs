@@ -1,3 +1,4 @@
+//! Stub summary for restrict_sources_tests.rs.
 use super::*;
 use std::net::IpAddr;
 
@@ -16,6 +17,7 @@ async fn regular_key_restrict_sources_response(
     regular_key_restrict_sources_response_with_referer(restrict_sources, client_addr, None).await
 }
 
+/// TODO: Document regular_key_restrict_sources_response_with_referer.
 async fn regular_key_restrict_sources_response_with_referer(
     restrict_sources: Option<Vec<String>>,
     client_addr: &str,
@@ -56,6 +58,7 @@ async fn regular_key_restrict_sources_response_with_referer(
 
     app.oneshot(request).await.unwrap()
 }
+/// TODO: Document auth_middleware_regular_key_restrict_sources_non_match_returns_algolia_403.
 #[tokio::test]
 async fn auth_middleware_regular_key_restrict_sources_non_match_returns_algolia_403() {
     let response = regular_key_restrict_sources_response(

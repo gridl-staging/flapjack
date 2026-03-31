@@ -1,3 +1,4 @@
+//! Stub summary for tests.rs.
 use super::*;
 use crate::index::rules::GeneratedFacetFilter;
 use tempfile::TempDir;
@@ -15,6 +16,7 @@ fn manager_mod_stays_under_hard_line_limit() {
     );
 }
 
+/// TODO: Document reserve_numeric_task_id_skips_existing_alias_keys.
 #[tokio::test]
 async fn reserve_numeric_task_id_skips_existing_alias_keys() {
     let temp_dir = TempDir::new().unwrap();
@@ -45,6 +47,7 @@ async fn make_noop_task_registers_numeric_alias_lookup() {
     assert!(matches!(by_numeric_id.status, TaskStatus::Succeeded));
 }
 
+/// TODO: Document recovery_phase_helpers_are_callable.
 #[tokio::test]
 async fn recovery_phase_helpers_are_callable() {
     let temp_dir = TempDir::new().unwrap();
@@ -80,6 +83,7 @@ async fn recovery_phase_helpers_are_callable() {
     manager.rebuild_vector_index("recovery_helpers", &tenant_path, &ops);
 }
 
+/// TODO: Document replay_config_ops_surfaces_settings_write_failures.
 #[tokio::test]
 async fn replay_config_ops_surfaces_settings_write_failures() {
     let temp_dir = TempDir::new().unwrap();
@@ -105,6 +109,7 @@ async fn replay_config_ops_surfaces_settings_write_failures() {
     );
 }
 
+/// TODO: Document read_committed_seq_does_not_require_tenant_load.
 #[tokio::test]
 async fn read_committed_seq_does_not_require_tenant_load() {
     let temp_dir = TempDir::new().unwrap();
@@ -127,6 +132,7 @@ async fn read_committed_seq_does_not_require_tenant_load() {
     );
 }
 
+/// TODO: Document setup_tenant_with_pending_document_recovery.
 fn setup_tenant_with_pending_document_recovery(base_path: &Path, tenant_id: &str) {
     let tenant_path = base_path.join(tenant_id);
     std::fs::create_dir_all(&tenant_path).unwrap();
@@ -156,6 +162,7 @@ fn setup_tenant_with_pending_document_recovery(base_path: &Path, tenant_id: &str
     std::fs::write(tenant_path.join("committed_seq"), "0").unwrap();
 }
 
+/// TODO: Document get_or_load_serializes_concurrent_recovery_for_same_tenant.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_or_load_serializes_concurrent_recovery_for_same_tenant() {
     let temp_dir = TempDir::new().unwrap();
@@ -206,6 +213,7 @@ async fn get_or_load_serializes_concurrent_recovery_for_same_tenant() {
     );
 }
 
+/// TODO: Document build_effective_search_params_errors_on_invalid_generated_facet_filter.
 #[test]
 fn build_effective_search_params_errors_on_invalid_generated_facet_filter() {
     let configured_facets = std::collections::HashSet::from([String::from("genre")]);
@@ -235,6 +243,7 @@ fn build_effective_search_params_errors_on_invalid_generated_facet_filter() {
     assert!(err.contains("Invalid generated automatic facet filter expression"));
 }
 
+/// TODO: Document build_effective_search_params_ignores_generated_optional_facet_filter_without_faceting.
 #[test]
 fn build_effective_search_params_ignores_generated_optional_facet_filter_without_faceting() {
     let configured_facets = std::collections::HashSet::from([String::from("brand")]);
@@ -264,6 +273,7 @@ fn build_effective_search_params_ignores_generated_optional_facet_filter_without
     );
 }
 
+/// TODO: Document bm25_short_field_correction_factor_has_expected_directionality.
 #[test]
 fn bm25_short_field_correction_factor_has_expected_directionality() {
     let avg_doc_len_tokens = 4.0;
@@ -299,6 +309,7 @@ fn typo_distance_strict_disables_prefix_shortcut_when_not_allowed() {
     );
 }
 
+/// TODO: Document compute_best_attribute_index_respects_prefix_eligibility.
 #[test]
 fn compute_best_attribute_index_respects_prefix_eligibility() {
     let query_terms = vec!["red".to_string(), "shoe".to_string()];
@@ -339,6 +350,7 @@ fn compute_typo_bucket_rejects_short_word_typos() {
     );
 }
 
+/// TODO: Document compute_best_attribute_index_rejects_short_word_typos.
 #[test]
 fn compute_best_attribute_index_rejects_short_word_typos() {
     let query_terms = vec!["cat".to_string()];
@@ -366,6 +378,7 @@ fn compute_best_attribute_index_rejects_short_word_typos() {
     );
 }
 
+/// TODO: Document compute_best_attribute_index_preserves_unordered_attribute_priority.
 #[test]
 fn compute_best_attribute_index_preserves_unordered_attribute_priority() {
     let query_terms = vec!["apple".to_string()];
@@ -395,6 +408,7 @@ fn compute_best_attribute_index_preserves_unordered_attribute_priority() {
     );
 }
 
+/// TODO: Document compute_best_attribute_by_proximity_single_term_preserves_raw_attribute_priority.
 #[test]
 fn compute_best_attribute_by_proximity_single_term_preserves_raw_attribute_priority() {
     let query_terms = vec!["apple".to_string()];
@@ -419,6 +433,7 @@ fn compute_best_attribute_by_proximity_single_term_preserves_raw_attribute_prior
     );
 }
 
+/// TODO: Document compute_best_attribute_by_proximity_unordered_paths_ignore_position_penalty.
 #[test]
 fn compute_best_attribute_by_proximity_unordered_paths_ignore_position_penalty() {
     let query_terms = vec!["hello".to_string(), "world".to_string()];
@@ -451,6 +466,7 @@ fn compute_best_attribute_by_proximity_unordered_paths_ignore_position_penalty()
     );
 }
 
+/// TODO: Document searchable_attribute_duplicate_entries_do_not_change_unique_rank_weights.
 #[test]
 fn searchable_attribute_duplicate_entries_do_not_change_unique_rank_weights() {
     fn weight_for_path(paths: &[String], weights: &[f32], target: &str) -> f32 {
@@ -628,6 +644,7 @@ fn optional_filter_score_no_match_group_contributes_zero() {
     );
 }
 
+/// TODO: Document parse_custom_ranking_specs_ignores_unknown_entries_and_preserves_order.
 #[test]
 fn parse_custom_ranking_specs_ignores_unknown_entries_and_preserves_order() {
     let settings = IndexSettings {
@@ -654,6 +671,7 @@ fn parse_custom_ranking_specs_ignores_unknown_entries_and_preserves_order() {
     assert!(!specs[2].asc);
 }
 
+/// TODO: Document extract_custom_ranking_value_handles_nested_numeric_text_and_missing_paths.
 #[test]
 fn extract_custom_ranking_value_handles_nested_numeric_text_and_missing_paths() {
     let document = Document {
@@ -703,6 +721,7 @@ fn extract_custom_ranking_value_handles_nested_numeric_text_and_missing_paths() 
     );
 }
 
+/// TODO: Document compare_custom_values_keeps_missing_values_last_for_asc_and_desc.
 #[test]
 fn compare_custom_values_keeps_missing_values_last_for_asc_and_desc() {
     let specs = vec![CustomRankingSpec {
@@ -735,6 +754,7 @@ fn compare_custom_values_keeps_missing_values_last_for_asc_and_desc() {
     );
 }
 
+/// TODO: Document optional_filter_path_matching_supports_nested_object_arrays_and_scalar_arrays.
 #[test]
 fn optional_filter_path_matching_supports_nested_object_arrays_and_scalar_arrays() {
     let document = Document {
@@ -800,6 +820,7 @@ fn count_matched_query_words_deduplicates_query_terms() {
 
 // --- Ranking criteria utility coverage (s40 test-audit, batch 2) ---
 
+/// TODO: Document compare_ranking_sort_value_orders_same_type_correctly.
 #[test]
 fn compare_ranking_sort_value_orders_same_type_correctly() {
     assert_eq!(
@@ -838,6 +859,7 @@ fn compare_ranking_sort_value_missing_sorts_below_all_present() {
     );
 }
 
+/// TODO: Document compare_ranking_sort_value_cross_type_ordering_is_deterministic.
 #[test]
 fn compare_ranking_sort_value_cross_type_ordering_is_deterministic() {
     // Integer < Float < Text (when comparing across types)
@@ -887,6 +909,7 @@ fn min_distance_sorted_empty_input_returns_max() {
     assert_eq!(min_distance_sorted(&[1], &[]), u32::MAX);
 }
 
+/// TODO: Document contains_contiguous_subsequence_detects_exact_window_matches.
 #[test]
 fn contains_contiguous_subsequence_detects_exact_window_matches() {
     let tokens: Vec<String> = vec!["the", "red", "fox", "jumps"]
@@ -951,6 +974,7 @@ fn classify_match_distinguishes_exact_prefix_and_fuzzy() {
     assert!(!is_prefix, "edit-distance match is not prefix");
 }
 
+/// TODO: Document find_term_positions_exact_vs_prefix_mode.
 #[test]
 fn find_term_positions_exact_vs_prefix_mode() {
     let tokens: Vec<String> = vec!["apple", "app", "application", "banana"]
@@ -970,6 +994,7 @@ fn find_term_positions_exact_vs_prefix_mode() {
     );
 }
 
+/// TODO: Document compute_prefix_eligible_modes.
 #[test]
 fn compute_prefix_eligible_modes() {
     assert_eq!(
@@ -994,6 +1019,7 @@ fn compute_prefix_eligible_modes() {
 
 // --- A4: exactOnSingleWordQuery unit tests ---
 
+/// TODO: Document exact_vs_prefix_attribute_mode_single_token_attribute_is_exact.
 #[test]
 fn exact_vs_prefix_attribute_mode_single_token_attribute_is_exact() {
     // "attribute" mode: single-word query "red" against doc with title:"Red" (1 token → exact attribute match)
@@ -1016,6 +1042,7 @@ fn exact_vs_prefix_attribute_mode_single_token_attribute_is_exact() {
     );
 }
 
+/// TODO: Document exact_vs_prefix_attribute_mode_multi_token_attribute_is_prefix.
 #[test]
 fn exact_vs_prefix_attribute_mode_multi_token_attribute_is_prefix() {
     // "attribute" mode: single-word query "red" against doc with title:"Red Shoes" (2 tokens → not full attribute)
@@ -1038,6 +1065,7 @@ fn exact_vs_prefix_attribute_mode_multi_token_attribute_is_prefix() {
     );
 }
 
+/// TODO: Document exact_vs_prefix_word_mode_any_token_match_is_exact.
 #[test]
 fn exact_vs_prefix_word_mode_any_token_match_is_exact() {
     // "word" mode: single-word query "red" — any token match is exact, including in multi-token attributes
@@ -1060,6 +1088,7 @@ fn exact_vs_prefix_word_mode_any_token_match_is_exact() {
     );
 }
 
+/// TODO: Document exact_vs_prefix_none_mode_always_exact_for_single_word.
 #[test]
 fn exact_vs_prefix_none_mode_always_exact_for_single_word() {
     // "none" mode: exact tier disabled for single-word queries → always return 0
@@ -1082,6 +1111,7 @@ fn exact_vs_prefix_none_mode_always_exact_for_single_word() {
     );
 }
 
+/// TODO: Document exact_vs_prefix_multi_word_query_unaffected_by_exact_on_single_word_setting.
 #[test]
 fn exact_vs_prefix_multi_word_query_unaffected_by_exact_on_single_word_setting() {
     // Multi-word query: "attribute" setting has no effect — uses word semantics
@@ -1107,6 +1137,7 @@ fn exact_vs_prefix_multi_word_query_unaffected_by_exact_on_single_word_setting()
 
 // --- A3: disableExactOnAttributes unit tests ---
 
+/// TODO: Document exact_vs_prefix_disable_exact_on_attributes_excludes_disabled_from_exact_check.
 #[test]
 fn exact_vs_prefix_disable_exact_on_attributes_excludes_disabled_from_exact_check() {
     // Exact match only in disabled attribute (title), description only has prefix match → prefix tier
@@ -1132,6 +1163,7 @@ fn exact_vs_prefix_disable_exact_on_attributes_excludes_disabled_from_exact_chec
     );
 }
 
+/// TODO: Document exact_vs_prefix_without_disable_title_gives_exact.
 #[test]
 fn exact_vs_prefix_without_disable_title_gives_exact() {
     // Same doc, same settings, but title NOT disabled → exact via single-token title
@@ -1157,6 +1189,7 @@ fn exact_vs_prefix_without_disable_title_gives_exact() {
     );
 }
 
+/// TODO: Document exact_vs_prefix_disabled_attr_only_match_returns_non_exact.
 #[test]
 fn exact_vs_prefix_disabled_attr_only_match_returns_non_exact() {
     // Doc matches "red" ONLY on disabled attribute (description), title has no match
@@ -1182,6 +1215,7 @@ fn exact_vs_prefix_disabled_attr_only_match_returns_non_exact() {
     );
 }
 
+/// TODO: Document alternatives_as_exact_ignore_plurals_counts_plural_as_exact.
 #[test]
 fn alternatives_as_exact_ignore_plurals_counts_plural_as_exact() {
     let query_terms = vec!["shoe".to_string()];
@@ -1230,6 +1264,7 @@ fn alternatives_as_exact_ignore_plurals_counts_plural_as_exact() {
     );
 }
 
+/// TODO: Document alternatives_as_exact_single_word_synonym_counts_synonym_as_exact.
 #[test]
 fn alternatives_as_exact_single_word_synonym_counts_synonym_as_exact() {
     let query_terms = vec!["trousers".to_string()];
@@ -1279,6 +1314,7 @@ fn alternatives_as_exact_single_word_synonym_counts_synonym_as_exact() {
     );
 }
 
+/// TODO: Document alternatives_as_exact_multi_word_synonym_counts_contiguous_sequence_as_exact.
 #[test]
 fn alternatives_as_exact_multi_word_synonym_counts_contiguous_sequence_as_exact() {
     let query_terms = vec!["ny".to_string()];
@@ -1332,6 +1368,7 @@ fn alternatives_as_exact_multi_word_synonym_counts_contiguous_sequence_as_exact(
     );
 }
 
+/// TODO: Document ranking_attribute_before_exact_per_algolia_default.
 #[test]
 fn ranking_attribute_before_exact_per_algolia_default() {
     let mut all_results = vec![
@@ -1393,6 +1430,7 @@ fn ranking_attribute_before_exact_per_algolia_default() {
     );
 }
 
+/// TODO: Document ranking_setting_can_put_exact_before_attribute.
 #[test]
 fn ranking_setting_can_put_exact_before_attribute() {
     let mut all_results = vec![
@@ -1465,6 +1503,7 @@ fn ranking_setting_can_put_exact_before_attribute() {
     );
 }
 
+/// TODO: Document attribute_criteria_computed_by_min_proximity_changes_attribute_winner.
 #[test]
 fn attribute_criteria_computed_by_min_proximity_changes_attribute_winner() {
     // Keep proximity/effectively all earlier tiers tied via minProximity clamp and equal doc lengths.
@@ -1558,6 +1597,7 @@ fn attribute_criteria_computed_by_min_proximity_changes_attribute_winner() {
     );
 }
 
+/// TODO: Document attribute_criteria_computed_by_min_proximity_single_term_no_effect.
 #[test]
 fn attribute_criteria_computed_by_min_proximity_single_term_no_effect() {
     let base_results = vec![
@@ -1652,6 +1692,7 @@ fn attribute_criteria_computed_by_min_proximity_single_term_no_effect() {
     );
 }
 
+/// TODO: Document sort_results_with_stage2_ranking_filters_below_relevancy_strictness_threshold.
 #[test]
 fn sort_results_with_stage2_ranking_filters_below_relevancy_strictness_threshold() {
     let mut all_results = vec![
@@ -1729,6 +1770,7 @@ fn sort_results_with_stage2_ranking_filters_below_relevancy_strictness_threshold
     );
 }
 
+/// TODO: Document proximity_two_word_query_closer_doc_ranks_first.
 #[test]
 fn proximity_two_word_query_closer_doc_ranks_first() {
     let mut all_results = vec![
@@ -1782,6 +1824,7 @@ fn proximity_two_word_query_closer_doc_ranks_first() {
     );
 }
 
+/// TODO: Document proximity_single_term_query_both_docs_equal_bucket.
 #[test]
 fn proximity_single_term_query_both_docs_equal_bucket() {
     // Both docs have the same structure/length so BM25 scores are equal
@@ -1837,6 +1880,7 @@ fn proximity_single_term_query_both_docs_equal_bucket() {
     );
 }
 
+/// TODO: Document proximity_three_term_query_sum_of_adjacent_pairs.
 #[test]
 fn proximity_three_term_query_sum_of_adjacent_pairs() {
     // Query "a b c"
@@ -1894,6 +1938,7 @@ fn proximity_three_term_query_sum_of_adjacent_pairs() {
     );
 }
 
+/// TODO: Document proximity_min_proximity_clamps_pair_distances.
 #[test]
 fn proximity_min_proximity_clamps_pair_distances() {
     // With minProximity=3:
@@ -1971,6 +2016,7 @@ fn proximity_min_proximity_clamps_pair_distances() {
     );
 }
 
+/// TODO: Document tenant_doc_count_returns_correct_count.
 #[tokio::test]
 async fn tenant_doc_count_returns_correct_count() {
     let tmp = TempDir::new().unwrap();
@@ -2032,6 +2078,7 @@ async fn loaded_tenant_ids_empty_when_no_tenants() {
     assert!(manager.loaded_tenant_ids().is_empty());
 }
 
+/// TODO: Document all_tenant_oplog_seqs_returns_seqs_after_writes.
 #[tokio::test]
 async fn all_tenant_oplog_seqs_returns_seqs_after_writes() {
     let tmp = TempDir::new().unwrap();
@@ -2081,6 +2128,7 @@ async fn test_vector_index_missing_returns_none() {
     assert!(manager.get_vector_index("nonexistent").is_none());
 }
 
+/// TODO: Document test_vector_index_search_through_manager.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_vector_index_search_through_manager() {
@@ -2103,6 +2151,7 @@ async fn test_vector_index_search_through_manager() {
 
 // ── Multi-tenant vector isolation test ──
 
+/// TODO: Document test_vector_tenant_isolation.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_vector_tenant_isolation() {
@@ -2185,6 +2234,7 @@ async fn all_tenant_oplog_seqs_empty_when_no_oplogs() {
 
 // ── Vector index load-on-open tests (8.4) ──
 
+/// TODO: Document test_load_vector_index_on_get_or_load.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_load_vector_index_on_get_or_load() {
@@ -2238,6 +2288,7 @@ async fn test_load_vector_index_on_get_or_load() {
     assert_eq!(results[0].doc_id, "doc1");
 }
 
+/// TODO: Document test_load_no_vectors_dir_ok.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_load_no_vectors_dir_ok() {
@@ -2261,6 +2312,7 @@ async fn test_load_no_vectors_dir_ok() {
     );
 }
 
+/// TODO: Document test_load_corrupted_vector_index_logs_warning.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_load_corrupted_vector_index_logs_warning() {
@@ -2305,6 +2357,7 @@ async fn test_load_corrupted_vector_index_logs_warning() {
     );
 }
 
+/// TODO: Document test_create_tenant_loads_existing_vectors.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_create_tenant_loads_existing_vectors() {
@@ -2385,6 +2438,7 @@ fn setup_tenant_with_oplog_vectors(
     tenant_path
 }
 
+/// TODO: Document test_recover_vectors_from_oplog.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_recover_vectors_from_oplog() {
@@ -2432,6 +2486,7 @@ async fn test_recover_vectors_from_oplog() {
     assert_eq!(results[0].doc_id, "doc1");
 }
 
+/// TODO: Document test_recover_vectors_with_deletes.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_recover_vectors_with_deletes() {
@@ -2482,6 +2537,7 @@ async fn test_recover_vectors_with_deletes() {
     assert_eq!(results[0].doc_id, "doc2");
 }
 
+/// TODO: Document test_recover_no_vectors_in_old_oplog.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_recover_no_vectors_in_old_oplog() {
@@ -2509,6 +2565,7 @@ async fn test_recover_no_vectors_in_old_oplog() {
     );
 }
 
+/// TODO: Document test_recover_vectors_after_clear_op.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_recover_vectors_after_clear_op() {
@@ -2567,6 +2624,7 @@ async fn test_recover_vectors_after_clear_op() {
     assert_eq!(results[0].doc_id, "doc3");
 }
 
+/// TODO: Document test_recover_vectors_saved_to_disk.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_recover_vectors_saved_to_disk() {
@@ -2602,6 +2660,7 @@ async fn test_recover_vectors_saved_to_disk() {
     );
 }
 
+/// TODO: Document test_recover_vectors_upsert_same_doc_twice.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_recover_vectors_upsert_same_doc_twice() {
@@ -2650,6 +2709,7 @@ async fn test_recover_vectors_upsert_same_doc_twice() {
     assert_eq!(results[0].doc_id, "doc1");
 }
 
+/// TODO: Document test_load_vector_index_skips_when_already_loaded.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_load_vector_index_skips_when_already_loaded() {
@@ -2693,6 +2753,7 @@ async fn test_load_vector_index_skips_when_already_loaded() {
     assert_eq!(results[0].doc_id, "mem_doc1");
 }
 
+/// TODO: Document test_full_crash_recovery_vectors_available.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_full_crash_recovery_vectors_available() {
@@ -2767,6 +2828,7 @@ async fn test_full_crash_recovery_vectors_available() {
 
 // ── Fingerprint integration tests (8.18) ──
 
+/// TODO: Document test_fingerprint_match_loads_vectors.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_fingerprint_match_loads_vectors() {
@@ -2822,6 +2884,7 @@ async fn test_fingerprint_match_loads_vectors() {
     );
 }
 
+/// TODO: Document test_fingerprint_mismatch_skips_vectors.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_fingerprint_mismatch_skips_vectors() {
@@ -2878,6 +2941,7 @@ async fn test_fingerprint_mismatch_skips_vectors() {
     );
 }
 
+/// TODO: Document test_no_fingerprint_file_loads_vectors_anyway.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_no_fingerprint_file_loads_vectors_anyway() {
@@ -2920,6 +2984,7 @@ async fn test_no_fingerprint_file_loads_vectors_anyway() {
     );
 }
 
+/// TODO: Document test_fingerprint_mismatch_template_change_skips.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_fingerprint_mismatch_template_change_skips() {
@@ -2979,6 +3044,7 @@ async fn test_fingerprint_mismatch_template_change_skips() {
 
 // ── Memory accounting tests (8.21) ──
 
+/// TODO: Document test_vector_memory_usage_with_indices.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_vector_memory_usage_with_indices() {
@@ -3014,6 +3080,7 @@ async fn test_vector_memory_usage_no_indices() {
 
 // ── HTTP integration tests (8.25) ──
 
+/// TODO: Document test_vectors_survive_manager_restart.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_vectors_survive_manager_restart() {
@@ -3105,6 +3172,7 @@ async fn test_vectors_survive_manager_restart() {
     }
 }
 
+/// TODO: Document test_vectors_lost_when_embedder_model_changes.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_vectors_lost_when_embedder_model_changes() {
@@ -3231,6 +3299,7 @@ async fn create_tenant_rejects_path_traversal() {
     assert!(msg.contains("path traversal"), "got: {msg}");
 }
 
+/// TODO: Document read_side_getters_reject_path_traversal_tenant_ids.
 #[tokio::test]
 async fn read_side_getters_reject_path_traversal_tenant_ids() {
     let tmp = TempDir::new().unwrap();
@@ -3272,6 +3341,7 @@ async fn delete_tenant_rejects_path_traversal_tenant_ids() {
     );
 }
 
+/// TODO: Document import_tenant_rejects_path_traversal_tenant_ids.
 #[tokio::test]
 async fn import_tenant_rejects_path_traversal_tenant_ids() {
     let tmp = TempDir::new().unwrap();
@@ -3343,6 +3413,7 @@ fn setup_manager_with_dictionaries(tmp: &TempDir) -> Arc<IndexManager> {
     manager
 }
 
+/// TODO: Document test_custom_stopword_removes_term_from_query.
 #[tokio::test]
 async fn test_custom_stopword_removes_term_from_query() {
     let tmp = TempDir::new().unwrap();
@@ -3584,6 +3655,7 @@ async fn test_stopword_isolation_no_cross_tenant_bleed() {
     assert_eq!(result.documents[0].document.id, "d1");
 }
 
+/// TODO: Document test_custom_plural_expands_query.
 #[tokio::test]
 async fn test_custom_plural_expands_query() {
     let tmp = TempDir::new().unwrap();
@@ -3761,6 +3833,7 @@ async fn test_plural_isolation_no_cross_tenant_bleed() {
     assert_eq!(result.documents[0].document.id, "d1");
 }
 
+/// TODO: Document test_custom_compound_decomposition_expands_query.
 #[cfg(feature = "decompound")]
 #[tokio::test]
 async fn test_custom_compound_decomposition_expands_query() {

@@ -103,6 +103,7 @@ fn chat_endpoint_documents_sse_content_type() {
     );
 }
 
+/// TODO: Document personalization_and_experiment_lifecycle_use_typed_schemas.
 #[test]
 fn personalization_and_experiment_lifecycle_use_typed_schemas() {
     let doc = openapi_json();
@@ -345,6 +346,7 @@ fn analytics_endpoints_use_shared_response_schemas() {
 
 // --- Stage 7 Security Review: regression guards for auth-correct OpenAPI exposure ---
 
+/// TODO: Document health_endpoint_has_no_security_requirement.
 #[test]
 fn health_endpoint_has_no_security_requirement() {
     let doc = openapi_json();

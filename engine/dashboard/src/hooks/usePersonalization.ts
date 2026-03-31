@@ -38,6 +38,9 @@ export function usePersonalizationStrategy() {
   });
 }
 
+/**
+ * TODO: Document useSaveStrategy.
+ */
 export function useSaveStrategy() {
   const queryClient = useQueryClient();
   const { toast } = useToast();

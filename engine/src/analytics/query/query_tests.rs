@@ -1,3 +1,4 @@
+//! Stub summary for query_tests.rs.
 use super::*;
 use crate::analytics::collector::AnalyticsCollector;
 use crate::analytics::schema::InsightEvent;
@@ -356,6 +357,7 @@ async fn no_click_searches_escapes_query_ids_from_events_before_in_clause() {
         "clicked query should not be returned as no-click even with quote in query_id"
     );
 }
+/// TODO: Document aggregate_counts_by_query_id_merges_multiple_query_ids_into_same_query.
 #[test]
 fn aggregate_counts_by_query_id_merges_multiple_query_ids_into_same_query() {
     let rows = vec![
@@ -374,6 +376,7 @@ fn aggregate_counts_by_query_id_merges_multiple_query_ids_into_same_query() {
     assert_eq!(aggregated.get("boots"), Some(&5));
     assert_eq!(aggregated.get("hats"), Some(&1));
 }
+/// TODO: Document enrich_rows_with_click_metrics_adds_expected_fields.
 #[test]
 fn enrich_rows_with_click_metrics_adds_expected_fields() {
     let rows = vec![serde_json::json!({"search": "boots"})];

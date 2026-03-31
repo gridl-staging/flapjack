@@ -1,3 +1,4 @@
+//! Stub summary for startup_catchup.rs.
 use crate::handlers::internal::apply_ops_to_manager;
 use crate::handlers::AppState;
 use flapjack::index::oplog::read_committed_seq;
@@ -35,6 +36,7 @@ async fn delayed_catchup_from_peers(state: &AppState) {
     tracing::info!("[REPL-catchup] Startup catch-up complete");
 }
 
+/// TODO: Document run_pre_serve_catchup.
 pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
     let has_peers = state
         .replication_manager
@@ -61,30 +63,51 @@ pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
         );
     }
 
-    execute_timed_catchup(state, timeout, timeout_secs).await?;
+    execute_timed_catchup(state, timeout, timeout_secs, strict_bootstrap).await?;
     wait_for_write_queues(state, timeout, timeout_secs).await
 }
 
-/// Run `catchup_all_tenants` with a timeout, returning a descriptive error
-/// on catch-up failure or timeout.
+/// TODO: Document execute_timed_catchup.
 async fn execute_timed_catchup(
     state: &AppState,
     timeout: tokio::time::Duration,
     timeout_secs: u64,
+    strict_bootstrap: bool,
 ) -> Result<(), String> {
-    match tokio::time::timeout(timeout, catchup_all_tenants(state, "REPL-catchup", true)).await {
+    match tokio::time::timeout(
+        timeout,
+        catchup_all_tenants(state, "REPL-catchup", strict_bootstrap),
+    )
+    .await
+    {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => {
-            tracing::error!("[REPL-catchup] Pre-serve catch-up failed: {}", error);
-            Err(error)
+            if strict_bootstrap {
+                tracing::error!("[REPL-catchup] Pre-serve catch-up failed: {}", error);
+                Err(error)
+            } else {
+                tracing::warn!(
+                    "[REPL-catchup] Pre-serve catch-up skipped (non-strict): {}",
+                    error
+                );
+                Ok(())
+            }
         }
         Err(_) => {
-            let error = format!(
-                "pre-serve catch-up timed out after {}s; refusing to serve stale data",
-                timeout_secs
-            );
-            tracing::error!("[REPL-catchup] {}", error);
-            Err(error)
+            if strict_bootstrap {
+                let error = format!(
+                    "pre-serve catch-up timed out after {}s; refusing to serve stale data",
+                    timeout_secs
+                );
+                tracing::error!("[REPL-catchup] {}", error);
+                Err(error)
+            } else {
+                tracing::warn!(
+                    "[REPL-catchup] Pre-serve catch-up timed out after {}s (non-strict, continuing)",
+                    timeout_secs
+                );
+                Ok(())
+            }
         }
     }
 }
@@ -465,6 +488,51 @@ mod tests {
     use flapjack_replication::types::GetOpsResponse;
     use tempfile::TempDir;
 
+    /// Non-strict pre-serve catchup must succeed even when peers are unreachable.
+    /// Regression: execute_timed_catchup hard-coded strict_bootstrap=true, ignoring
+    /// the FLAPJACK_STARTUP_CATCHUP_STRICT=0 env var.
+    #[tokio::test]
+    async fn pre_serve_catchup_succeeds_with_unreachable_peers_when_not_strict() {
+        // SAFETY: env vars are process-global; this test must not run in parallel
+        // with other tests that read these vars.
+        unsafe {
+            std::env::set_var("FLAPJACK_STARTUP_CATCHUP_STRICT", "0");
+            std::env::set_var("FLAPJACK_STARTUP_CATCHUP_TIMEOUT_SECS", "2");
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let state = crate::test_helpers::TestStateBuilder::new(&tmp).build();
+
+        let node_config = flapjack_replication::config::NodeConfig {
+            node_id: "test-node".to_string(),
+            bind_addr: "0.0.0.0:7700".to_string(),
+            peers: vec![flapjack_replication::config::PeerConfig {
+                node_id: "unreachable-peer".to_string(),
+                addr: "http://127.0.0.1:19999".to_string(),
+            }],
+        };
+        let repl_mgr = flapjack_replication::manager::ReplicationManager::new(node_config, None);
+
+        // Override replication_manager on the built state.
+        let state = crate::handlers::AppState {
+            replication_manager: Some(repl_mgr),
+            ..state
+        };
+
+        let result = super::run_pre_serve_catchup(&state).await;
+
+        unsafe {
+            std::env::remove_var("FLAPJACK_STARTUP_CATCHUP_STRICT");
+            std::env::remove_var("FLAPJACK_STARTUP_CATCHUP_TIMEOUT_SECS");
+        }
+
+        assert!(
+            result.is_ok(),
+            "non-strict pre-serve catchup with unreachable peers should succeed, got: {:?}",
+            result
+        );
+    }
+
     #[test]
     fn strict_bootstrap_override_defaults_true() {
         assert!(parse_strict_bootstrap_override(None));
@@ -542,6 +610,7 @@ mod tests {
         // oldest retained entry — definitely not a gap.
         assert!(!retention_gap_detected(250, &response));
     }
+    /// TODO: Document retention_gap_true_even_when_ops_present.
     #[test]
     fn retention_gap_true_even_when_ops_present() {
         let dummy_op = flapjack::index::oplog::OpLogEntry {
@@ -563,6 +632,7 @@ mod tests {
         // full snapshot restore is needed.
         assert!(retention_gap_detected(150, &response));
     }
+    /// TODO: Document install_snapshot_bytes_keeps_existing_tenant_on_invalid_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_keeps_existing_tenant_on_invalid_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -580,6 +650,7 @@ mod tests {
             "existing tenant data should remain if snapshot import fails"
         );
     }
+    /// TODO: Document install_snapshot_bytes_replaces_existing_tenant_on_valid_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_replaces_existing_tenant_on_valid_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -606,6 +677,7 @@ mod tests {
             "restored tenant should contain snapshot content"
         );
     }
+    /// TODO: Document install_snapshot_bytes_restores_backup_before_retrying_failed_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_restores_backup_before_retrying_failed_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -630,6 +702,7 @@ mod tests {
             "restored backup should be moved back to the active tenant path"
         );
     }
+    /// TODO: Document install_snapshot_bytes_rejects_path_traversal_tenant_id.
     #[tokio::test]
     async fn install_snapshot_bytes_rejects_path_traversal_tenant_id() {
         let tmp = TempDir::new().unwrap();

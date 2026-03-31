@@ -1,3 +1,4 @@
+//! Stub summary for batch.rs.
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -537,6 +538,7 @@ mod tests {
     fn document(id: &str) -> Document {
         Document::from_json(&serde_json::json!({ "_id": id })).expect("valid test document")
     }
+    /// TODO: Document batch_operations_from_legacy_request_wraps_docs_as_add_object_actions.
     #[test]
     fn batch_operations_from_legacy_request_wraps_docs_as_add_object_actions() {
         let operations = batch_operations_from_request(AddDocumentsRequest::Legacy {

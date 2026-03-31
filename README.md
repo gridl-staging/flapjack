@@ -192,7 +192,7 @@ Algolia-compatible REST API under `/1/` — works with InstantSearch.js v5, the 
 | S3 backup/restore | ✅ | N/A | ❌ | ❌ | Snapshots | Snapshots |
 | Dashboard UI | ✅ | ✅ | ✅ | Cloud only | Kibana | Dashboards |
 | Embeddable as library | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| HA / clustering | ✅ (soak-verified) | ✅ | Cloud only | ✅ | ✅ | ✅ |
+| HA / clustering | 🟡 (executed with findings) | ✅ | Cloud only | ✅ | ✅ | ✅ |
 | Multi-language | 30 languages + CJK tokenization | 60+ | Many | Many | Many | Many |
 | Vector / semantic search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | AI search (RAG) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

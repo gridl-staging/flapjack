@@ -18,7 +18,7 @@ keywords = ["search", "full-text", "tantivy", "algolia", "faceting"]
 categories = ["database", "text-processing"]
 
 [features]
-default = ["axum-support", "s3-snapshots", "openapi", "analytics", "decompound"]
+default = ["axum-support", "s3-snapshots", "openapi", "analytics", "vector-search-local", "decompound"]
 axum-support = ["axum"]
 s3-snapshots = ["rust-s3", "flate2", "tar"]
 openapi = ["utoipa"]
@@ -73,7 +73,7 @@ fastembed = { version = "5", optional = true, default-features = false, features
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats"], optional = true }
 
 [patch.crates-io]
-tantivy = { git = "https://github.com/stuartcrobinson/tantivy", rev = "faf32ee6b48c19ce2dd7f8454af5fa85781694ef" }
+tantivy = { git = "https://github.com/stuartcrobinson/tantivy", branch = "nov19" }
 
 [dev-dependencies]
 assert_cmd = "2.0"

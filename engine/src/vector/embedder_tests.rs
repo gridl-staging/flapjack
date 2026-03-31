@@ -505,6 +505,7 @@ mod openai_tests {
 #[cfg(feature = "vector-search-local")]
 mod fastembed_tests {
     use super::*;
+    use serial_test::serial;
 
     // ── Model lookup tests ──
 
@@ -595,18 +596,23 @@ mod fastembed_tests {
     }
 
     #[test]
+    // Concurrent ONNX model cache initialization can race and flake with
+    // "Failed to retrieve onnx/model.onnx" when these tests run in parallel.
+    #[serial]
     fn test_fastembed_dimensions_from_model() {
         let e = FastEmbedEmbedder::new(&fastembed_test_config()).unwrap();
         assert_eq!(e.dimensions(), 384);
     }
 
     #[test]
+    #[serial]
     fn test_fastembed_source_returns_fastembed() {
         let e = FastEmbedEmbedder::new(&fastembed_test_config()).unwrap();
         assert_eq!(e.source(), EmbedderSource::FastEmbed);
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_fastembed_embed_documents() {
         let e = FastEmbedEmbedder::new(&fastembed_test_config()).unwrap();
         let texts = &["hello world", "rust programming", "vector search"];
@@ -618,6 +624,7 @@ mod fastembed_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_fastembed_embed_query() {
         let e = FastEmbedEmbedder::new(&fastembed_test_config()).unwrap();
         let result = e.embed_query("hello world").await.unwrap();
@@ -625,6 +632,7 @@ mod fastembed_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_fastembed_embed_deterministic() {
         let e = FastEmbedEmbedder::new(&fastembed_test_config()).unwrap();
         let v1 = e.embed_query("deterministic test").await.unwrap();
@@ -633,6 +641,7 @@ mod fastembed_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_fastembed_embed_empty_batch() {
         let e = FastEmbedEmbedder::new(&fastembed_test_config()).unwrap();
         let results = e.embed_documents(&[]).await.unwrap();
@@ -666,6 +675,7 @@ mod fastembed_tests {
     }
 
     #[test]
+    #[serial]
     fn test_factory_creates_fastembed() {
         let config = EmbedderConfig {
             source: EmbedderSource::FastEmbed,

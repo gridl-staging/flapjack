@@ -5,7 +5,7 @@ It focuses on current structure and ownership boundaries, not historical design
 notes.
 
 For product/readiness status, see [../FEATURES.md](../FEATURES.md).
-For frontend-specific design, see [../7_FRONT_END/DASHBOARD_MASTER_DESIGN.md](../7_FRONT_END/DASHBOARD_MASTER_DESIGN.md).
+For frontend-specific design, see the bundled dashboard sources in `engine/dashboard/`.
 For deployment/runbook entry points, see [./DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ## Workspace layout
@@ -70,7 +70,6 @@ the Flapjack binary under `/dashboard`.
 Current route inventory is canonical in:
 
 - `engine/dashboard/src/App.tsx`
-- `engine/dashboard/_dev/FEATURES.md`
 - `engine/dashboard/tests/E2E_UI_COVERAGE_CHECKLIST.md`
 
 The dashboard is part of the launch surface and is validated by Playwright
@@ -85,7 +84,7 @@ not prose alone:
 - `engine/examples/ha-cluster/` — nginx-routed 3-node HA compose proof
 - `engine/examples/replication/` — 2-node replication + analytics fan-out proof
 - `engine/examples/s3-snapshot/` — MinIO-backed snapshot proof
-- `engine/_dev/s/test` — canonical unified test runner
+- `./s/test` — canonical unified test runner
 
 ## Design constraints
 

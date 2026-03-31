@@ -3,6 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/ui.sh"
+source "$SCRIPT_DIR/lib/secret-env.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DATA_DIR="$REPO_ROOT/engine/_dev/dev-data"
@@ -15,6 +16,7 @@ for arg in "$@"; do
     fi
 done
 
+# TODO: Document build_dashboard.
 build_dashboard() {
     local DASH_DIR="$REPO_ROOT/engine/dashboard"
     local DIST="$DASH_DIR/dist/index.html"
@@ -34,6 +36,7 @@ build_dashboard() {
     spin_stop success "Dashboard built"
 }
 
+# TODO: Document start.
 start() {
     local BUILD_MODE="debug"
     [ "$USE_RELEASE" = true ] && BUILD_MODE="release"
@@ -63,12 +66,7 @@ start() {
     success "Build complete"
     echo ""
 
-    # Source .env.secret if it exists
-    local ENV_FILE="$REPO_ROOT/engine/.secret/.env.secret"
-    if [ -f "$ENV_FILE" ] && [ -z "${FLAPJACK_ADMIN_KEY:-}" ]; then
-        eval "$(grep '^FLAPJACK_ADMIN_KEY=' "$ENV_FILE")"
-        export FLAPJACK_ADMIN_KEY
-    fi
+    load_flapjack_runtime_env_from_secret "$REPO_ROOT"
 
     # Run the binary — its output IS the output
     env RUST_LOG=warn FLAPJACK_DATA_DIR="$DATA_DIR" ${FLAPJACK_ADMIN_KEY:+FLAPJACK_ADMIN_KEY="$FLAPJACK_ADMIN_KEY"} ./target/$BUILD_MODE/flapjack

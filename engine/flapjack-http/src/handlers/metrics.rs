@@ -1,3 +1,4 @@
+//! Stub summary for metrics.rs.
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -438,6 +439,7 @@ mod tests {
         );
     }
 
+    /// TODO: Document metrics_reflects_actual_tenant_count.
     #[tokio::test]
     async fn metrics_reflects_actual_tenant_count() {
         let tmp = TempDir::new().unwrap();
@@ -461,6 +463,7 @@ mod tests {
         );
     }
 
+    /// TODO: Document metrics_shows_storage_gauges_after_poller_update.
     #[tokio::test]
     async fn metrics_shows_storage_gauges_after_poller_update() {
         let tmp = TempDir::new().unwrap();
@@ -495,6 +498,7 @@ mod tests {
         assert_eq!(value, 1234.0, "storage bytes should come from MetricsState");
     }
 
+    /// TODO: Document metrics_includes_per_index_usage_counters.
     #[tokio::test]
     async fn metrics_includes_per_index_usage_counters() {
         let tmp = TempDir::new().unwrap();
@@ -562,6 +566,7 @@ mod tests {
         );
     }
 
+    /// TODO: Document metrics_counter_values_match_known_operations.
     #[tokio::test]
     async fn metrics_counter_values_match_known_operations() {
         let tmp = TempDir::new().unwrap();
@@ -618,6 +623,7 @@ mod tests {
         );
     }
 
+    /// TODO: Document metrics_includes_documents_count_gauge.
     #[tokio::test]
     async fn metrics_includes_documents_count_gauge() {
         let tmp = TempDir::new().unwrap();
@@ -665,6 +671,7 @@ mod tests {
         assert_eq!(value, 2.0, "should have 2 docs in the gauge");
     }
 
+    /// TODO: Document metrics_includes_oplog_current_seq_gauge.
     #[tokio::test]
     async fn metrics_includes_oplog_current_seq_gauge() {
         let tmp = TempDir::new().unwrap();
