@@ -104,6 +104,7 @@ fn resolve_experiment_id(
     Ok((id_str.to_string(), numeric))
 }
 
+#[allow(clippy::result_large_err)] // Response is the handler boundary type and boxing would add indirection for this small resolver.
 fn resolve_store_and_experiment_id<'a>(
     state: &'a AppState,
     id_str: &str,

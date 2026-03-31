@@ -153,9 +153,9 @@ exclude = [
 
 [[sync.dirs]]
 path = "sdks/"
-# Lock files are not tracked in dev git; each target repo manages its own.
-# Without this exclude, rsync --delete removes them from staging/prod.
-exclude = ["node_modules", ".gradle", "build", "__pycache__", ".dart_tool", "AGENTS.md", "poetry.lock", "yarn.lock"]
+# Preserve SDK lockfiles so public CI jobs can use deterministic dependency
+# resolution for Python and JavaScript SDK lanes.
+exclude = ["node_modules", ".gradle", "build", "__pycache__", ".dart_tool", "AGENTS.md"]
 
 [[sync.dirs]]
 path = ".github/"

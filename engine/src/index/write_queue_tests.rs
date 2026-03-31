@@ -426,12 +426,7 @@ mod auto_embed_tests {
         tenant_id: &str,
         embedder_settings: Option<HashMap<String, serde_json::Value>>,
         oplog: Option<Arc<crate::index::oplog::OpLog>>,
-    ) -> (
-        WriteQueue,
-        tokio::task::JoinHandle<crate::error::Result<()>>,
-        Arc<dashmap::DashMap<String, TaskInfo>>,
-        VectorIndicesMap,
-    ) {
+    ) -> EmbedderWriteQueueSetup {
         let tenant_path = tmp.path().join(tenant_id);
         std::fs::create_dir_all(&tenant_path).unwrap();
 

@@ -54,14 +54,15 @@ async fn test_fastembed_hybrid_search_end_to_end() {
         .manager
         .get_vector_index(idx)
         .expect("VectorIndex should be auto-created after fastembed add");
-    let vi_read = vi.read().unwrap();
-    assert_eq!(vi_read.len(), 3, "all 3 docs should be embedded");
-    assert_eq!(
-        vi_read.dimensions(),
-        384,
-        "BGESmallENV15 produces 384-dim vectors"
-    );
-    drop(vi_read);
+    {
+        let vi_read = vi.read().unwrap();
+        assert_eq!(vi_read.len(), 3, "all 3 docs should be embedded");
+        assert_eq!(
+            vi_read.dimensions(),
+            384,
+            "BGESmallENV15 produces 384-dim vectors"
+        );
+    }
 
     // Hybrid search — fastembed will embed the query at search time
     let req = SearchRequest {

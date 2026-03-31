@@ -74,41 +74,46 @@ async fn execute_timed_catchup(
     timeout_secs: u64,
     strict_bootstrap: bool,
 ) -> Result<(), String> {
-    match tokio::time::timeout(
+    let catchup_result = tokio::time::timeout(
         timeout,
         catchup_all_tenants(state, "REPL-catchup", strict_bootstrap),
     )
-    .await
-    {
+    .await;
+
+    match catchup_result {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => {
-            if strict_bootstrap {
-                tracing::error!("[REPL-catchup] Pre-serve catch-up failed: {}", error);
-                Err(error)
-            } else {
-                tracing::warn!(
-                    "[REPL-catchup] Pre-serve catch-up skipped (non-strict): {}",
-                    error
-                );
-                Ok(())
-            }
-        }
-        Err(_) => {
-            if strict_bootstrap {
-                let error = format!(
-                    "pre-serve catch-up timed out after {}s; refusing to serve stale data",
-                    timeout_secs
-                );
-                tracing::error!("[REPL-catchup] {}", error);
-                Err(error)
-            } else {
-                tracing::warn!(
-                    "[REPL-catchup] Pre-serve catch-up timed out after {}s (non-strict, continuing)",
-                    timeout_secs
-                );
-                Ok(())
-            }
-        }
+        Ok(Err(error)) => handle_catchup_error(strict_bootstrap, error),
+        Err(_) => handle_catchup_timeout(strict_bootstrap, timeout_secs),
+    }
+}
+
+fn handle_catchup_error(strict_bootstrap: bool, error: String) -> Result<(), String> {
+    if strict_bootstrap {
+        tracing::error!("[REPL-catchup] Pre-serve catch-up failed: {}", error);
+        Err(error)
+    } else {
+        tracing::warn!(
+            "[REPL-catchup] Pre-serve catch-up skipped (non-strict): {}",
+            error
+        );
+        Ok(())
+    }
+}
+
+fn handle_catchup_timeout(strict_bootstrap: bool, timeout_secs: u64) -> Result<(), String> {
+    if strict_bootstrap {
+        let error = format!(
+            "pre-serve catch-up timed out after {}s; refusing to serve stale data",
+            timeout_secs
+        );
+        tracing::error!("[REPL-catchup] {}", error);
+        Err(error)
+    } else {
+        tracing::warn!(
+            "[REPL-catchup] Pre-serve catch-up timed out after {}s (non-strict, continuing)",
+            timeout_secs
+        );
+        Ok(())
     }
 }
 
