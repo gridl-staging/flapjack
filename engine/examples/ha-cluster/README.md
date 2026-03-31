@@ -3,7 +3,7 @@
 `test_ha.sh` is the fast topology proof for this example — it verifies nginx rerouting,
 replication visibility across nodes, startup catch-up, and analytics fan-out for this
 compose stack. For long-running soak evidence under sustained restart rotation, see the
-Stage 5 HA Soak section in [`engine/loadtest/BENCHMARKS.md`](../../loadtest/BENCHMARKS.md).
+HA Soak Proof section in [`engine/loadtest/BENCHMARKS.md`](../../loadtest/BENCHMARKS.md).
 
 Scope:
 

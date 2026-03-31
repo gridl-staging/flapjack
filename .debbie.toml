@@ -55,6 +55,8 @@ files = [
     # Feature ledger linked from engine/README.md and ROADMAP.md.
     # Rewrite is enabled below to scrub a historical "gridl-dev" changelog token.
     "engine/docs2/FEATURES.md",
+    # Committed OpenAPI export validated in staging/prod.
+    "engine/docs2/openapi.json",
     # Public load-test benchmark doc linked from PRIORITIES.md.
     "engine/loadtest/BENCHMARKS.md",
     "engine/Cargo.toml",
