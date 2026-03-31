@@ -95,7 +95,7 @@ exclude = ["target"]
 [[sync.dirs]]
 path = "engine/tests/"
 # test_ha_soak_harness.rs references engine/_dev/ paths that are not synced to public repos.
-exclude = ["*.bak", "manual/", "test_ha_soak_harness*"]
+exclude = ["*.bak", "manual/", "test_ha_soak_harness*", "validate_sync_surface.sh"]
 
 [[sync.dirs]]
 path = "engine/fixtures/"
