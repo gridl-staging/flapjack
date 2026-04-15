@@ -4,7 +4,10 @@ import {
   createEmptyRule,
   createMerchandisingRule,
   normalizeRule,
+  normalizeRuleForSerialization,
   parseRuleEditorJson,
+  prepareRuleEditorSave,
+  validateRule,
 } from './ruleHelpers'
 
 describe('ruleHelpers', () => {
@@ -78,5 +81,77 @@ describe('ruleHelpers', () => {
     expect(merchRule.consequence.hide).toEqual([{ objectID: 'sku-2' }])
     expect(merchRule.description).toBe('Pin best-selling case')
     expect(merchRule.enabled).toBe(true)
+  })
+
+  it('normalizes rule payloads for serialization by trimming and removing empty fields', () => {
+    const normalized = normalizeRuleForSerialization({
+      objectID: 'rule-a',
+      conditions: [
+        { pattern: '  hello  ', anchoring: 'contains' },
+        { pattern: '   ' },
+      ],
+      consequence: {
+        promote: [],
+        hide: [],
+        params: {
+          filters: '',
+          hitsPerPage: 20,
+        },
+      },
+      validity: [],
+    } as any)
+
+    expect(normalized.conditions).toEqual([{ pattern: 'hello', anchoring: 'contains' }])
+    expect(normalized.consequence).toEqual({ params: { hitsPerPage: 20 } })
+    expect(normalized.validity).toBeUndefined()
+  })
+
+  it('validates rule editor edge cases before save', () => {
+    const errors = validateRule({
+      objectID: 'rule-b',
+      conditions: [{ pattern: 'hello' }],
+      consequence: {
+        promote: [
+          { objectID: 'doc-1', position: 0 },
+          { objectID: 'doc-1', position: 1 },
+        ],
+        userData: '{bad json',
+        params: {
+          renderingContent: '{bad json' as any,
+        },
+      },
+    } as any)
+
+    expect(errors).toContain('Condition 1: anchoring is required when pattern is provided.')
+    expect(errors).toContain('Invalid JSON in User Data field.')
+    expect(errors).toContain('Invalid JSON in Rendering Content field.')
+    expect(errors).toContain('Duplicate objectID in promoted items.')
+  })
+
+  it('prepares form-mode rule saves by parsing JSON fields into objects', () => {
+    const result = prepareRuleEditorSave({
+      objectID: 'rule-c',
+      conditions: [{ pattern: 'iphone', anchoring: 'contains' }],
+      consequence: {
+        userData: '{"redirect":"/sale"}',
+        params: {
+          renderingContent: '{"widgets":{"banner":true}}' as any,
+        },
+      },
+    } as any)
+
+    expect(result.error).toBeUndefined()
+    expect(result.rule).toEqual({
+      objectID: 'rule-c',
+      conditions: [{ pattern: 'iphone', anchoring: 'contains' }],
+      consequence: {
+        userData: { redirect: '/sale' },
+        params: {
+          renderingContent: { widgets: { banner: true } },
+        },
+      },
+    })
+    expect(result.json).toContain('"redirect": "/sale"')
+    expect(result.json).toContain('"banner": true')
   })
 })

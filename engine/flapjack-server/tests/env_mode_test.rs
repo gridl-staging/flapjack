@@ -99,6 +99,14 @@ fn development_mode_auto_generates_key() {
         "Expected fj_admin_ prefixed key, got: {}",
         stdout
     );
+    assert!(
+        stdout.contains(&format!(
+            "flapjack --data-dir {} reset-admin-key",
+            tmp.path()
+        )),
+        "Expected explicit data-dir reset command in banner, got: {}",
+        stdout
+    );
 
     // Validate key format: fj_admin_ + 32 hex chars = 41 chars
     let key = extract_key_from_banner(&stdout);
@@ -121,6 +129,105 @@ fn development_mode_auto_generates_key() {
     assert!(
         admin_entry_exists_in_json(&keys_json),
         "keys.json should have an Admin API Key entry"
+    );
+}
+
+/// Verify that the startup banner shell-quotes the reset hint when `--data-dir` contains spaces.
+#[test]
+fn development_mode_banner_quotes_spaced_data_dir_reset_hint() {
+    let tmp = TempDir::new("fj_test_auto_key_spaces");
+    let data_dir = tmp.root().join("data dir with spaces");
+
+    let output = flapjack_cmd()
+        .env("FLAPJACK_ENV", "development")
+        .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
+        .env("FLAPJACK_DATA_DIR", &data_dir)
+        .timeout(std::time::Duration::from_secs(3))
+        .output()
+        .expect("failed to run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains(&format!(
+            "flapjack --data-dir '{}' reset-admin-key",
+            data_dir.display()
+        )),
+        "expected quoted data-dir reset command in banner, got: {}",
+        stdout
+    );
+}
+
+/// Verify that a blank `.admin_key` exits with an explicit data-dir reset command hint.
+#[test]
+fn blank_admin_key_file_prints_explicit_reset_hint() {
+    let tmp = TempDir::new("fj_test_blank_admin_key");
+    std::fs::write(tmp.root().join(".admin_key"), "   \n")
+        .expect("failed to write blank .admin_key fixture");
+
+    let output = flapjack_cmd()
+        .env("FLAPJACK_ENV", "development")
+        .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
+        .env("FLAPJACK_DATA_DIR", tmp.path())
+        .timeout(std::time::Duration::from_secs(3))
+        .output()
+        .expect("failed to run");
+
+    assert!(
+        !output.status.success(),
+        "startup should fail when .admin_key is blank"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(".admin_key file"),
+        "expected blank-file error in stderr, got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("is empty"),
+        "expected blank-file reason in stderr, got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains(&format!(
+            "Run: flapjack --data-dir {} reset-admin-key",
+            tmp.path()
+        )),
+        "expected explicit data-dir reset hint in stderr, got: {}",
+        stderr
+    );
+}
+
+/// Verify that a blank `.admin_key` shell-quotes the reset hint when `--data-dir` contains spaces.
+#[test]
+fn blank_admin_key_file_quotes_spaced_data_dir_reset_hint() {
+    let tmp = TempDir::new("fj_test_blank_admin_key_spaces");
+    let data_dir = tmp.root().join("blank key dir");
+    std::fs::create_dir_all(&data_dir).expect("failed to create spaced data dir fixture");
+    std::fs::write(data_dir.join(".admin_key"), "   \n")
+        .expect("failed to write blank .admin_key fixture");
+
+    let output = flapjack_cmd()
+        .env("FLAPJACK_ENV", "development")
+        .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
+        .env("FLAPJACK_DATA_DIR", &data_dir)
+        .timeout(std::time::Duration::from_secs(3))
+        .output()
+        .expect("failed to run");
+
+    assert!(
+        !output.status.success(),
+        "startup should fail when .admin_key is blank"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "Run: flapjack --data-dir '{}' reset-admin-key",
+            data_dir.display()
+        )),
+        "expected quoted data-dir reset hint in stderr, got: {}",
+        stderr
     );
 }
 

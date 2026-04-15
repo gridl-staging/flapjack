@@ -1,4 +1,3 @@
-//! Stub summary for analytics_tests.rs.
 use super::*;
 use crate::test_helpers::body_json;
 use axum::{
@@ -24,7 +23,6 @@ fn test_analytics_config(tmp: &TempDir) -> AnalyticsConfig {
     }
 }
 
-/// TODO: Document make_search.
 fn make_search(query: &str, index: &str, query_id: &str) -> SearchEvent {
     SearchEvent {
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
@@ -49,7 +47,6 @@ fn make_search(query: &str, index: &str, query_id: &str) -> SearchEvent {
     }
 }
 
-/// TODO: Document make_conversion.
 fn make_conversion(query_id: &str, index: &str, subtype: &str) -> InsightEvent {
     InsightEvent {
         event_type: "conversion".to_string(),
@@ -1085,7 +1082,6 @@ mod stage5_analytics_integration_tests {
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
-    /// TODO: Document countries_endpoint_reflects_enriched_country_field.
     #[tokio::test]
     async fn countries_endpoint_reflects_enriched_country_field() {
         let tmp = TempDir::new().unwrap();
@@ -1111,7 +1107,6 @@ mod stage5_analytics_integration_tests {
         );
         assert_eq!(countries[0]["count"], 1);
     }
-    /// TODO: Document analytics_event_persisted_without_country_when_geoip_unavailable.
     #[tokio::test]
     async fn analytics_event_persisted_without_country_when_geoip_unavailable() {
         let tmp = TempDir::new().unwrap();
@@ -1184,7 +1179,6 @@ mod stage_b_contract_parity_tests {
     }
 
     // ── B.1: countries limit/offset/orderBy ──
-    /// TODO: Document countries_supports_limit_offset_order_by_direction_consistently.
     #[tokio::test]
     async fn countries_supports_limit_offset_order_by_direction_consistently() {
         let tmp = TempDir::new().unwrap();
@@ -1279,7 +1273,6 @@ mod stage_b_contract_parity_tests {
     }
 
     // ── B.2: countries invalid date range → 400 ──
-    /// TODO: Document countries_invalid_date_range_returns_algolia_shaped_400.
     #[tokio::test]
     async fn countries_invalid_date_range_returns_algolia_shaped_400() {
         let tmp = TempDir::new().unwrap();
@@ -1326,7 +1319,6 @@ mod stage_b_contract_parity_tests {
     }
 
     // ── B.3: countries tags filter ──
-    /// TODO: Document countries_tags_filter_applies_when_tags_present.
     #[tokio::test]
     async fn countries_tags_filter_applies_when_tags_present() {
         let tmp = TempDir::new().unwrap();
@@ -1401,7 +1393,6 @@ mod stage_b_contract_parity_tests {
     }
 
     // ── B.4: conversion date bucket format consistency ──
-    /// TODO: Document conversion_endpoints_share_identical_date_bucket_format.
     #[tokio::test]
     async fn conversion_endpoints_share_identical_date_bucket_format() {
         let tmp = TempDir::new().unwrap();
@@ -1478,7 +1469,6 @@ mod stage_b_contract_parity_tests {
     }
 
     // ── B.5: revenue contract strictness ──
-    /// TODO: Document revenue_endpoint_currency_map_and_totals_match_contract.
     #[tokio::test]
     async fn revenue_endpoint_currency_map_and_totals_match_contract() {
         let tmp = TempDir::new().unwrap();
@@ -1569,7 +1559,6 @@ mod stage_b_contract_parity_tests {
     }
 
     // ── B.6: no extra top-level fields ──
-    /// TODO: Document analytics_endpoints_never_emit_extra_top_level_fields.
     #[tokio::test]
     async fn analytics_endpoints_never_emit_extra_top_level_fields() {
         let tmp = TempDir::new().unwrap();

@@ -9,12 +9,82 @@ use axum::http::{Method, Request};
 use flapjack::analytics::{AnalyticsConfig, AnalyticsQueryEngine};
 use flapjack::experiments::store::ExperimentStore;
 use flapjack::recommend::RecommendConfig;
+use std::ffi::OsString;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 use crate::geoip::GeoIpReader;
 use crate::handlers::AppState;
+
+// ---------------------------------------------------------------------------
+// Process-global env-var mutation helper
+// ---------------------------------------------------------------------------
+
+/// Mutex that serializes all process-global env-var mutations in test code.
+/// Every test that needs to set/unset an env var MUST hold this lock for the
+/// duration of the mutation to avoid data races with parallel tests.
+pub(crate) static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard that restores a single env var to its previous value on drop.
+/// Obtain via [`with_env_var`].
+pub(crate) struct EnvGuard {
+    name: String,
+    previous: Option<OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        restore_env_var(&self.name, self.previous.take());
+    }
+}
+
+/// Set an env var for the duration of the returned guard's lifetime.
+/// The previous value (or absence) is restored when the guard drops.
+/// Acquires `ENV_MUTEX` so concurrent tests cannot observe partial state.
+pub(crate) fn with_env_var(name: &str, value: &str) -> EnvGuard {
+    let lock = ENV_MUTEX.lock().expect("env mutex poisoned");
+    let previous = std::env::var_os(name);
+    std::env::set_var(name, value);
+    EnvGuard {
+        name: name.to_owned(),
+        previous,
+        _lock: lock,
+    }
+}
+
+pub(crate) fn restore_env_var(name: &str, previous: Option<OsString>) {
+    match previous {
+        Some(value) => std::env::set_var(name, value),
+        None => std::env::remove_var(name),
+    }
+}
+
+pub(crate) struct EnvVarRestoreGuard {
+    name: &'static str,
+    previous: Option<OsString>,
+}
+
+impl EnvVarRestoreGuard {
+    pub(crate) fn set(name: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(name);
+        std::env::set_var(name, value);
+        Self { name, previous }
+    }
+
+    pub(crate) fn remove(name: &'static str) -> Self {
+        let previous = std::env::var_os(name);
+        std::env::remove_var(name);
+        Self { name, previous }
+    }
+}
+
+impl Drop for EnvVarRestoreGuard {
+    fn drop(&mut self) {
+        restore_env_var(self.name, self.previous.take());
+    }
+}
 
 pub(crate) struct TestStateBuilder<'tmp> {
     tmp: &'tmp TempDir,

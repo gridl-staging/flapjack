@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SDK_TEST_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENGINE_DIR="$(cd "$SDK_TEST_DIR/.." && pwd)"
-RUNNER="$ENGINE_DIR/_dev/s/test"
+RUNNER="$ENGINE_DIR/s/test"
 
 TMP_DIR="$(mktemp -d)"
 BIN_DIR="$TMP_DIR/bin"
@@ -60,7 +60,7 @@ status=$?
 set -e
 
 if [ "$status" -eq 0 ]; then
-  echo "Expected _dev/s/test --sdk to fail when reused server rejects the configured admin key"
+  echo "Expected s/test --sdk to fail when reused server rejects the configured admin key"
   exit 1
 fi
 
@@ -82,4 +82,4 @@ if [ -s "$NODE_LOG" ]; then
   exit 1
 fi
 
-echo "PASS: _dev/s/test refuses to reuse a healthy server with an incompatible admin key"
+echo "PASS: s/test refuses to reuse a healthy server with an incompatible admin key"

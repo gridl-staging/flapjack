@@ -1,4 +1,3 @@
-//! Stub summary for finalization.rs.
 use std::sync::Arc;
 
 use crate::types::{TaskInfo, TaskStatus};
@@ -353,7 +352,6 @@ mod tests {
             "tenants with no primary upsert/delete ids should not create LWW state entries"
         );
     }
-    /// TODO: Document update_lww_state_tracks_primary_upserts_and_deletes.
     #[test]
     fn update_lww_state_tracks_primary_upserts_and_deletes() {
         let lww_map: super::super::super::LwwMap = Arc::new(dashmap::DashMap::new());

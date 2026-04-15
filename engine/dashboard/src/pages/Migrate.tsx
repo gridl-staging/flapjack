@@ -1,65 +1,24 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
 import {
-  ArrowRightLeft,
-  Loader2,
-  CheckCircle2,
-  XCircle,
-  Eye,
-  EyeOff,
-  AlertTriangle,
-  RefreshCw,
-} from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { useAuth } from '@/hooks/useAuth';
-
-interface MigrationResult {
-  status: string;
-  settings: boolean;
-  synonyms: { imported: number };
-  rules: { imported: number };
-  objects: { imported: number };
-  taskID: number;
-}
-
-interface AlgoliaIndexInfo {
-  name: string;
-  entries: number;
-  updatedAt: string;
-}
-
-function buildDashboardAuthHeaders(): Record<string, string> {
-  const { apiKey, appId } = useAuth.getState();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'x-algolia-application-id': appId || 'flapjack',
-  };
-
-  if (apiKey) {
-    headers['x-algolia-api-key'] = apiKey;
-  }
-
-  return headers;
-}
-
-async function postSensitiveMigrationRequest<TResponse>(
-  url: string,
-  body: Record<string, unknown>,
-): Promise<TResponse> {
-  // The shared dashboard client persists request bodies into API Logs.
-  // Send third-party Algolia credentials outside that logger so secrets never
-  // land in sessionStorage or the Search Logs UI.
-  const response = await axios.post<TResponse>(url, body, {
-    headers: buildDashboardAuthHeaders(),
-  });
-  return response.data;
-}
+  MigrationCredentialsCard,
+  AlgoliaIndexPickerCard,
+  MigrationErrorCard,
+  MigrationHeader,
+  MigrationIndexNamesCard,
+  MigrationInfoCard,
+  MigrationSubmitButton,
+  MigrationSuccessCard,
+} from './MigrateSections';
+import {
+  type AlgoliaIndexInfo,
+  type MigrationResult,
+  buildMigrationRequestBody,
+  getIndexListErrorMessage,
+  getMigrationErrorMessage,
+  postSensitiveMigrationRequest,
+  resolveEffectiveTargetIndex,
+} from './migrateHelpers';
 
 export function Migrate() {
   const queryClient = useQueryClient();
@@ -78,7 +37,7 @@ export function Migrate() {
   const trimmedApiKey = apiKey.trim();
   const trimmedSourceIndex = sourceIndex.trim();
   const trimmedTargetIndex = targetIndex.trim();
-  const effectiveTarget = trimmedTargetIndex || trimmedSourceIndex;
+  const effectiveTarget = resolveEffectiveTargetIndex(trimmedSourceIndex, trimmedTargetIndex);
 
   const resetIndexListingState = () => {
     setAlgoliaIndexes(null);
@@ -103,30 +62,21 @@ export function Migrate() {
     },
     onError: (error) => {
       setAlgoliaIndexes(null);
-      const msg = getErrorMessage(error);
-      if (msg.includes('403') || msg.includes('Forbidden')) {
-        setIndexListError('API key does not have permission to list indexes. Type the index name manually.');
-      } else {
-        setIndexListError(msg);
-      }
+      setIndexListError(getIndexListErrorMessage(error));
     },
   });
 
   const migration = useMutation({
     mutationFn: async () => {
-      const body: Record<string, unknown> = {
-        appId: trimmedAppId,
-        apiKey: trimmedApiKey,
-        sourceIndex: trimmedSourceIndex,
-      };
-      if (trimmedTargetIndex) {
-        body.targetIndex = trimmedTargetIndex;
-      }
-      if (overwrite) body.overwrite = true;
-
       return postSensitiveMigrationRequest<MigrationResult>(
         '/1/migrate-from-algolia',
-        body
+        buildMigrationRequestBody({
+          appId: trimmedAppId,
+          apiKey: trimmedApiKey,
+          sourceIndex: trimmedSourceIndex,
+          targetIndex: trimmedTargetIndex,
+          overwrite,
+        }),
       );
     },
     onSuccess: () => {
@@ -141,368 +91,68 @@ export function Migrate() {
 
   return (
     <div className="space-y-6 max-w-2xl">
-      <div>
-        <h1 className="text-3xl font-bold">Migrate from Algolia</h1>
-        <p className="text-muted-foreground mt-1">
-          Import an index from Algolia — settings, documents, synonyms, and rules.
-        </p>
-      </div>
+      <MigrationHeader effectiveTarget={effectiveTarget} />
 
-      {/* Credentials */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Algolia Credentials</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="app-id">Application ID</Label>
-              <Input
-                id="app-id"
-                value={appId}
-                onChange={(e) => {
-                  setAppId(e.target.value);
-                  resetIndexListingState();
-                }}
-                placeholder="YourAlgoliaAppId"
-                disabled={migration.isPending}
-                autoComplete="off"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="api-key">Admin API Key</Label>
-              <div className="relative">
-                <Input
-                  id="api-key"
-                  type={showKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => {
-                    setApiKey(e.target.value);
-                    resetIndexListingState();
-                  }}
-                  placeholder="Your Algolia Admin API key"
-                  disabled={migration.isPending}
-                  autoComplete="off"
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey(!showKey)}
-                  aria-label={showKey ? 'Hide API key' : 'Show API key'}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  tabIndex={-1}
-                  data-testid="toggle-api-key-visibility"
-                >
-                  {showKey ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Needs read access. Not stored anywhere.
-              </p>
-            </div>
-          </div>
+      <MigrationCredentialsCard
+        appId={appId}
+        apiKey={apiKey}
+        showKey={showKey}
+        migrationPending={migration.isPending}
+        hasCredentials={hasCredentials}
+        canFetchIndexes={canFetchIndexes}
+        fetchIndexesPending={fetchIndexes.isPending}
+        algoliaIndexesLoaded={Boolean(algoliaIndexes)}
+        onAppIdChange={(value) => {
+          setAppId(value);
+          resetIndexListingState();
+        }}
+        onApiKeyChange={(value) => {
+          setApiKey(value);
+          resetIndexListingState();
+        }}
+        onToggleShowKey={() => setShowKey(!showKey)}
+        onFetchIndexes={() => fetchIndexes.mutate()}
+      />
 
-          {/* Load Indexes button */}
-          {hasCredentials && (
-            <div className="pt-1">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => fetchIndexes.mutate()}
-                disabled={!canFetchIndexes || migration.isPending}
-              >
-                {fetchIndexes.isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Loading indexes...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    {algoliaIndexes ? 'Refresh Indexes' : 'Load Indexes from Algolia'}
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <AlgoliaIndexPickerCard
+        algoliaIndexes={algoliaIndexes}
+        sourceIndex={sourceIndex}
+        migrationPending={migration.isPending}
+        indexListError={indexListError}
+        onSelectSourceIndex={setSourceIndex}
+      />
 
-      {/* Index picker (shown after loading) */}
-      {algoliaIndexes && algoliaIndexes.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">
-              Select Source Index
-              <span className="text-muted-foreground font-normal text-sm ml-2">
-                {algoliaIndexes.length} index{algoliaIndexes.length !== 1 ? 'es' : ''} found
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-1 max-h-64 overflow-y-auto">
-              {algoliaIndexes.map((idx) => (
-                <button
-                  key={idx.name}
-                  type="button"
-                  onClick={() => setSourceIndex(idx.name)}
-                  className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                    sourceIndex === idx.name
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted'
-                  }`}
-                  disabled={migration.isPending}
-                >
-                  <span className="font-medium">{idx.name}</span>
-                  <span className={`ml-2 text-xs ${
-                    sourceIndex === idx.name
-                      ? 'text-primary-foreground/70'
-                      : 'text-muted-foreground'
-                  }`}>
-                    {idx.entries.toLocaleString()} record{idx.entries !== 1 ? 's' : ''}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      <MigrationIndexNamesCard
+        algoliaIndexesLoaded={Boolean(algoliaIndexes)}
+        sourceIndex={sourceIndex}
+        targetIndex={targetIndex}
+        trimmedSourceIndex={trimmedSourceIndex}
+        overwrite={overwrite}
+        migrationPending={migration.isPending}
+        onSourceIndexChange={setSourceIndex}
+        onTargetIndexChange={setTargetIndex}
+        onOverwriteChange={setOverwrite}
+      />
+
+      <MigrationSubmitButton
+        canSubmit={canSubmit}
+        migrationPending={migration.isPending}
+        effectiveTarget={effectiveTarget}
+        onSubmit={() => migration.mutate()}
+      />
+
+      {migration.isSuccess && migration.data && (
+        <MigrationSuccessCard
+          migrationData={migration.data}
+          effectiveTarget={effectiveTarget}
+        />
       )}
 
-      {algoliaIndexes && algoliaIndexes.length === 0 && (
-        <Card className="border-yellow-500/50">
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">
-              No indexes found in this Algolia account. Check your Application ID.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {indexListError && (
-        <Card className="border-yellow-500/50">
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">{indexListError}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Index names */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Index Name</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="source-index">Source Index (Algolia)</Label>
-              <Input
-                id="source-index"
-                value={sourceIndex}
-                onChange={(e) => setSourceIndex(e.target.value)}
-                placeholder={algoliaIndexes ? 'Select above or type name' : 'e.g., products, articles'}
-                disabled={migration.isPending}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="target-index">
-                Target Index (Flapjack)
-                <span className="text-muted-foreground font-normal ml-1">— optional</span>
-              </Label>
-              <Input
-                id="target-index"
-                value={targetIndex}
-                onChange={(e) => setTargetIndex(e.target.value)}
-                placeholder={trimmedSourceIndex || 'Same as source'}
-                disabled={migration.isPending}
-              />
-              <p className="text-xs text-muted-foreground">
-                Defaults to the source index name if left blank.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 pt-2">
-            <Switch
-              id="overwrite"
-              checked={overwrite}
-              onCheckedChange={setOverwrite}
-              disabled={migration.isPending}
-            />
-            <div>
-              <Label htmlFor="overwrite" className="cursor-pointer">
-                Overwrite if exists
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                If the target index already exists, delete it first and re-import.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Action */}
-      <Button
-        size="lg"
-        onClick={() => migration.mutate()}
-        disabled={!canSubmit}
-        className="w-full"
-      >
-        {migration.isPending ? (
-          <>
-            <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-            Migrating from Algolia...
-          </>
-        ) : (
-          <>
-            <ArrowRightLeft className="h-5 w-5 mr-2" />
-            Migrate{effectiveTarget ? ` "${effectiveTarget}"` : ''}
-          </>
-        )}
-      </Button>
-
-      {/* Results */}
-      {migration.isSuccess && (
-        <Card className="border-green-500/50">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="h-6 w-6 text-green-500 shrink-0 mt-0.5" />
-              <div className="space-y-3 flex-1">
-                <div>
-                  <h3 className="font-semibold text-lg">Migration complete</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Index <span className="font-medium">{effectiveTarget}</span> is
-                    ready.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <ResultStat
-                    label="Documents"
-                    value={migration.data.objects.imported}
-                  />
-                  <ResultStat
-                    label="Settings"
-                    value={migration.data.settings ? 'Applied' : 'None'}
-                  />
-                  <ResultStat
-                    label="Synonyms"
-                    value={migration.data.synonyms.imported}
-                  />
-                  <ResultStat
-                    label="Rules"
-                    value={migration.data.rules.imported}
-                  />
-                </div>
-
-                <div className="flex gap-2 pt-1">
-                  <Link to={`/index/${encodeURIComponent(effectiveTarget)}`}>
-                    <Button size="sm">Browse Index</Button>
-                  </Link>
-                  <Link to={`/index/${encodeURIComponent(effectiveTarget)}/settings`}>
-                    <Button variant="outline" size="sm">
-                      View Settings
-                    </Button>
-                  </Link>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Error */}
       {migration.isError && (
-        <Card className="border-destructive/50">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-3">
-              <XCircle className="h-6 w-6 text-destructive shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <h3 className="font-semibold">Migration failed</h3>
-                <p className="text-sm text-muted-foreground">
-                  {getErrorMessage(migration.error)}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <MigrationErrorCard errorMessage={getMigrationErrorMessage(migration.error)} />
       )}
 
-      {/* Info */}
-      <Card className="bg-muted/30">
-        <CardContent className="pt-6">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
-            <div className="space-y-2 text-sm text-muted-foreground">
-              <p>
-                <span className="font-medium text-foreground">What gets migrated:</span>{' '}
-                Settings (searchable attributes, facets, ranking), all documents,
-                synonyms, and query rules.
-              </p>
-              <p>
-                <span className="font-medium text-foreground">Credentials:</span>{' '}
-                Your Algolia API key is sent directly to the Flapjack server to fetch
-                data from Algolia's API. It is not stored or logged.
-              </p>
-              <p>
-                <span className="font-medium text-foreground">Large indexes:</span>{' '}
-                Documents are fetched in batches. Migration may take a few minutes for
-                indexes with millions of records.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <MigrationInfoCard />
     </div>
   );
-}
-
-function ResultStat({
-  label,
-  value,
-}: {
-  label: string;
-  value: number | string;
-}) {
-  return (
-    <div className="rounded-md border p-3 text-center">
-      <div className="text-xl font-bold" data-testid={`migrate-stat-${label.toLowerCase()}`}>
-        {typeof value === 'number' ? value.toLocaleString() : value}
-      </div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-    </div>
-  );
-}
-
-function getErrorMessage(error: unknown): string {
-  if (!error) {
-    return 'Unknown error';
-  }
-
-  if (axios.isAxiosError<{ message?: string }>(error)) {
-    const status = error.response?.status;
-    const message = error.response?.data?.message;
-
-    if (message) {
-      return message;
-    }
-    if (status === 409) {
-      return 'Target index already exists. Enable "Overwrite if exists" to replace it.';
-    }
-    if (status === 502) {
-      return 'Could not connect to Algolia. Check your App ID and API Key.';
-    }
-    if (status) {
-      return `Server returned ${status}`;
-    }
-  }
-
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
 }

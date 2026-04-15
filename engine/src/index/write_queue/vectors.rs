@@ -1,4 +1,3 @@
-//! Stub summary for vectors.rs.
 #[cfg(feature = "vector-search")]
 use std::collections::HashMap;
 

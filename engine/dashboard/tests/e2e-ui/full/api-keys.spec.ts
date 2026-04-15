@@ -165,9 +165,7 @@ test.describe('API Keys Page', () => {
     await expect(keyCard.getByRole('button', { name: /copy/i })).toBeVisible({ timeout: 10_000 });
   });
 
-  test('clicking copy button shows Copied feedback and writes the expected key to clipboard', async ({ page, request, context }) => {
-    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-
+  test('clicking copy button shows Copied feedback and writes the expected key to clipboard', async ({ page, request, readClipboard }) => {
     await createApiKey(request, {
       description: prefixedDescription('Copy Feedback Key'),
       acl: ['search'],
@@ -182,7 +180,7 @@ test.describe('API Keys Page', () => {
     await expect(keyCard.getByRole('button', { name: 'Copy', exact: true })).toBeVisible({ timeout: 10_000 });
     await keyCard.getByRole('button', { name: 'Copy', exact: true }).click();
     await expect(keyCard.getByRole('button', { name: /copied/i })).toBeVisible({ timeout: 10_000 });
-    const clipboardValue = await page.evaluate(() => navigator.clipboard.readText());
+    const clipboardValue = await readClipboard();
     expect(clipboardValue).toBe(keyValue);
   });
 

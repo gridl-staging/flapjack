@@ -14,7 +14,6 @@ doc_sync_cleanup() {
   rm -f "${DOC_SYNC_FILES_LOG:-}" "${DOC_SYNC_DIRS_LOG:-}" "${DOC_SYNC_EXCLUDES_LOG:-}" "${DOC_SYNC_PARSED_LOG:-}"
 }
 
-# TODO: Document doc_sync_normalize_repo_path.
 doc_sync_normalize_repo_path() {
   local raw_path="$1"
   raw_path="${raw_path#./}"
@@ -54,7 +53,6 @@ doc_sync_normalize_repo_path() {
   printf '%s' "$output"
 }
 
-# TODO: Document doc_sync_collect_sync_surface.
 doc_sync_collect_sync_surface() {
   if [ ! -f "$DOC_SYNC_CONFIG_FILE" ]; then
     printf "\033[0;31mMissing .debbie.toml at %s\033[0m\n" "$DOC_SYNC_CONFIG_FILE"
@@ -162,7 +160,6 @@ doc_sync_collect_sync_surface() {
   sort -u -o "$DOC_SYNC_EXCLUDES_LOG" "$DOC_SYNC_EXCLUDES_LOG"
 }
 
-# TODO: Document doc_sync_matches_exclude_pattern.
 doc_sync_matches_exclude_pattern() {
   local relative_path="$1"
   local pattern="$2"
@@ -197,7 +194,6 @@ doc_sync_matches_exclude_pattern() {
   [[ "$relative_path" == "$pattern" || "$relative_path" == "$pattern"/* || "$base_name" == $pattern ]]
 }
 
-# TODO: Document doc_sync_path_is_synced.
 doc_sync_path_is_synced() {
   local raw_path="$1"
   local normalized_path
@@ -244,7 +240,6 @@ doc_sync_path_is_synced() {
   return 1
 }
 
-# TODO: Document doc_sync_extract_relative_markdown_links.
 doc_sync_extract_relative_markdown_links() {
   local doc_rel="$1"
   local doc_abs="$DOC_SYNC_REPO_DIR/$doc_rel"
@@ -290,7 +285,6 @@ doc_sync_extract_relative_markdown_links() {
   done < <(grep -n '\]([^)]*)' "$doc_abs" || true)
 }
 
-# TODO: Document doc_sync_collect_public_doc_graph_docs.
 doc_sync_collect_public_doc_graph_docs() {
   local output_log="$1"
   : > "$output_log"

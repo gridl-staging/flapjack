@@ -1,0 +1,576 @@
+#!/bin/bash
+# test — Unified test runner for the Flapjack engine.
+#
+# Replaces fragmented run-all-tests.sh, test.sh, smoke.sh with a single
+# script and granular flags.
+#
+# Usage:
+#   ./s/test                  # default: unit + integ + server
+#   ./s/test --unit           # cargo test --lib (~15s, 1053 tests)
+#   ./s/test --integ          # cargo nextest run (~90s, 327 tests)
+#   ./s/test --server         # cargo test -p flapjack-server (~10s, 12 tests)
+#   ./s/test --smoke          # nextest smoke profile (~3s, 10 tests)
+#   ./s/test --sdk            # JS + protocol smoke SDK tests
+#   ./s/test --sdk-algolia    # JS SDK tests that need Algolia creds
+#   ./s/test --dashboard      # vitest unit + playwright smoke
+#   ./s/test --dashboard-full # + playwright full e2e
+#   ./s/test --e2e            # build binary + start server + sdk + contract tests
+#   ./s/test --go             # Go SDK unit tests
+#   ./s/test --all            # everything (except --sdk-algolia)
+#   ./s/test --ci             # what CI runs
+#   ./s/test --list           # print what each flag does and exit
+#
+# Flags can be combined:
+#   ./s/test --unit --sdk     # unit tests + JS SDK tests
+
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENGINE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT_DIR="$(cd "$ENGINE_DIR/.." && pwd)"
+
+source "$SCRIPT_DIR/lib/ui.sh"
+source "$SCRIPT_DIR/lib/local-instance.sh"
+load_local_instance_config "$ROOT_DIR"
+
+# ── Flag parsing ──────────────────────────────────────────────────────────────
+
+RUN_UNIT=false
+RUN_INTEG=false
+RUN_SERVER=false
+RUN_SMOKE=false
+RUN_SDK=false
+RUN_SDK_ALGOLIA=false
+RUN_DASHBOARD=false
+RUN_DASHBOARD_FULL=false
+RUN_E2E=false
+RUN_GO=false
+RUN_LIST=false
+EXPLICIT=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --unit)           RUN_UNIT=true; EXPLICIT=true ;;
+    --integ)          RUN_INTEG=true; EXPLICIT=true ;;
+    --server)         RUN_SERVER=true; EXPLICIT=true ;;
+    --smoke)          RUN_SMOKE=true; EXPLICIT=true ;;
+    --sdk)            RUN_SDK=true; EXPLICIT=true ;;
+    --sdk-algolia)    RUN_SDK_ALGOLIA=true; EXPLICIT=true ;;
+    --dashboard)      RUN_DASHBOARD=true; EXPLICIT=true ;;
+    --dashboard-full) RUN_DASHBOARD_FULL=true; EXPLICIT=true ;;
+    --e2e)            RUN_E2E=true; EXPLICIT=true ;;
+    --go)             RUN_GO=true; EXPLICIT=true ;;
+    --all)
+      RUN_UNIT=true; RUN_INTEG=true; RUN_SERVER=true; RUN_SDK=true
+      RUN_DASHBOARD=true; RUN_DASHBOARD_FULL=true; RUN_E2E=true; RUN_GO=true
+      EXPLICIT=true ;;
+    --ci)
+      RUN_UNIT=true; RUN_INTEG=true; RUN_SERVER=true
+      RUN_DASHBOARD=true
+      EXPLICIT=true ;;
+    --list)           RUN_LIST=true ;;
+    *)
+      error "Unknown flag: $arg"
+      echo ""
+      echo "  Run with --list to see all available flags."
+      exit 1 ;;
+  esac
+done
+
+# ── --list ────────────────────────────────────────────────────────────────────
+
+if [ "$RUN_LIST" = "true" ]; then
+  banner "Test Runner — Flags"
+  echo "  Flag               What it runs                                  Time"
+  divider
+  echo "  (no flags)         unit + integ + server (default)               ~2.5 min"
+  echo "  --unit             cargo test --lib (1053 tests)                 ~15s"
+  echo "  --integ            cargo nextest run (327 tests)                 ~90s"
+  echo "  --server           cargo test -p flapjack-server (12 tests)     ~10s"
+  echo "  --smoke            nextest smoke profile (10 tests)             ~3s"
+  echo "  --sdk              JS + protocol smoke SDK tests                ~30s"
+  echo "  --sdk-algolia      JS SDK: algolia_migration + validation       ~15s"
+  echo "  --dashboard        vitest unit + playwright smoke               ~2.5 min"
+  echo "  --dashboard-full   vitest unit + playwright smoke + full e2e    ~15 min"
+  echo "  --e2e              build binary + server + sdk + contract tests  ~30s"
+  echo "  --go               Go SDK unit tests                            ~5s"
+  echo "  --all              everything (except --sdk-algolia)             ~20 min"
+  echo "  --ci               unit + integ + server + dashboard            ~5 min"
+  echo "  --list             print this help"
+  echo ""
+  echo "  Combine flags: ./s/test --unit --sdk"
+  echo ""
+  exit 0
+fi
+
+# ── Default: unit + integ + server ────────────────────────────────────────────
+
+if [ "$EXPLICIT" = "false" ]; then
+  RUN_UNIT=true
+  RUN_INTEG=true
+  RUN_SERVER=true
+fi
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+STEP=0
+FJ_PID=""
+FJ_TMP_DIR=""
+
+next_step() {
+  STEP=$((STEP + 1))
+  step $STEP "$1"
+}
+
+ensure_dashboard_dist() {
+  mkdir -p "$ENGINE_DIR/dashboard/dist"
+  [ -f "$ENGINE_DIR/dashboard/dist/index.html" ] || echo '<html></html>' > "$ENGINE_DIR/dashboard/dist/index.html"
+}
+
+node_modules_have_required_packages() {
+  local project_dir="$1"
+  shift
+
+  local require_resolve_script=""
+  local arg_index=1
+  while [ "$arg_index" -le "$#" ]; do
+    if [ -n "$require_resolve_script" ]; then
+      require_resolve_script="$require_resolve_script; "
+    fi
+    require_resolve_script="${require_resolve_script}require.resolve(process.argv[${arg_index}])"
+    arg_index=$((arg_index + 1))
+  done
+
+  (
+    cd "$project_dir"
+    node -e "$require_resolve_script" "$@"
+  ) >/dev/null 2>&1
+}
+
+ensure_lockfile_present() {
+  local project_name="$1"
+  local lockfile_path="$2"
+
+  if [ ! -f "$lockfile_path" ]; then
+    error "Missing ${project_name}/package-lock.json for deterministic dependency bootstrap."
+    error "Run: cd engine/${project_name} && npm install   (then commit package-lock.json)"
+    exit 1
+  fi
+}
+
+lockfile_fingerprint() {
+  local lockfile_path="$1"
+
+  cksum "$lockfile_path" | awk '{print $1 ":" $2}'
+}
+
+node_modules_match_lockfile() {
+  local project_modules="$1"
+  local lockfile_path="$2"
+  local lockfile_stamp_path="$project_modules/.flapjack-package-lock.cksum"
+
+  [ -f "$lockfile_stamp_path" ] || return 1
+  [ "$(cat "$lockfile_stamp_path")" = "$(lockfile_fingerprint "$lockfile_path")" ]
+}
+
+write_node_modules_lockfile_stamp() {
+  local project_modules="$1"
+  local lockfile_path="$2"
+
+  printf '%s\n' "$(lockfile_fingerprint "$lockfile_path")" > "$project_modules/.flapjack-package-lock.cksum"
+}
+
+install_node_modules_from_lockfile() {
+  local project_name="$1"
+  local project_dir="$2"
+  local lockfile_path="$3"
+
+  ensure_lockfile_present "$project_name" "$lockfile_path"
+
+  if ! command -v npm >/dev/null 2>&1; then
+    error "npm is required to install ${project_name} dependencies."
+    exit 1
+  fi
+
+  (
+    cd "$project_dir"
+    npm ci >/dev/null 2>&1
+  ) || {
+    error "Failed to install ${project_name} dependencies with npm ci."
+    error "Run: cd engine/${project_name} && npm ci"
+    exit 1
+  }
+}
+
+ensure_node_modules_from_lockfile() {
+  local project_name="$1"
+  local project_dir="$2"
+  local lockfile_path="$3"
+  shift 3
+
+  local project_modules="$project_dir/node_modules"
+  local required_packages="$*"
+  local reinstall_reason=""
+
+  ensure_lockfile_present "$project_name" "$lockfile_path"
+
+  if [ -L "$project_modules" ]; then
+    rm -f "$project_modules"
+  fi
+
+  if [ -d "$project_modules" ]; then
+    if ! node_modules_have_required_packages "$project_dir" "$@"; then
+      reinstall_reason="required packages missing"
+    elif ! node_modules_match_lockfile "$project_modules" "$lockfile_path"; then
+      reinstall_reason="package-lock.json changed"
+    else
+      return 0
+    fi
+  fi
+
+  if [ -d "$project_modules" ]; then
+    info "Reinstalling ${project_name} dependencies via npm ci (${reinstall_reason})..."
+  else
+    info "Installing ${project_name} dependencies via npm ci..."
+  fi
+
+  install_node_modules_from_lockfile "$project_name" "$project_dir" "$lockfile_path"
+
+  if [ ! -d "$project_modules" ]; then
+    error "${project_name} dependency bootstrap did not create node_modules."
+    exit 1
+  fi
+
+  write_node_modules_lockfile_stamp "$project_modules" "$lockfile_path"
+
+  if ! node_modules_match_lockfile "$project_modules" "$lockfile_path"; then
+    error "${project_name} dependencies do not match the current package-lock.json."
+    error "Run: cd engine/${project_name} && npm ci"
+    exit 1
+  fi
+
+  if ! node_modules_have_required_packages "$project_dir" "$@"; then
+    error "${project_name} dependencies are missing required packages (${required_packages})."
+    error "Run: cd engine/${project_name} && npm ci"
+    exit 1
+  fi
+}
+
+ensure_sdk_node_modules() {
+  ensure_node_modules_from_lockfile \
+    "sdk_test" \
+    "$ENGINE_DIR/sdk_test" \
+    "$ENGINE_DIR/sdk_test/package-lock.json" \
+    "algoliasearch" \
+    "dotenv"
+}
+
+ensure_dashboard_node_modules() {
+  ensure_node_modules_from_lockfile \
+    "dashboard" \
+    "$ENGINE_DIR/dashboard" \
+    "$ENGINE_DIR/dashboard/package-lock.json" \
+    "vitest" \
+    "@playwright/test"
+}
+
+run_sdk_node_test() {
+  local step_label="$1"
+  local script_name="$2"
+  local success_message="$3"
+
+  next_step "$step_label"
+  (
+    cd "$ENGINE_DIR/sdk_test"
+    FLAPJACK_URL="$FJ_API_BASE" FLAPJACK_ADMIN_KEY="$FJ_TEST_ADMIN_KEY" node "$script_name"
+  )
+  success "$success_message"
+  echo ""
+}
+
+run_sdk_protocol_smoke_test() {
+  local step_label="$1"
+  local script_name="$2"
+  local success_message="$3"
+
+  next_step "$step_label"
+  (
+    cd "$ENGINE_DIR/sdk_test"
+    FLAPJACK_URL="$FJ_API_BASE" FLAPJACK_ADMIN_KEY="$FJ_TEST_ADMIN_KEY" "./$script_name"
+  )
+  success "$success_message"
+  echo ""
+}
+
+run_sdk_core_js_suite() {
+  local step_prefix="$1"
+
+  run_sdk_node_test "${step_prefix}: JS test.js" "test.js" "SDK test.js passed"
+  run_sdk_node_test "${step_prefix}: JS contract_tests.js" "contract_tests.js" "SDK contract_tests.js passed"
+  run_sdk_node_test "${step_prefix}: JS full_compat_tests.js" "full_compat_tests.js" "SDK full_compat_tests.js passed"
+  run_sdk_node_test "${step_prefix}: JS instantsearch_contract_tests.js" "instantsearch_contract_tests.js" "SDK instantsearch_contract_tests.js passed"
+}
+
+server_is_healthy() {
+  curl -sf "$FJ_API_BASE/health" >/dev/null 2>&1
+}
+
+server_accepts_expected_admin_key() {
+  curl -sf \
+    -H "x-algolia-application-id: flapjack-test" \
+    -H "x-algolia-api-key: $FJ_TEST_ADMIN_KEY" \
+    "$FJ_API_BASE/1/keys" >/dev/null 2>&1
+}
+
+# Start a flapjack server in the background. Sets FJ_PID and FJ_TMP_DIR.
+# If a server is already healthy on the configured port, reuses it instead
+# of failing with a port-conflict error. When reusing, FJ_PID stays empty
+# so stop_server() will not kill it.
+# Usage: start_server [--build]
+start_server() {
+  local build_first=false
+  [ "${1:-}" = "--build" ] && build_first=true
+
+  # Reuse an already-running server rather than failing on port conflict.
+  if server_is_healthy; then
+    if ! server_accepts_expected_admin_key; then
+      error "Healthy server on :$FJ_BACKEND_PORT rejected FLAPJACK_ADMIN_KEY=$FJ_TEST_ADMIN_KEY"
+      error "Stop the existing server or update flapjack.local.conf before running ./s/test."
+      exit 1
+    fi
+    info "Reusing existing server on :$FJ_BACKEND_PORT (health check passed)"
+    FJ_PID=""
+    FJ_TMP_DIR=""
+    return 0
+  fi
+
+  if [ "$build_first" = "true" ]; then
+    info "Building debug binary..."
+    cd "$ENGINE_DIR"
+    ensure_dashboard_dist
+    cargo build --package flapjack-server 2>&1 | tail -2
+  fi
+
+  FJ_TMP_DIR="/tmp/fj-test-data-$$"
+  mkdir -p "$FJ_TMP_DIR"
+
+  info "Starting flapjack server on :$FJ_BACKEND_PORT..."
+  FLAPJACK_ADMIN_KEY="$FJ_TEST_ADMIN_KEY" \
+    "$ENGINE_DIR/target/debug/flapjack" --data-dir "$FJ_TMP_DIR" --port "$FJ_BACKEND_PORT" &
+  FJ_PID=$!
+
+  for i in $(seq 1 15); do
+    if ! kill -0 "$FJ_PID" 2>/dev/null; then
+      error "Server exited during startup (possible port conflict on :$FJ_BACKEND_PORT)"
+      wait "$FJ_PID" 2>/dev/null || true
+      exit 1
+    fi
+    if server_is_healthy; then break; fi
+    sleep 1
+  done
+  if ! kill -0 "$FJ_PID" 2>/dev/null; then
+    error "Server exited before tests began (possible port conflict on :$FJ_BACKEND_PORT)"
+    wait "$FJ_PID" 2>/dev/null || true
+    exit 1
+  fi
+  if ! server_is_healthy; then
+    error "Server failed to start"
+    exit 1
+  fi
+  success "Server started (PID $FJ_PID)"
+}
+
+stop_server() {
+  if [ -n "$FJ_PID" ]; then
+    kill "$FJ_PID" 2>/dev/null || true
+    wait "$FJ_PID" 2>/dev/null || true
+    FJ_PID=""
+  fi
+  if [ -n "$FJ_TMP_DIR" ]; then
+    rm -rf "$FJ_TMP_DIR"
+    FJ_TMP_DIR=""
+  fi
+}
+
+cleanup() {
+  stop_server
+  _ui_cleanup
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+# Track whether the shared server process is already running.
+SERVER_STARTED=false
+
+ensure_server() {
+  if [ "$SERVER_STARTED" = "false" ]; then
+    next_step "Starting flapjack server"
+    start_server --build
+    SERVER_STARTED=true
+  fi
+}
+
+# ── Banner ────────────────────────────────────────────────────────────────────
+
+banner "Flapjack Test Suite"
+timer_start
+
+# ── Rust unit tests ───────────────────────────────────────────────────────────
+
+if [ "$RUN_UNIT" = "true" ]; then
+  next_step "Rust: inline unit tests (cargo test --lib)"
+  cd "$ENGINE_DIR"
+  ensure_dashboard_dist
+  cargo test --lib -p flapjack -p flapjack-http -p flapjack-replication
+  success "Rust lib tests passed"
+  echo ""
+fi
+
+# ── Rust smoke ────────────────────────────────────────────────────────────────
+
+if [ "$RUN_SMOKE" = "true" ]; then
+  next_step "Rust: smoke tests (nextest --profile smoke)"
+  cd "$ENGINE_DIR"
+  ensure_dashboard_dist
+  cargo nextest run --profile smoke
+  success "Smoke tests passed"
+  echo ""
+fi
+
+# ── Rust integration ──────────────────────────────────────────────────────────
+# All integration tests run via nextest (process-per-test isolation).
+# Each test calls spawn_server() directly for its own isolated server.
+
+if [ "$RUN_INTEG" = "true" ]; then
+  next_step "Rust: integration tests (nextest)"
+  cd "$ENGINE_DIR"
+  ensure_dashboard_dist
+  cargo nextest run
+  success "Integration tests passed"
+  echo ""
+fi
+
+# ── Server binary tests ──────────────────────────────────────────────────────
+
+if [ "$RUN_SERVER" = "true" ]; then
+  next_step "Rust: server binary tests (cargo test -p flapjack-server)"
+  cd "$ENGINE_DIR"
+  ensure_dashboard_dist
+  cargo test -p flapjack-server
+  success "Server binary tests passed"
+  echo ""
+fi
+
+# ── Dashboard (needs running server) ─────────────────────────────────────────
+
+if [ "$RUN_DASHBOARD" = "true" ] || [ "$RUN_DASHBOARD_FULL" = "true" ]; then
+  ensure_dashboard_node_modules
+
+  next_step "Dashboard: Vitest unit tests"
+  cd "$ENGINE_DIR/dashboard"
+  npm run test:unit:run
+  success "Dashboard unit tests passed"
+  echo ""
+
+  ensure_server
+
+  next_step "Dashboard: Playwright smoke tests"
+  cd "$ENGINE_DIR/dashboard"
+  npm run test:e2e-ui:smoke
+  success "Dashboard smoke tests passed"
+  echo ""
+
+  if [ "$RUN_DASHBOARD_FULL" = "true" ]; then
+    next_step "Dashboard: wait for Playwright webserver port release"
+    cd "$ENGINE_DIR/dashboard"
+    PLAYWRIGHT_WEBSERVER_HOST="$FJ_HOST" \
+      PLAYWRIGHT_WEBSERVER_PORT="$FJ_DASHBOARD_PORT" \
+      PLAYWRIGHT_WEBSERVER_URL="$FJ_DASHBOARD_BASE" \
+      node scripts/playwright-webserver.mjs --wait-port-free
+    success "Dashboard Playwright webserver port is free"
+    echo ""
+
+    next_step "Dashboard: Playwright full e2e"
+    cd "$ENGINE_DIR/dashboard"
+    # Lower worker count in unified runs to reduce localhost socket churn
+    # (override by exporting PLAYWRIGHT_E2E_WORKERS explicitly).
+    PLAYWRIGHT_E2E_WORKERS="${PLAYWRIGHT_E2E_WORKERS:-1}" npm run test:e2e-ui:full
+    success "Dashboard full e2e tests passed"
+    echo ""
+  fi
+fi
+
+# ── E2E: build binary + start server + run sdk + contract tests ──────────────
+
+if [ "$RUN_E2E" = "true" ]; then
+  ensure_server
+  ensure_sdk_node_modules
+
+  run_sdk_core_js_suite "E2E"
+
+  next_step "E2E: CLI smoke test"
+  if [ -x "$SCRIPT_DIR/manual-tests/cli_smoke.sh" ]; then
+    FLAPJACK_ADMIN_KEY="$FJ_TEST_ADMIN_KEY" \
+      FJ_API_BASE="$FJ_API_BASE" \
+      FJ_ALREADY_RUNNING=true \
+      "$SCRIPT_DIR/manual-tests/cli_smoke.sh"
+    success "CLI smoke test passed"
+  else
+    warn "cli_smoke.sh not found — skipping"
+  fi
+  echo ""
+fi
+
+# ── JS SDK (needs running server) ────────────────────────────────────────────
+# Skip if --e2e already ran these same tests (avoids duplicate runs with --all)
+
+if [ "$RUN_SDK" = "true" ] && [ "$RUN_E2E" = "false" ]; then
+  ensure_server
+  ensure_sdk_node_modules
+
+  run_sdk_core_js_suite "SDK"
+
+  run_sdk_protocol_smoke_test "SDK: PHP protocol smoke test" "php_smoke_test.sh" "PHP protocol smoke test passed"
+  run_sdk_protocol_smoke_test "SDK: Python protocol smoke test" "python_smoke_test.sh" "Python protocol smoke test passed"
+  run_sdk_protocol_smoke_test "SDK: Ruby protocol smoke test" "ruby_smoke_test.sh" "Ruby protocol smoke test passed"
+  run_sdk_protocol_smoke_test "SDK: Go protocol smoke test" "go_smoke_test.sh" "Go protocol smoke test passed"
+  run_sdk_protocol_smoke_test "SDK: Java protocol smoke test" "java_smoke_test.sh" "Java protocol smoke test passed"
+  run_sdk_protocol_smoke_test "SDK: Swift protocol smoke test" "swift_smoke_test.sh" "Swift protocol smoke test passed"
+fi
+
+# ── JS SDK with Algolia creds ────────────────────────────────────────────────
+
+if [ "$RUN_SDK_ALGOLIA" = "true" ]; then
+  ensure_server
+  ensure_sdk_node_modules
+
+  next_step "SDK: Algolia migration test"
+  cd "$ENGINE_DIR/sdk_test"
+  FLAPJACK_URL="$FJ_API_BASE" FLAPJACK_ADMIN_KEY="$FJ_TEST_ADMIN_KEY" node test_algolia_migration.js
+  success "Algolia migration tests passed"
+  echo ""
+
+  next_step "SDK: Algolia validation"
+  cd "$ENGINE_DIR/sdk_test"
+  FLAPJACK_URL="$FJ_API_BASE" FLAPJACK_ADMIN_KEY="$FJ_TEST_ADMIN_KEY" node algolia_validation.js
+  success "Algolia validation tests passed"
+  echo ""
+fi
+
+# ── Go SDK ────────────────────────────────────────────────────────────────────
+
+if [ "$RUN_GO" = "true" ]; then
+  next_step "Go SDK unit tests"
+  if command -v go >/dev/null 2>&1; then
+    cd "$ROOT_DIR/sdks/go"
+    go test ./flapjack/...
+    success "Go SDK tests passed"
+  else
+    warn "go not found — skipping Go SDK tests"
+  fi
+  echo ""
+fi
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+
+done_banner "All tests passed!" "$(timer_elapsed)"

@@ -7,7 +7,60 @@ fn openapi_json() -> serde_json::Value {
     serde_json::to_value(ApiDoc::openapi()).unwrap()
 }
 
-/// TODO: Document key_endpoints_use_concrete_schema_components.
+fn schema_contains_type(schema: &serde_json::Value, expected_type: &str) -> bool {
+    match schema {
+        serde_json::Value::Object(map) => {
+            if map
+                .get("type")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value == expected_type)
+            {
+                return true;
+            }
+
+            if map
+                .get("type")
+                .and_then(|value| value.as_array())
+                .is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value.as_str() == Some(expected_type))
+                })
+            {
+                return true;
+            }
+
+            map.values()
+                .any(|value| schema_contains_type(value, expected_type))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| schema_contains_type(value, expected_type)),
+        _ => false,
+    }
+}
+
+fn schema_contains_ref(schema: &serde_json::Value, expected_ref: &str) -> bool {
+    match schema {
+        serde_json::Value::Object(map) => {
+            if map
+                .get("$ref")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value == expected_ref)
+            {
+                return true;
+            }
+
+            map.values()
+                .any(|value| schema_contains_ref(value, expected_ref))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| schema_contains_ref(value, expected_ref)),
+        _ => false,
+    }
+}
+
 #[test]
 fn key_endpoints_use_concrete_schema_components() {
     let doc = openapi_json();
@@ -193,7 +246,282 @@ fn experiments_endpoints_are_documented() {
     assert_path_method(&doc, "/2/abtests/{id}/results", "get");
 }
 
-/// TODO: Document high_risk_mutation_openapi_contracts_match_shared_matrix.
+#[test]
+fn experiment_estimate_and_results_endpoints_use_concrete_schemas() {
+    let doc = openapi_json();
+
+    assert_eq!(
+        schema_ref(
+            &doc,
+            "/paths/~12~1abtests~1estimate/post/requestBody/content/application~1json/schema"
+        ),
+        Some("#/components/schemas/AlgoliaEstimateRequest")
+    );
+    assert_eq!(
+        schema_ref(
+            &doc,
+            "/paths/~12~1abtests~1estimate/post/responses/200/content/application~1json/schema"
+        ),
+        Some("#/components/schemas/AlgoliaEstimateResponse")
+    );
+    assert_eq!(
+        schema_ref(
+            &doc,
+            "/paths/~12~1abtests~1{id}~1results/get/responses/200/content/application~1json/schema"
+        ),
+        Some("#/components/schemas/ResultsResponse")
+    );
+
+    for (pointer, expected_ref, description) in [
+        (
+            "/components/schemas/ResultsResponse/properties/gate",
+            "#/components/schemas/GateResponse",
+            "gate",
+        ),
+        (
+            "/components/schemas/ResultsResponse/properties/control",
+            "#/components/schemas/ArmResponse",
+            "control",
+        ),
+        (
+            "/components/schemas/ResultsResponse/properties/variant",
+            "#/components/schemas/ArmResponse",
+            "variant",
+        ),
+        (
+            "/components/schemas/ResultsResponse/properties/interleaving",
+            "#/components/schemas/InterleavingResponse",
+            "interleaving",
+        ),
+    ] {
+        let schema = doc.pointer(pointer).expect("results property should exist");
+        assert!(
+            schema_contains_ref(schema, expected_ref),
+            "{description} should reference {expected_ref}"
+        );
+    }
+
+    for (pointer, description) in [
+        (
+            "/components/schemas/QueryOverrides/properties/typoTolerance",
+            "queryOverrides.typoTolerance",
+        ),
+        (
+            "/components/schemas/AlgoliaVariant/properties/customSearchParameters",
+            "customSearchParameters",
+        ),
+        (
+            "/components/schemas/AlgoliaVariant/properties/currencies",
+            "currencies",
+        ),
+        (
+            "/components/schemas/AlgoliaAbTest/properties/revenueSignificance",
+            "revenueSignificance",
+        ),
+    ] {
+        let schema = doc
+            .pointer(pointer)
+            .expect("dynamic object field should exist");
+        assert!(
+            schema_contains_type(schema, "object"),
+            "{description} should be documented as object-valued"
+        );
+    }
+}
+
+#[test]
+fn experiment_endpoints_document_internal_mapping_500s() {
+    let doc = openapi_json();
+
+    for (pointer, description) in [
+        (
+            "/paths/~12~1abtests/post/responses/500/description",
+            "create experiment",
+        ),
+        (
+            "/paths/~12~1abtests/get/responses/500/description",
+            "list experiments",
+        ),
+        (
+            "/paths/~12~1abtests~1{id}/get/responses/500/description",
+            "get experiment",
+        ),
+        (
+            "/paths/~12~1abtests~1{id}/put/responses/500/description",
+            "update experiment",
+        ),
+        (
+            "/paths/~12~1abtests~1{id}/delete/responses/500/description",
+            "delete experiment",
+        ),
+        (
+            "/paths/~12~1abtests~1{id}~1start/post/responses/500/description",
+            "start experiment",
+        ),
+        (
+            "/paths/~12~1abtests~1{id}~1stop/post/responses/500/description",
+            "stop experiment",
+        ),
+        (
+            "/paths/~12~1abtests~1{id}~1conclude/post/responses/500/description",
+            "conclude experiment",
+        ),
+        (
+            "/paths/~12~1abtests~1{id}~1results/get/responses/500/description",
+            "results endpoint",
+        ),
+    ] {
+        assert_eq!(
+            doc.pointer(pointer).and_then(|value| value.as_str()),
+            Some("Experiment missing numeric ID mapping"),
+            "{description} should document the resolver's 500 path"
+        );
+    }
+}
+
+#[test]
+fn experiment_schema_renamed_properties_and_enum_shapes() {
+    let doc = openapi_json();
+
+    let ab_test_props = doc
+        .pointer("/components/schemas/AlgoliaAbTest/properties")
+        .expect("AlgoliaAbTest properties should exist");
+    assert!(
+        ab_test_props.get("abTestID").is_some(),
+        "should use explicit rename abTestID"
+    );
+    assert!(
+        ab_test_props.get("createdAt").is_some(),
+        "should be camelCase createdAt"
+    );
+
+    let create_resp_props = doc
+        .pointer("/components/schemas/AlgoliaCreateAbTestResponse/properties")
+        .expect("AlgoliaCreateAbTestResponse properties should exist");
+    assert!(
+        create_resp_props.get("abTestID").is_some(),
+        "should use explicit rename abTestID"
+    );
+    assert!(
+        create_resp_props.get("taskID").is_some(),
+        "should use explicit rename taskID"
+    );
+
+    let action_resp_props = doc
+        .pointer("/components/schemas/AlgoliaAbTestActionResponse/properties")
+        .expect("AlgoliaAbTestActionResponse properties should exist");
+    assert!(
+        action_resp_props.get("abTestID").is_some(),
+        "action response should use abTestID"
+    );
+    assert!(
+        action_resp_props.get("taskID").is_some(),
+        "action response should use taskID"
+    );
+
+    let variant_props = doc
+        .pointer("/components/schemas/AlgoliaVariant/properties")
+        .expect("AlgoliaVariant properties should exist");
+    assert!(
+        variant_props.get("trafficPercentage").is_some(),
+        "should be camelCase trafficPercentage"
+    );
+    assert!(
+        variant_props.get("customSearchParameters").is_some(),
+        "should be camelCase customSearchParameters"
+    );
+
+    let config_props = doc
+        .pointer("/components/schemas/AlgoliaConfiguration/properties")
+        .expect("AlgoliaConfiguration properties should exist");
+    assert!(
+        config_props.get("minimumDetectableEffect").is_some(),
+        "should be camelCase minimumDetectableEffect"
+    );
+
+    let results_props = doc
+        .pointer("/components/schemas/ResultsResponse/properties")
+        .expect("ResultsResponse properties should exist");
+    assert!(
+        results_props.get("experimentID").is_some(),
+        "should use explicit rename experimentID"
+    );
+    assert!(
+        results_props.get("trafficSplit").is_some(),
+        "should be camelCase trafficSplit"
+    );
+    assert!(
+        results_props.get("cupedApplied").is_some(),
+        "should be camelCase cupedApplied"
+    );
+    assert!(
+        results_props.get("guardRailAlerts").is_some(),
+        "should be camelCase guardRailAlerts"
+    );
+
+    let qo_props = doc
+        .pointer("/components/schemas/QueryOverrides/properties")
+        .expect("QueryOverrides properties should exist");
+    assert!(
+        qo_props.get("typoTolerance").is_some(),
+        "should be camelCase typoTolerance"
+    );
+    assert!(
+        qo_props.get("enableSynonyms").is_some(),
+        "should be camelCase enableSynonyms"
+    );
+    assert!(
+        qo_props.get("customRanking").is_some(),
+        "should be camelCase customRanking"
+    );
+    assert!(
+        qo_props.get("attributeWeights").is_some(),
+        "should be camelCase attributeWeights"
+    );
+
+    let primary_metric = doc
+        .pointer("/components/schemas/PrimaryMetric")
+        .expect("PrimaryMetric schema should exist");
+    let enum_values = primary_metric
+        .get("enum")
+        .and_then(|value| value.as_array())
+        .expect("PrimaryMetric should have enum values");
+    let enum_strings: Vec<&str> = enum_values
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect();
+    for value in [
+        "ctr",
+        "conversionRate",
+        "revenuePerSearch",
+        "zeroResultRate",
+        "abandonmentRate",
+    ] {
+        assert!(
+            enum_strings.contains(&value),
+            "PrimaryMetric should contain {value}"
+        );
+    }
+
+    let exp_status = doc
+        .pointer("/components/schemas/ExperimentStatus")
+        .expect("ExperimentStatus schema should exist");
+    let status_values = exp_status
+        .get("enum")
+        .and_then(|value| value.as_array())
+        .expect("ExperimentStatus should have enum values");
+    let status_strings: Vec<&str> = status_values
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect();
+    for value in ["draft", "running", "stopped", "concluded"] {
+        assert!(
+            status_strings.contains(&value),
+            "ExperimentStatus should contain {value}"
+        );
+    }
+}
+
 #[test]
 fn high_risk_mutation_openapi_contracts_match_shared_matrix() {
     let doc = openapi_json();

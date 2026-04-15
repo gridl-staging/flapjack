@@ -77,7 +77,8 @@ export function toAlgoliaMetricName(metric: string): string {
 }
 
 /**
- * TODO: Document toAlgoliaCreateExperimentPayload.
+ * Converts the dashboard's authoring payload into the Algolia-compatible wire
+ * format expected by the experiments endpoints.
  */
 export function toAlgoliaCreateExperimentPayload(
   payload: CreateExperimentPayload,

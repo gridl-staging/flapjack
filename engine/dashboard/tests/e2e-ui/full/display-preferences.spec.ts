@@ -1,5 +1,6 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
+import { getSidebar } from '../helpers';
 import { addDocuments, createIndex, deleteIndex, searchIndex } from '../../fixtures/api-helpers';
 import { PRODUCTS, displayPreferencesFixtures } from '../../fixtures/test-data';
 import { responseMatchesIndexQuery } from '../result-helpers';
@@ -250,7 +251,7 @@ test.describe('Display Preferences', () => {
     await expect(page).toHaveURL(/\/overview/);
     await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible({ timeout: 10_000 });
 
-    await page.locator('aside').or(page.locator('nav')).getByText(TARGET_INDEX).first().click();
+    await getSidebar(page).getByText(TARGET_INDEX).first().click();
     await expect(page).toHaveURL(new RegExp(`/index/${TARGET_INDEX}`));
     await expect(firstDocumentCard(page)).toBeVisible({ timeout: 10_000 });
     await verifyFullPreferenceCard(page, expectedFirstProduct);

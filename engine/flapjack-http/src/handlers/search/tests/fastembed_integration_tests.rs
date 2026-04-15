@@ -32,7 +32,6 @@ fn fastembed_settings() -> IndexSettings {
     }
 }
 
-/// Full pipeline: add documents → auto-embed via fastembed → hybrid search.
 #[tokio::test]
 async fn test_fastembed_hybrid_search_end_to_end() {
     let tmp = TempDir::new().unwrap();

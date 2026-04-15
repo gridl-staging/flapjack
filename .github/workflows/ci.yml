@@ -1,7 +1,7 @@
 name: CI
 
 # CI runs on the public staging and prod repos only. The private dev repo
-# (gridl-dev/flapjack_dev) must never run CI — it burns paid Actions minutes.
+# must never run CI — it burns paid Actions minutes.
 # Use `debbie sync staging` to push changes to the public repo where CI is free.
 on:
   push:
@@ -471,6 +471,42 @@ jobs:
       - name: Run tests
         working-directory: sdks/javascript/packages/flapjack-search
         run: yarn test
+
+  sdk-contract:
+    name: SDK contract tests
+    needs: [check-repo, build-server]
+    if: needs.check-repo.outputs.is-public-repo == 'true'
+    runs-on: ubuntu-latest
+    env:
+      FLAPJACK_ADMIN_KEY: fj_devtestadminkey000000
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download server binary
+        uses: actions/download-artifact@v4
+        with:
+          name: flapjack-server
+          path: /tmp/flapjack
+      - name: Start Flapjack server
+        run: |
+          chmod +x /tmp/flapjack/flapjack
+          mkdir -p /tmp/flapjack-data
+          SERVER_LOG=/tmp/flapjack-data/server.log
+          FLAPJACK_ADMIN_KEY="$FLAPJACK_ADMIN_KEY" /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          SERVER_PID=$!
+          bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: engine/sdk_test/package-lock.json
+      - name: Install dependencies
+        working-directory: engine/sdk_test
+        run: npm install
+      - name: Run contract tests
+        working-directory: engine/sdk_test
+        run: npm run test:contract
+        env:
+          FLAPJACK_URL: http://localhost:7700
 
   sdk-go:
     name: Go SDK tests

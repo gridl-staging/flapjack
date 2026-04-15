@@ -1,4 +1,3 @@
-//! Stub summary for search_compat.rs.
 use crate::index::SearchOptions;
 use crate::types::{FacetRequest, Filter, SearchResult, Sort};
 use crate::{error::Result, IndexManager};
@@ -31,7 +30,8 @@ fn legacy_search_options<'a>(
 /// `search_full`) that transform positional parameters into a `SearchOptions` struct and delegate
 /// to `search_with_options`. Implemented by `IndexManager` to keep integration test call sites
 /// compiling during API migration.
-/// TODO: Document SearchCompat.
+///
+/// This trait is test-only compatibility glue and is intentionally not used by production code.
 #[allow(clippy::too_many_arguments)] // Test-only shim preserves legacy lib-test callsites while production stays `SearchOptions`-based.
 pub(crate) trait SearchCompat {
     fn search_with_facets(
@@ -109,10 +109,65 @@ impl SearchCompat for IndexManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::FlapjackError;
     use crate::types::{FieldValue, SortOrder};
+    use std::cell::RefCell;
     use tempfile::TempDir;
 
-    /// TODO: Document legacy_search_options_maps_all_legacy_fields.
+    #[derive(Debug, PartialEq)]
+    struct RecordedCall {
+        tenant_id: String,
+        query_text: String,
+        filter: bool,
+        sort: bool,
+        limit: usize,
+        offset: usize,
+        facets_len: Option<usize>,
+        distinct: Option<u32>,
+        max_values_per_facet: Option<usize>,
+    }
+
+    #[derive(Default)]
+    struct RecordingCompat {
+        last_call: RefCell<Option<RecordedCall>>,
+    }
+
+    fn result_document_ids(result: &SearchResult) -> Vec<String> {
+        result
+            .documents
+            .iter()
+            .map(|doc| doc.document.id.clone())
+            .collect()
+    }
+
+    impl SearchCompat for RecordingCompat {
+        fn search_full(
+            &self,
+            tenant_id: &str,
+            query_text: &str,
+            filter: Option<&Filter>,
+            sort: Option<&Sort>,
+            limit: usize,
+            offset: usize,
+            facets: Option<&[FacetRequest]>,
+            distinct: Option<u32>,
+            max_values_per_facet: Option<usize>,
+        ) -> Result<SearchResult> {
+            self.last_call.replace(Some(RecordedCall {
+                tenant_id: tenant_id.to_string(),
+                query_text: query_text.to_string(),
+                filter: filter.is_some(),
+                sort: sort.is_some(),
+                limit,
+                offset,
+                facets_len: facets.map(|items| items.len()),
+                distinct,
+                max_values_per_facet,
+            }));
+            Err(FlapjackError::InvalidQuery("sentinel".to_string()))
+        }
+    }
+
     #[test]
     fn legacy_search_options_maps_all_legacy_fields() {
         let filter = Filter::Equals {
@@ -150,7 +205,91 @@ mod tests {
         assert!(!options.sum_or_filters_scores);
     }
 
-    /// TODO: Document search_full_matches_explicit_search_options_path.
+    #[test]
+    fn search_with_facets_delegates_without_distinct() {
+        let recorder = RecordingCompat::default();
+        let filter = Filter::Equals {
+            field: "category".to_string(),
+            value: FieldValue::Text("books".to_string()),
+        };
+        let sort = Sort::ByField {
+            field: "price".to_string(),
+            order: SortOrder::Asc,
+        };
+        let facets = [FacetRequest {
+            field: "category".to_string(),
+            path: "/category".to_string(),
+        }];
+
+        let result = recorder.search_with_facets(
+            "products",
+            "laptop",
+            Some(&filter),
+            Some(&sort),
+            12,
+            4,
+            Some(&facets),
+        );
+
+        assert!(matches!(
+            result,
+            Err(FlapjackError::InvalidQuery(ref message)) if message == "sentinel"
+        ));
+        assert_eq!(
+            recorder.last_call.borrow().as_ref(),
+            Some(&RecordedCall {
+                tenant_id: "products".to_string(),
+                query_text: "laptop".to_string(),
+                filter: true,
+                sort: true,
+                limit: 12,
+                offset: 4,
+                facets_len: Some(1),
+                distinct: None,
+                max_values_per_facet: None,
+            })
+        );
+    }
+
+    #[test]
+    fn search_with_facets_and_distinct_passes_distinct_through() {
+        let recorder = RecordingCompat::default();
+        let facets = [FacetRequest {
+            field: "brand".to_string(),
+            path: "/brand".to_string(),
+        }];
+
+        let result = recorder.search_with_facets_and_distinct(
+            "products",
+            "tablet",
+            None,
+            None,
+            5,
+            2,
+            Some(&facets),
+            Some(7),
+        );
+
+        assert!(matches!(
+            result,
+            Err(FlapjackError::InvalidQuery(ref message)) if message == "sentinel"
+        ));
+        assert_eq!(
+            recorder.last_call.borrow().as_ref(),
+            Some(&RecordedCall {
+                tenant_id: "products".to_string(),
+                query_text: "tablet".to_string(),
+                filter: false,
+                sort: false,
+                limit: 5,
+                offset: 2,
+                facets_len: Some(1),
+                distinct: Some(7),
+                max_values_per_facet: None,
+            })
+        );
+    }
+
     #[tokio::test]
     async fn search_full_matches_explicit_search_options_path() {
         let temp_dir = TempDir::new().unwrap();
@@ -176,22 +315,14 @@ mod tests {
             .search_with_options("products", "laptop", &explicit_options)
             .unwrap();
 
-        let legacy_ids: Vec<String> = legacy_result
-            .documents
-            .iter()
-            .map(|doc| doc.document.id.clone())
-            .collect();
-        let explicit_ids: Vec<String> = explicit_result
-            .documents
-            .iter()
-            .map(|doc| doc.document.id.clone())
-            .collect();
-
         assert_eq!(legacy_result.total, explicit_result.total);
         assert_eq!(
             legacy_result.documents.len(),
             explicit_result.documents.len()
         );
-        assert_eq!(legacy_ids, explicit_ids);
+        assert_eq!(
+            result_document_ids(&legacy_result),
+            result_document_ids(&explicit_result)
+        );
     }
 }

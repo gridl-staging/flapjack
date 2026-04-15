@@ -26,6 +26,7 @@ pub mod dto_algolia;
 pub mod experiments;
 pub mod facets;
 pub mod health;
+mod index_resource_store;
 pub mod indices;
 pub mod insights;
 pub mod internal;

@@ -1,4 +1,3 @@
-//! Stub summary for mod.rs.
 pub mod document;
 pub mod facet_translation;
 pub mod index_metadata;
@@ -140,7 +139,6 @@ impl<'a> SearchOptions<'a> {
 }
 
 impl<'a> Default for SearchOptions<'a> {
-    /// TODO: Document SearchOptions.default.
     fn default() -> Self {
         SearchOptions {
             filter: None,

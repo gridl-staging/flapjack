@@ -1,6 +1,3 @@
-/**
- * @module Stub summary for /Users/stuart/parallel_development/flapjack_dev/mar26_am_1_ha_cluster_dashboard/flapjack_dev/engine/dashboard/src/hooks/useClusterStatus.ts.
- */
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 
@@ -54,9 +51,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/**
- * TODO: Document parsePeer.
- */
 function parsePeer(peer: unknown, index: number): ClusterPeer {
   if (!isRecord(peer)) {
     throw new ClusterStatusContractError(`peer ${index + 1} must be an object`);
@@ -88,9 +82,6 @@ function parsePeer(peer: unknown, index: number): ClusterPeer {
   };
 }
 
-/**
- * TODO: Document parseClusterStatusResponse.
- */
 function parseClusterStatusResponse(data: unknown): ClusterStatusResponse {
   if (!isRecord(data)) {
     throw new ClusterStatusContractError('response body must be an object');

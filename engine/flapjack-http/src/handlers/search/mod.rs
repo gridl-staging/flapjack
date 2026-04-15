@@ -9,6 +9,8 @@ pub mod request;
 mod reranking;
 mod response;
 mod single;
+mod single_execution;
+mod single_interleaving;
 mod single_support;
 mod synonyms;
 mod transforms;

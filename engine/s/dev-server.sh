@@ -16,7 +16,6 @@ for arg in "$@"; do
     fi
 done
 
-# TODO: Document build_dashboard.
 build_dashboard() {
     local DASH_DIR="$REPO_ROOT/engine/dashboard"
     local DIST="$DASH_DIR/dist/index.html"
@@ -36,7 +35,6 @@ build_dashboard() {
     spin_stop success "Dashboard built"
 }
 
-# TODO: Document start.
 start() {
     local BUILD_MODE="debug"
     [ "$USE_RELEASE" = true ] && BUILD_MODE="release"

@@ -1,4 +1,3 @@
-//! Stub summary for settings_tests.rs.
 use super::*;
 use crate::test_helpers::TestStateBuilder;
 use axum::body::Body;
@@ -54,7 +53,6 @@ async fn get_settings_json(app: &Router) -> serde_json::Value {
     serde_json::from_slice(&body).unwrap()
 }
 
-/// TODO: Document test_get_settings_corrupt_settings_file_returns_sanitized_500.
 #[tokio::test]
 async fn test_get_settings_corrupt_settings_file_returns_sanitized_500() {
     let tmp = TempDir::new().unwrap();
@@ -101,7 +99,6 @@ async fn test_get_settings_corrupt_settings_file_returns_sanitized_500() {
     );
 }
 
-/// TODO: Document test_set_settings_when_tenant_path_is_file_returns_sanitized_500.
 #[tokio::test]
 async fn test_set_settings_when_tenant_path_is_file_returns_sanitized_500() {
     let tmp = TempDir::new().unwrap();
@@ -2424,7 +2421,6 @@ async fn test_query_type_persists_to_disk() {
         "queryType should be persisted to disk"
     );
 }
-/// TODO: Document test_ranking_roundtrip_is_supported.
 #[tokio::test]
 async fn test_ranking_roundtrip_is_supported() {
     let tmp = TempDir::new().unwrap();
@@ -2463,7 +2459,6 @@ async fn test_ranking_roundtrip_is_supported() {
         "ranking should persist through GET after update"
     );
 }
-/// TODO: Document test_stage4_structural_settings_roundtrip_is_supported.
 #[tokio::test]
 async fn test_stage4_structural_settings_roundtrip_is_supported() {
     let tmp = TempDir::new().unwrap();
@@ -2526,7 +2521,6 @@ async fn test_stage4_structural_settings_roundtrip_is_supported() {
         serde_json::json!(["sku"])
     );
 }
-/// TODO: Document test_forward_to_replicas_rejects_invalid_boolean_value.
 #[tokio::test]
 async fn test_forward_to_replicas_rejects_invalid_boolean_value() {
     let tmp = TempDir::new().unwrap();
@@ -2543,7 +2537,6 @@ async fn test_forward_to_replicas_rejects_invalid_boolean_value() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
-/// TODO: Document test_synonyms_batch_rejects_invalid_forward_to_replicas_boolean_value.
 #[tokio::test]
 async fn test_synonyms_batch_rejects_invalid_forward_to_replicas_boolean_value() {
     let tmp = TempDir::new().unwrap();
@@ -2560,7 +2553,6 @@ async fn test_synonyms_batch_rejects_invalid_forward_to_replicas_boolean_value()
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
-/// TODO: Document test_synonyms_batch_rejects_invalid_replace_existing_boolean_value.
 #[tokio::test]
 async fn test_synonyms_batch_rejects_invalid_replace_existing_boolean_value() {
     let tmp = TempDir::new().unwrap();
@@ -2577,7 +2569,6 @@ async fn test_synonyms_batch_rejects_invalid_replace_existing_boolean_value() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
-/// TODO: Document test_rules_batch_rejects_invalid_forward_to_replicas_boolean_value.
 #[tokio::test]
 async fn test_rules_batch_rejects_invalid_forward_to_replicas_boolean_value() {
     let tmp = TempDir::new().unwrap();
@@ -2594,7 +2585,6 @@ async fn test_rules_batch_rejects_invalid_forward_to_replicas_boolean_value() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
-/// TODO: Document test_rules_batch_rejects_invalid_clear_existing_boolean_value.
 #[tokio::test]
 async fn test_rules_batch_rejects_invalid_clear_existing_boolean_value() {
     let tmp = TempDir::new().unwrap();

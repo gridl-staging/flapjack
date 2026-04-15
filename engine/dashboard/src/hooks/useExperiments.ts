@@ -5,18 +5,24 @@ import api from '@/lib/api';
 import type { Experiment } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
 import {
-  readExperimentId,
+  asExperimentRecord,
   toAlgoliaCreateExperimentPayload,
+  readExperimentId,
   type DashboardCreateExperimentPayload,
   type ConcludeExperimentPayload,
 } from '@/lib/experiment-api-contract';
+import {
+  normalizeExperimentListResponse,
+  normalizeExperimentRecord,
+  normalizeExperimentResultsResponse,
+  type ArmResultsResponse,
+  type ExperimentConclusionResponse,
+  type ExperimentResultsResponse,
+  type GuardRailAlertResponse,
+  type InterleavingResultsResponse,
+  type SignificanceResponse,
+} from '@/lib/experiment-normalization';
 
-type RawRecord = Record<string, unknown>;
-type RawExperimentListResponse = {
-  abtests?: unknown;
-};
-
-const DEFAULT_PRIMARY_METRIC = 'ctr';
 const EXPERIMENTS_QUERY_KEY = ['experiments'] as const;
 const EXPERIMENT_RESULTS_QUERY_KEY = ['experiment-results'] as const;
 
@@ -32,184 +38,10 @@ function experimentResultsQueryKey(experimentId: string) {
   return [...EXPERIMENT_RESULTS_QUERY_KEY, experimentId] as const;
 }
 
-function asRecord(value: unknown): RawRecord {
-  return typeof value === 'object' && value !== null ? value as RawRecord : {};
-}
-
-function asNumber(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-
-  return undefined;
-}
-
-function asTimestamp(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-
-  return undefined;
-}
-
-function asString(value: unknown): string | undefined {
-  if (typeof value === 'string' && value.length > 0) {
-    return value;
-  }
-
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return String(value);
-  }
-
-  return undefined;
-}
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error && error.message
     ? error.message
     : 'Unknown error';
-}
-
-function readStartedAt(record: RawRecord): number | undefined {
-  return (
-    asTimestamp(record.startedAt) ??
-    asTimestamp(record.startAt) ??
-    asTimestamp(record.startDate)
-  );
-}
-
-function readEndedAt(record: RawRecord): number | undefined {
-  return asTimestamp(record.endedAt) ?? asTimestamp(record.endAt);
-}
-
-/**
- * TODO: Document normalizePrimaryMetric.
- */
-function normalizePrimaryMetric(metric: unknown): string {
-  const rawMetric = asString(metric);
-  switch (rawMetric) {
-    case 'clickThroughRate':
-    case 'ctr':
-      return 'ctr';
-    case 'conversionRate':
-      return 'conversionRate';
-    case 'revenue':
-    case 'revenuePerSearch':
-      return 'revenuePerSearch';
-    case 'zeroResultRate':
-      return 'zeroResultRate';
-    case 'abandonmentRate':
-      return 'abandonmentRate';
-    default:
-      return DEFAULT_PRIMARY_METRIC;
-  }
-}
-
-function normalizeTrafficSplit(value: unknown): number {
-  const parsed = asNumber(value);
-  if (parsed === undefined) return 0.5;
-  const scaled = parsed > 1 ? parsed / 100 : parsed;
-  return Math.min(1, Math.max(0, scaled));
-}
-
-/**
- * TODO: Document normalizeStatus.
- */
-function normalizeStatus(record: RawRecord): Experiment['status'] {
-  const status = asString(record.status);
-  if (
-    status === 'draft' ||
-    status === 'running' ||
-    status === 'stopped' ||
-    status === 'concluded' ||
-    status === 'expired'
-  ) {
-    return status;
-  }
-
-  if (status === 'active') {
-    return readStartedAt(record) === undefined ? 'draft' : 'running';
-  }
-
-  return 'draft';
-}
-
-/**
- * TODO: Document normalizeExperimentRecord.
- */
-function normalizeExperimentRecord(rawExperiment: unknown): Experiment {
-  const record = asRecord(rawExperiment);
-  const variants = Array.isArray(record.variants) ? record.variants : [];
-  const controlVariant = asRecord(variants[0]);
-  const variantArm = asRecord(variants[1]);
-  const control = asRecord(record.control);
-  const variant = asRecord(record.variant);
-  const responseMetric =
-    Array.isArray(record.metrics) && record.metrics.length > 0
-      ? asRecord(record.metrics[0]).name
-      : undefined;
-
-  const createdAt = asTimestamp(record.createdAt) ?? Date.now();
-  const startedAt = readStartedAt(record) ?? null;
-  const endedAt = readEndedAt(record) ?? null;
-  const minimumDaysFromDates =
-    endedAt && createdAt && endedAt > createdAt
-      ? Math.ceil((endedAt - createdAt) / (1000 * 60 * 60 * 24))
-      : 14;
-  const minimumDays = asNumber(record.minimumDays) ?? minimumDaysFromDates;
-
-  const variantTrafficPercentage = asNumber(variantArm.trafficPercentage);
-
-  return {
-    id: asString(record.id) ?? asString(record.abTestID) ?? '',
-    name: asString(record.name) ?? '',
-    indexName: asString(record.indexName) ?? asString(controlVariant.index) ?? '',
-    status: normalizeStatus(record),
-    trafficSplit:
-      asNumber(record.trafficSplit) !== undefined
-        ? normalizeTrafficSplit(record.trafficSplit)
-        : normalizeTrafficSplit(variantTrafficPercentage),
-    control: {
-      name: asString(control.name) ?? asString(controlVariant.description) ?? 'control',
-      queryOverrides: control.queryOverrides as Record<string, unknown> | undefined,
-      indexName: asString(control.indexName),
-    },
-    variant: {
-      name: asString(variant.name) ?? asString(variantArm.description) ?? 'variant',
-      queryOverrides:
-        (variant.queryOverrides as Record<string, unknown> | undefined) ??
-        (variantArm.customSearchParameters as Record<string, unknown> | undefined),
-      indexName: asString(variant.indexName) ?? asString(variantArm.index),
-    },
-    primaryMetric: normalizePrimaryMetric(record.primaryMetric ?? responseMetric),
-    createdAt,
-    startedAt,
-    endedAt,
-    minimumDays,
-    winsorizationCap: asNumber(record.winsorizationCap) ?? null,
-  };
-}
-
-function normalizeExperimentListResponse(data: unknown): Experiment[] {
-  if (Array.isArray(data)) {
-    return data.map(normalizeExperimentRecord);
-  }
-
-  const body = asRecord(data) as RawExperimentListResponse;
-  if (!Array.isArray(body.abtests)) {
-    return [];
-  }
-  return body.abtests.map(normalizeExperimentRecord);
 }
 
 interface UseExperimentMutationOptions<TVariables, TData> {
@@ -220,7 +52,8 @@ interface UseExperimentMutationOptions<TVariables, TData> {
 }
 
 /**
- * TODO: Document useExperimentMutation.
+ * Builds a mutation hook with the shared experiment cache invalidation and toast
+ * behavior used by the dashboard's experiment lifecycle actions.
  */
 function useExperimentMutation<TVariables, TData>({
   mutationFn,
@@ -286,7 +119,7 @@ export function useCreateExperiment() {
     mutationFn: async (payload: DashboardCreateExperimentPayload) => {
       const algoliaPayload = toAlgoliaCreateExperimentPayload(payload);
       const { data } = await api.post('/2/abtests', algoliaPayload);
-      const experimentId = readExperimentId(asRecord(data));
+      const experimentId = readExperimentId(asExperimentRecord(data));
       if (!experimentId) {
         throw new Error('Create experiment response missing experiment id');
       }
@@ -341,119 +174,9 @@ export function useDeleteExperiment() {
   });
 }
 
-/**
- * Full results payload for a single A/B test experiment, including arm-level metrics, statistical significance, Bayesian probability, guard-rail alerts, interleaving results, and an optional conclusion.
- */
-export interface ExperimentResultsResponse {
-  experimentID: string;
-  name: string;
-  status: string;
-  indexName: string;
-  startDate: string | null;
-  endedAt: string | null;
-  conclusion: ExperimentConclusionResponse | null;
-  trafficSplit: number;
-  primaryMetric: string;
-  gate: {
-    minimumNReached: boolean;
-    minimumDaysReached: boolean;
-    readyToRead: boolean;
-    requiredSearchesPerArm: number;
-    currentSearchesPerArm: number;
-    progressPct: number;
-    estimatedDaysRemaining: number | null;
-  };
-  control: ArmResultsResponse;
-  variant: ArmResultsResponse;
-  significance: SignificanceResponse | null;
-  bayesian: { probVariantBetter: number } | null;
-  sampleRatioMismatch: boolean;
-  cupedApplied: boolean;
-  guardRailAlerts: GuardRailAlertResponse[];
-  outlierUsersExcluded: number;
-  noStableIdQueries: number;
-  recommendation: string | null;
-  interleaving: InterleavingResultsResponse | null;
-}
-
-export interface InterleavingResultsResponse {
-  deltaAB: number;
-  winsControl: number;
-  winsVariant: number;
-  ties: number;
-  pValue: number;
-  significant: boolean;
-  totalQueries: number;
-  dataQualityOk: boolean;
-}
-
-export interface GuardRailAlertResponse {
-  metricName: string;
-  controlValue: number;
-  variantValue: number;
-  dropPct: number;
-}
-
-export interface ExperimentConclusionResponse {
-  winner: string | null;
-  reason: string;
-  controlMetric: number;
-  variantMetric: number;
-  confidence: number;
-  significant: boolean;
-  promoted: boolean;
-}
-
-export interface ArmResultsResponse {
-  name: string;
-  searches: number;
-  users: number;
-  clicks: number;
-  conversions: number;
-  revenue: number;
-  ctr: number;
-  conversionRate: number;
-  revenuePerSearch: number;
-  zeroResultRate: number;
-  abandonmentRate: number;
-  meanClickRank: number;
-}
-
-export interface SignificanceResponse {
-  zScore: number;
-  pValue: number;
-  confidence: number;
-  significant: boolean;
-  relativeImprovement: number;
-  winner: string | null;
-}
-
 type ExperimentResultsApiResponse = ExperimentResultsResponse & {
   interleaving: (InterleavingResultsResponse & { deltaAb?: number }) | null;
 };
-
-/**
- * TODO: Document normalizeExperimentResultsResponse.
- */
-function normalizeExperimentResultsResponse(
-  response: ExperimentResultsApiResponse,
-): ExperimentResultsResponse {
-  const interleaving = response.interleaving;
-  if (!interleaving) {
-    return response;
-  }
-
-  return {
-    ...response,
-    interleaving: {
-      ...interleaving,
-      deltaAB:
-        typeof interleaving.deltaAB === 'number'
-          ? interleaving.deltaAB
-          : interleaving.deltaAb ?? 0,
-    },
-  };
-}
 
 /**
  * Mutation hook that concludes an experiment with a final verdict via POST `/2/abtests/:id/conclude`.
@@ -486,3 +209,12 @@ export function useExperimentResults(experimentId: string) {
     retry: 1,
   });
 }
+
+export type {
+  ArmResultsResponse,
+  ExperimentConclusionResponse,
+  ExperimentResultsResponse,
+  GuardRailAlertResponse,
+  InterleavingResultsResponse,
+  SignificanceResponse,
+};

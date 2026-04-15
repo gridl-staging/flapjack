@@ -1,4 +1,3 @@
-//! Stub summary for synonyms.rs.
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -7,7 +6,15 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::{safe_nb_pages, settings::parse_bool_query_param, AppState};
+use super::{
+    index_resource_store::{
+        clear_resource_store, delete_resource_item, forward_store_to_replicas, load_existing_store,
+        load_store_or_empty, save_resource_batch, save_resource_item,
+    },
+    safe_nb_pages,
+    settings::parse_bool_query_param,
+    AppState,
+};
 use crate::error_response::HandlerError;
 use crate::extractors::{validate_index_http, ValidatedIndexName};
 use flapjack::index::synonyms::{Synonym, SynonymStore};
@@ -34,20 +41,14 @@ pub async fn get_synonym(
     Path((index_name, object_id)): Path<(String, String)>,
 ) -> Result<Json<Synonym>, HandlerError> {
     validate_index_http(&index_name)?;
-    let synonyms_path = state
-        .manager
-        .base_path
-        .join(&index_name)
-        .join("synonyms.json");
-
-    if !synonyms_path.exists() {
+    let Some(store) = load_existing_store::<SynonymStore>(state.manager.as_ref(), &index_name)
+        .map_err(HandlerError::internal)?
+    else {
         return Err(HandlerError::not_found(format!(
             "Synonym {} not found",
             object_id
         )));
-    }
-
-    let store = SynonymStore::load(&synonyms_path).map_err(HandlerError::internal)?;
+    };
 
     store
         .get(&object_id)
@@ -79,28 +80,8 @@ pub async fn save_synonym(
     Json(synonym): Json<Synonym>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
     validate_index_http(&index_name)?;
-    state
-        .manager
-        .create_tenant(&index_name)
+    save_resource_item::<SynonymStore>(state.manager.as_ref(), &index_name, synonym.clone())
         .map_err(HandlerError::internal)?;
-
-    let synonyms_path = state
-        .manager
-        .base_path
-        .join(&index_name)
-        .join("synonyms.json");
-
-    let mut store = if synonyms_path.exists() {
-        SynonymStore::load(&synonyms_path).map_err(HandlerError::internal)?
-    } else {
-        SynonymStore::new()
-    };
-
-    store.insert(synonym.clone());
-
-    store.save(&synonyms_path).map_err(HandlerError::internal)?;
-
-    state.manager.invalidate_synonyms_cache(&index_name);
 
     state.manager.append_oplog(
         &index_name,
@@ -141,28 +122,14 @@ pub async fn delete_synonym(
     Path((index_name, object_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
     validate_index_http(&index_name)?;
-    let synonyms_path = state
-        .manager
-        .base_path
-        .join(&index_name)
-        .join("synonyms.json");
-
-    if !synonyms_path.exists() {
+    if !delete_resource_item::<SynonymStore>(state.manager.as_ref(), &index_name, &object_id)
+        .map_err(HandlerError::internal)?
+    {
         return Err(HandlerError::not_found(format!(
             "Synonym {} not found",
             object_id
         )));
     }
-
-    let mut store = SynonymStore::load(&synonyms_path).map_err(HandlerError::internal)?;
-
-    store
-        .remove(&object_id)
-        .ok_or_else(|| HandlerError::not_found(format!("Synonym {} not found", object_id)))?;
-
-    store.save(&synonyms_path).map_err(HandlerError::internal)?;
-
-    state.manager.invalidate_synonyms_cache(&index_name);
 
     state.manager.append_oplog(
         &index_name,
@@ -203,42 +170,24 @@ pub async fn save_synonyms(
     Query(params): Query<HashMap<String, String>>,
     Json(synonyms): Json<Vec<Synonym>>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
-    state
-        .manager
-        .create_tenant(&index_name)
-        .map_err(HandlerError::internal)?;
-
-    let synonyms_path = state
-        .manager
-        .base_path
-        .join(&index_name)
-        .join("synonyms.json");
-
     let replace = parse_bool_query_param(&params, "replaceExistingSynonyms")?;
-
-    let mut store = if replace || !synonyms_path.exists() {
-        SynonymStore::new()
-    } else {
-        SynonymStore::load(&synonyms_path).map_err(HandlerError::internal)?
-    };
 
     let synonyms_json: Vec<serde_json::Value> = synonyms
         .iter()
         .map(|s| serde_json::to_value(s).unwrap_or_default())
         .collect();
-
-    for syn in synonyms {
-        store.insert(syn);
-    }
-
-    store.save(&synonyms_path).map_err(HandlerError::internal)?;
-
-    state.manager.invalidate_synonyms_cache(&index_name);
+    let store = save_resource_batch::<SynonymStore, _>(
+        state.manager.as_ref(),
+        &index_name,
+        synonyms,
+        replace,
+    )
+    .map_err(HandlerError::internal)?;
 
     // Forward synonyms to replicas if requested
     let forward_to_replicas = parse_bool_query_param(&params, "forwardToReplicas")?;
     if forward_to_replicas {
-        forward_synonyms_to_replicas(&state, &index_name, &store)
+        forward_store_to_replicas::<SynonymStore>(state.manager.as_ref(), &index_name, &store)
             .map_err(HandlerError::internal)?;
     }
 
@@ -277,17 +226,8 @@ pub async fn clear_synonyms(
     State(state): State<Arc<AppState>>,
     ValidatedIndexName(index_name): ValidatedIndexName,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
-    let synonyms_path = state
-        .manager
-        .base_path
-        .join(&index_name)
-        .join("synonyms.json");
-
-    if synonyms_path.exists() {
-        std::fs::remove_file(&synonyms_path).map_err(HandlerError::internal)?;
-    }
-
-    state.manager.invalidate_synonyms_cache(&index_name);
+    clear_resource_store::<SynonymStore>(state.manager.as_ref(), &index_name)
+        .map_err(HandlerError::internal)?;
     state
         .manager
         .append_oplog(&index_name, "clear_synonyms", serde_json::json!({}));
@@ -342,17 +282,8 @@ pub async fn search_synonyms(
     ValidatedIndexName(index_name): ValidatedIndexName,
     Json(req): Json<SearchSynonymsRequest>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
-    let synonyms_path = state
-        .manager
-        .base_path
-        .join(&index_name)
-        .join("synonyms.json");
-
-    let store = if synonyms_path.exists() {
-        SynonymStore::load(&synonyms_path).map_err(HandlerError::internal)?
-    } else {
-        SynonymStore::new()
-    };
+    let store = load_store_or_empty::<SynonymStore>(state.manager.as_ref(), &index_name)
+        .map_err(HandlerError::internal)?;
 
     let (hits, total) = store.search(
         &req.query,
@@ -368,41 +299,4 @@ pub async fn search_synonyms(
         "page": req.page,
         "nbPages": nb_pages
     })))
-}
-
-/// Forward the current synonym store from a primary index to all its configured replicas.
-fn forward_synonyms_to_replicas(
-    state: &Arc<AppState>,
-    primary_index_name: &str,
-    store: &SynonymStore,
-) -> Result<(), flapjack::error::FlapjackError> {
-    use flapjack::index::replica::parse_replica_entry;
-    use flapjack::index::settings::IndexSettings;
-
-    let settings_path = state
-        .manager
-        .base_path
-        .join(primary_index_name)
-        .join("settings.json");
-    if !settings_path.exists() {
-        return Ok(());
-    }
-    let primary_settings = IndexSettings::load(&settings_path)?;
-    let replicas = match &primary_settings.replicas {
-        Some(r) => r,
-        None => return Ok(()),
-    };
-
-    for replica_str in replicas {
-        let parsed = parse_replica_entry(replica_str)?;
-        let replica_name = parsed.name();
-        let replica_dir = state.manager.base_path.join(replica_name);
-        if !replica_dir.exists() {
-            continue;
-        }
-        let replica_synonyms_path = replica_dir.join("synonyms.json");
-        store.save(&replica_synonyms_path)?;
-        state.manager.invalidate_synonyms_cache(replica_name);
-    }
-    Ok(())
 }

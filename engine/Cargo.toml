@@ -73,7 +73,7 @@ fastembed = { version = "5", optional = true, default-features = false, features
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats"], optional = true }
 
 [patch.crates-io]
-tantivy = { git = "https://github.com/stuartcrobinson/tantivy", branch = "nov19" }
+tantivy = { git = "https://github.com/stuartcrobinson/tantivy", rev = "faf32ee6b48c19ce2dd7f8454af5fa85781694ef" }
 
 [dev-dependencies]
 assert_cmd = "2.0"

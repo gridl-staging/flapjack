@@ -7,9 +7,6 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object';
 }
 
-/**
- * TODO: Document cleanupRulesByPrefix.
- */
 export async function cleanupRulesByPrefix(
   request: APIRequestContext,
   indexName: string,
@@ -29,9 +26,6 @@ export async function cleanupRulesByPrefix(
   }
 }
 
-/**
- * TODO: Document cleanupRulesByDescriptionPrefix.
- */
 export async function cleanupRulesByDescriptionPrefix(
   request: APIRequestContext,
   indexName: string,

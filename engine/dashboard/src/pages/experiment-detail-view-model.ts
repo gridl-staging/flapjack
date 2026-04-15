@@ -24,7 +24,8 @@ function formatConclusionWinnerLabel(winner: string | null | undefined): string 
 }
 
 /**
- * TODO: Document buildExperimentDetailViewModel.
+ * Derives presentation-focused fields for the experiment detail page from the raw
+ * results payload so the component tree stays mostly declarative.
  */
 export function buildExperimentDetailViewModel(
   results: ExperimentResultsResponse,

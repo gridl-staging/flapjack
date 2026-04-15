@@ -199,7 +199,7 @@ function AuthScreen() {
             <p>
               Lost your key? Run:{' '}
               <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">
-                flapjack reset-admin-key
+                flapjack --data-dir &lt;data-dir&gt; reset-admin-key
               </code>
             </p>
           </div>

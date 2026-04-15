@@ -1,4 +1,3 @@
-//! Stub summary for server.rs.
 use std::path::Path;
 use std::sync::Arc;
 
@@ -16,7 +15,6 @@ use crate::startup::{
 /// Main server entry point: loads config, initializes infrastructure (key store, S3,
 /// analytics, replication), builds the router, binds the listener, and runs the
 /// HTTP server with graceful shutdown handling.
-#[allow(clippy::cognitive_complexity)]
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let startup_start = std::time::Instant::now();
 
@@ -256,7 +254,8 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    /// TODO: Document shutdown_wait_helper_returns_drained_when_manager_completes_before_deadline.
+    /// Ensures the shutdown helper reports success when the manager drain
+    /// completes before the configured timeout.
     #[tokio::test]
     async fn shutdown_wait_helper_returns_drained_when_manager_completes_before_deadline() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -279,7 +278,8 @@ mod tests {
             ["analytics-flushed", "manager-wait-begins"]
         );
     }
-    /// TODO: Document shutdown_wait_helper_returns_timed_out_when_manager_exceeds_deadline.
+    /// Ensures the shutdown helper reports a timeout when the manager drain
+    /// exceeds the configured deadline.
     #[tokio::test]
     async fn shutdown_wait_helper_returns_timed_out_when_manager_exceeds_deadline() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -303,7 +303,8 @@ mod tests {
         );
     }
 
-    /// TODO: Document full_graceful_shutdown_calls_otel_after_manager_drain.
+    /// Ensures graceful shutdown flushes analytics, waits for the manager, and
+    /// then shuts OTEL down in that order on the success path.
     #[tokio::test]
     async fn full_graceful_shutdown_calls_otel_after_manager_drain() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -330,7 +331,8 @@ mod tests {
         );
     }
 
-    /// TODO: Document full_graceful_shutdown_calls_otel_even_after_timeout.
+    /// Ensures OTEL shutdown still runs when the manager drain times out so
+    /// tracing flush semantics stay deterministic.
     #[tokio::test]
     async fn full_graceful_shutdown_calls_otel_even_after_timeout() {
         let events = Arc::new(Mutex::new(Vec::new()));

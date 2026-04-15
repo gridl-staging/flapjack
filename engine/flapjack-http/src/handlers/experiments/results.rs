@@ -1,19 +1,9 @@
-//! Stub summary for results.rs.
 use super::*;
 use flapjack::experiments::{metrics, stats};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Compute and return experiment results with statistical analysis.
-///
-/// Fetches experiment metadata and analytics metrics from control and variant indices, computes frequentist z-test significance, Bayesian probability, sample ratio mismatch detection, and CUPED variance reduction when applicable, then returns a comprehensive results response.
-///
-/// # Arguments
-/// - `state`: Application state containing experiment store and analytics engine
-/// - `id`: Experiment identifier (UUID or numeric ID)
-///
-/// # Returns
-/// HTTP JSON response containing experiment metrics, statistical analysis, gate status, and recommendation. Returns error response if experiment store unavailable or experiment not found.
+/// Returns statistical results for an experiment addressed by numeric ID or UUID.
 #[utoipa::path(
     get,
     path = "/2/abtests/{id}/results",
@@ -23,6 +13,7 @@ use std::path::PathBuf;
     ),
     responses(
         (status = 200, description = "Experiment statistical results", body = ResultsResponse),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 404, description = "Experiment not found"),
         (status = 503, description = "Experiment store unavailable")
     ),
@@ -34,14 +25,9 @@ pub async fn get_experiment_results(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let store = match get_experiment_store(&state) {
-        Some(store) => store,
-        None => return experiment_store_unavailable_response(),
-    };
-
-    let (uuid, _numeric_id) = match resolve_experiment_id(store, &id) {
-        Ok(pair) => pair,
-        Err(err) => return experiment_error_to_response(err),
+    let (store, uuid, _numeric_id) = match resolve_store_and_experiment_id(&state, &id) {
+        Ok(values) => values,
+        Err(response) => return response,
     };
 
     let experiment = match store.get(&uuid) {
@@ -84,7 +70,7 @@ pub(super) fn resolve_experiment_index_names(experiment: &Experiment) -> Vec<Str
     index_names
 }
 
-fn index_name_refs(index_names: &[String]) -> Vec<&str> {
+pub(super) fn index_name_refs(index_names: &[String]) -> Vec<&str> {
     index_names.iter().map(String::as_str).collect()
 }
 
@@ -577,7 +563,6 @@ fn compute_interleaving_response(
     })
 }
 
-/// TODO: Document build_results_response.
 pub(super) fn build_results_response(
     experiment: &Experiment,
     metrics: Option<&metrics::ExperimentMetrics>,

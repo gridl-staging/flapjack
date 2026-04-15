@@ -1,7 +1,7 @@
-//! Stub summary for query_tests.rs.
 use super::*;
 use crate::analytics::collector::AnalyticsCollector;
-use crate::analytics::schema::InsightEvent;
+use crate::analytics::schema::{InsightEvent, SearchEvent};
+use crate::analytics::writer::{search_events_to_batch, write_parquet_file};
 use tempfile::TempDir;
 
 fn test_analytics_config(temp_dir: &TempDir) -> AnalyticsConfig {
@@ -357,7 +357,6 @@ async fn no_click_searches_escapes_query_ids_from_events_before_in_clause() {
         "clicked query should not be returned as no-click even with quote in query_id"
     );
 }
-/// TODO: Document aggregate_counts_by_query_id_merges_multiple_query_ids_into_same_query.
 #[test]
 fn aggregate_counts_by_query_id_merges_multiple_query_ids_into_same_query() {
     let rows = vec![
@@ -376,7 +375,6 @@ fn aggregate_counts_by_query_id_merges_multiple_query_ids_into_same_query() {
     assert_eq!(aggregated.get("boots"), Some(&5));
     assert_eq!(aggregated.get("hats"), Some(&1));
 }
-/// TODO: Document enrich_rows_with_click_metrics_adds_expected_fields.
 #[test]
 fn enrich_rows_with_click_metrics_adds_expected_fields() {
     let rows = vec![serde_json::json!({"search": "boots"})];
@@ -405,4 +403,226 @@ fn enrich_rows_with_click_metrics_adds_expected_fields() {
         row.get("averageClickPosition"),
         Some(&serde_json::json!(3.3))
     );
+}
+
+// ── Known-answer query contract tests ──
+//
+// These tests lock the raw-query contract that rollup queries must reproduce.
+// They write hand-calculated Parquet datasets via `write_parquet_file` and
+// `search_events_to_batch`, then assert exact numeric results through the
+// public `AnalyticsQueryEngine` API.
+
+fn search_event_with_hits(
+    index: &str,
+    query: &str,
+    nb_hits: u32,
+    has_results: bool,
+    timestamp_ms: i64,
+    user_token: &str,
+) -> SearchEvent {
+    SearchEvent {
+        timestamp_ms,
+        query: query.to_string(),
+        query_id: None,
+        index_name: index.to_string(),
+        nb_hits,
+        processing_time_ms: 5,
+        user_token: Some(user_token.to_string()),
+        user_ip: None,
+        filters: None,
+        facets: None,
+        analytics_tags: None,
+        page: 0,
+        hits_per_page: 20,
+        has_results,
+        country: None,
+        region: None,
+        experiment_id: None,
+        variant_id: None,
+        assignment_method: None,
+    }
+}
+
+fn seed_known_answer_dataset(temp_dir: &TempDir) -> AnalyticsConfig {
+    let config = test_analytics_config(temp_dir);
+    let index = "products";
+    let schema = crate::analytics::schema::search_event_schema();
+
+    // 2025-06-15 12:00:00 UTC
+    let base_date = chrono::NaiveDate::from_ymd_opt(2025, 6, 15).unwrap();
+    let base_ts = base_date
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+
+    // Dataset (all on 2025-06-15):
+    //   3x "laptop"  nb_hits=[10, 50, 60]  has_results=true   → count=3, AVG(nb_hits)=40
+    //   2x "phone"   nb_hits=[100, 200]    has_results=true   → count=2, AVG(nb_hits)=150
+    //   1x "xyzzy"   nb_hits=0             has_results=false  → count=1, no-result
+    //   1x "zzznothing" nb_hits=0          has_results=false  → count=1, no-result
+    // Total: 7 searches, 2 no-result searches
+    let events = vec![
+        search_event_with_hits(index, "laptop", 10, true, base_ts, "user-a"),
+        search_event_with_hits(index, "laptop", 50, true, base_ts + 1000, "user-b"),
+        search_event_with_hits(index, "laptop", 60, true, base_ts + 2000, "user-c"),
+        search_event_with_hits(index, "phone", 100, true, base_ts + 3000, "user-a"),
+        search_event_with_hits(index, "phone", 200, true, base_ts + 4000, "user-b"),
+        search_event_with_hits(index, "xyzzy", 0, false, base_ts + 5000, "user-a"),
+        search_event_with_hits(index, "zzznothing", 0, false, base_ts + 6000, "user-d"),
+    ];
+
+    let batch = search_events_to_batch(&events, &schema).unwrap();
+
+    let partition_dir = config.searches_dir(index).join("date=2025-06-15");
+    std::fs::create_dir_all(&partition_dir).unwrap();
+    let parquet_path = partition_dir.join("test_data.parquet");
+    write_parquet_file(&parquet_path, batch).unwrap();
+
+    config
+}
+
+#[tokio::test]
+async fn known_answer_top_searches() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config);
+
+    let params = AnalyticsQueryParams {
+        index_name: "products",
+        start_date: "2025-06-15",
+        end_date: "2025-06-15",
+        limit: 10,
+        tags: None,
+    };
+    let result = engine.top_searches(&params, false, None).await.unwrap();
+    let searches = result["searches"].as_array().unwrap();
+
+    assert_eq!(searches.len(), 4, "should return all 4 distinct queries");
+
+    // Ordered by count DESC: laptop(3), phone(2), xyzzy(1), zzznothing(1)
+    assert_eq!(searches[0]["search"], "laptop");
+    assert_eq!(searches[0]["count"], 3);
+    // AVG(10, 50, 60) = 40.0, CAST to INTEGER = 40
+    assert_eq!(searches[0]["nbHits"], 40);
+
+    assert_eq!(searches[1]["search"], "phone");
+    assert_eq!(searches[1]["count"], 2);
+    // AVG(100, 200) = 150.0, CAST to INTEGER = 150
+    assert_eq!(searches[1]["nbHits"], 150);
+
+    // xyzzy and zzznothing both have count=1; order between them is stable by query text
+    let tail: Vec<&str> = searches[2..]
+        .iter()
+        .map(|s| s["search"].as_str().unwrap())
+        .collect();
+    assert!(tail.contains(&"xyzzy"));
+    assert!(tail.contains(&"zzznothing"));
+
+    for s in &searches[2..] {
+        assert_eq!(s["count"], 1);
+        assert_eq!(s["nbHits"], 0);
+    }
+}
+
+#[tokio::test]
+async fn known_answer_search_count() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config);
+
+    let result = engine
+        .search_count("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+
+    assert_eq!(result["count"], 7, "total search count");
+
+    let dates = result["dates"].as_array().unwrap();
+    assert_eq!(dates.len(), 1, "single day in range");
+    assert_eq!(dates[0]["date"], "2025-06-15");
+    assert_eq!(dates[0]["count"], 7);
+}
+
+#[tokio::test]
+async fn known_answer_no_results_searches() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config);
+
+    let result = engine
+        .no_results_searches("products", "2025-06-15", "2025-06-15", 10)
+        .await
+        .unwrap();
+    let searches = result["searches"].as_array().unwrap();
+
+    assert_eq!(searches.len(), 2, "exactly 2 no-result queries");
+
+    let queries: Vec<&str> = searches
+        .iter()
+        .map(|s| s["search"].as_str().unwrap())
+        .collect();
+    assert!(queries.contains(&"xyzzy"));
+    assert!(queries.contains(&"zzznothing"));
+
+    for s in searches {
+        assert_eq!(s["count"], 1);
+        assert_eq!(s["nbHits"], 0);
+    }
+}
+
+#[tokio::test]
+async fn known_answer_no_results_rate() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config);
+
+    let result = engine
+        .no_results_rate("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+
+    assert_eq!(result["count"], 7, "total searches");
+    assert_eq!(result["noResults"], 2, "no-result searches");
+    // 2/7 = 0.2857… → rounded to 3 decimals = 0.286
+    assert_eq!(result["rate"], serde_json::json!(0.286));
+
+    let dates = result["dates"].as_array().unwrap();
+    assert_eq!(dates.len(), 1);
+    assert_eq!(dates[0]["date"], "2025-06-15");
+    assert_eq!(dates[0]["rate"], serde_json::json!(0.286));
+    assert_eq!(dates[0]["count"], 7);
+    assert_eq!(dates[0]["noResults"], 2);
+}
+
+#[tokio::test]
+async fn known_answer_date_range_excludes_out_of_range() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config);
+
+    // Query a different date range that doesn't overlap
+    let result = engine
+        .search_count("products", "2025-07-01", "2025-07-31")
+        .await
+        .unwrap();
+
+    assert_eq!(result["count"], 0, "no data in July");
+    let dates = result["dates"].as_array().unwrap();
+    assert!(dates.is_empty());
+}
+
+#[tokio::test]
+async fn known_answer_empty_index_returns_zero() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config);
+
+    // Query an index with no data
+    let result = engine
+        .search_count("nonexistent_index", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+
+    assert_eq!(result["count"], 0);
 }

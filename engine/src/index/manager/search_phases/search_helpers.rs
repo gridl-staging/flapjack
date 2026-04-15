@@ -39,7 +39,6 @@ pub(super) struct RankedSearchOutput {
     pub facet_result: Option<FacetResultCache>,
 }
 
-/// TODO: Document build_search_parser.
 pub(super) fn build_search_parser(
     resolved: &ResolvedSearch,
     preprocessed: &PreprocessedQuery,
@@ -123,7 +122,6 @@ pub(super) fn build_search_parser(
     }
 }
 
-/// TODO: Document execute_zero_limit_search.
 pub(super) fn execute_zero_limit_search(
     manager: &IndexManager,
     resolved: &ResolvedSearch,
@@ -194,7 +192,6 @@ pub(super) fn execute_zero_limit_search(
     })
 }
 
-/// TODO: Document execute_ranked_search.
 pub(super) fn execute_ranked_search(
     manager: &IndexManager,
     resolved: &ResolvedSearch,
@@ -253,7 +250,6 @@ pub(super) fn execute_ranked_search(
     })
 }
 
-/// TODO: Document build_execution_limits.
 pub(super) fn build_execution_limits(
     prepared: &PreparedSearchFilters,
     preprocessed: &PreprocessedQuery,

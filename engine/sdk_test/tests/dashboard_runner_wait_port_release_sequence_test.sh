@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SDK_TEST_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENGINE_DIR="$(cd "$SDK_TEST_DIR/.." && pwd)"
-RUNNER="$ENGINE_DIR/_dev/s/test"
+RUNNER="$ENGINE_DIR/s/test"
 
 TMP_DIR="$(mktemp -d)"
 BIN_DIR="$TMP_DIR/bin"
@@ -117,7 +117,7 @@ set -e
 
 if [ "$status" -ne 99 ]; then
   fail_with_logs \
-    "Expected _dev/s/test --dashboard-full to stop at the stubbed full Playwright command" \
+    "Expected s/test --dashboard-full to stop at the stubbed full Playwright command" \
     "$OUTPUT_FILE" \
     "$CALL_LOG"
 fi
@@ -158,4 +158,4 @@ if [ "$unit_line" -ge "$smoke_line" ] || [ "$smoke_line" -ge "$wait_line" ] || [
     "$OUTPUT_FILE"
 fi
 
-echo "PASS: _dev/s/test --dashboard-full waits for the Playwright webserver port between smoke and full"
+echo "PASS: s/test --dashboard-full waits for the Playwright webserver port between smoke and full"

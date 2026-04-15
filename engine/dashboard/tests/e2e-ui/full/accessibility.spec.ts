@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { expect, test } from "../../fixtures/auth.fixture";
+import { waitForSearchResultsOrEmptyState } from "../helpers";
 import { TEST_INDEX } from "../../fixtures/test-data";
 
 type AxeSuppression = {
@@ -99,9 +100,7 @@ const AUDITED_ROUTES: readonly AccessibilityRoute[] = [
     path: INDEX_BASE_PATH,
     coverage: "global /index/:indexName route + seeded child index route",
     waitForReady: async (page) => {
-      await expect(
-        page.getByTestId("results-panel").or(page.getByText(/no results found/i)),
-      ).toBeVisible({ timeout: 15_000 });
+      await waitForSearchResultsOrEmptyState(page);
     },
   },
   {
@@ -154,6 +153,7 @@ const AUDITED_ROUTES: readonly AccessibilityRoute[] = [
       await expect(
         page.getByRole("heading", { name: "Query Suggestions", exact: true, level: 2 }),
       ).toBeVisible({ timeout: 15_000 });
+      // Valid dual-state: server may have QS configs or show empty heading
       await expect(
         page
           .getByRole("heading", { name: "No Query Suggestions configs", exact: true })
@@ -167,6 +167,7 @@ const AUDITED_ROUTES: readonly AccessibilityRoute[] = [
     coverage: "global route",
     waitForReady: async (page) => {
       await expect(page.getByTestId("experiments-heading")).toBeVisible({ timeout: 15_000 });
+      // Valid dual-state: experiments may exist or show empty state
       await expect(
         page.getByTestId("experiments-table").or(page.getByTestId("experiments-empty-state")),
       ).toBeVisible({ timeout: 15_000 });
@@ -275,6 +276,7 @@ const AUDITED_ROUTES: readonly AccessibilityRoute[] = [
     path: `${INDEX_BASE_PATH}/chat`,
     coverage: "seeded child route",
     waitForReady: async (page) => {
+      // Valid dual-state: chat requires NeuralSearch mode, or vector capability is compiled out
       const requiresModeCard = page.getByTestId("chat-requires-neural-search");
       const compiledOutCard = page.getByTestId("chat-capability-disabled");
       await expect(requiresModeCard.or(compiledOutCard)).toBeVisible({ timeout: 15_000 });

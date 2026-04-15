@@ -1,15 +1,16 @@
-//! Stub summary for mod.rs.
+#[cfg(test)]
+use axum::http::StatusCode;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
     response::IntoResponse,
     response::Response,
     Json,
 };
+pub(super) use flapjack::experiments::config::QueryOverrides;
 use flapjack::experiments::{
     config::{
         Experiment, ExperimentArm, ExperimentConclusion, ExperimentError, ExperimentStatus,
-        PrimaryMetric, QueryOverrides,
+        PrimaryMetric,
     },
     metrics,
     store::ExperimentStore,
@@ -22,11 +23,23 @@ use super::dto_algolia::{
     AlgoliaListAbTestsResponse,
 };
 use super::AppState;
-use crate::error_response::json_error;
 
 mod promote;
+mod resolve;
+mod response_helpers;
 mod schemas;
 use promote::promote_variant_settings;
+#[cfg(test)]
+use resolve::require_numeric_id_mapping;
+use resolve::{
+    numeric_id_for_experiment, require_experiment_store, resolve_store_and_experiment_id,
+    resolve_store_and_experiment_uuid,
+};
+pub use response_helpers::ConcludedExperimentResponse;
+use response_helpers::{
+    algolia_action_response, apply_metrics_to_algolia_response, attach_experiment_warning_header,
+    concluded_experiment_response, experiment_error_to_response, lifecycle_action_response,
+};
 pub use schemas::{
     ArmResponse, BayesianResponse, ConcludeExperimentRequest, CreateExperimentRequest,
     GateResponse, GuardRailAlertResponse, InterleavingResponse, ListExperimentsQuery,
@@ -41,156 +54,6 @@ const EXPERIMENT_WARNING_HEADER_NAME: &str = "x-flapjack-warning";
 const VARIANT_PROMOTION_FAILED_WARNING: &str = "variant-promotion-failed";
 #[cfg(test)]
 const DEFAULT_MINIMUM_DAYS: u32 = dto_algolia::DEFAULT_MINIMUM_DAYS;
-
-fn experiment_store_unavailable_response() -> Response {
-    json_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "experiment store unavailable",
-    )
-}
-
-fn get_experiment_store(state: &AppState) -> Option<&ExperimentStore> {
-    state.experiment_store.as_deref()
-}
-
-#[allow(clippy::result_large_err)] // Response is the handler boundary type and boxing would add indirection to a simple guard helper.
-fn require_experiment_store(state: &AppState) -> Result<&ExperimentStore, Response> {
-    get_experiment_store(state).ok_or_else(experiment_store_unavailable_response)
-}
-
-fn missing_numeric_id_response(experiment_id: &str) -> Response {
-    tracing::error!(
-        experiment_id = %experiment_id,
-        "experiment missing numeric id mapping"
-    );
-    json_error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "experiment missing numeric id mapping",
-    )
-}
-
-/// Map an `ExperimentError` variant to the appropriate HTTP status code and JSON error body.
-///
-/// Translates validation errors to 400, not-found to 404, status conflicts to 409,
-/// and I/O or serialization errors to 500.
-fn experiment_error_to_response(err: ExperimentError) -> Response {
-    let status = match err {
-        ExperimentError::InvalidConfig(_) => StatusCode::BAD_REQUEST,
-        ExperimentError::NotFound(_) => StatusCode::NOT_FOUND,
-        ExperimentError::InvalidStatus(_) => StatusCode::CONFLICT,
-        ExperimentError::AlreadyExists(_) => StatusCode::CONFLICT,
-        ExperimentError::Io(_) | ExperimentError::Json(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    json_error(status, err.to_string())
-}
-
-/// Resolve a path parameter that could be an integer ID or a UUID string.
-/// Returns the (UUID, numeric_id) pair.
-fn resolve_experiment_id(
-    store: &ExperimentStore,
-    id_str: &str,
-) -> Result<(String, i64), ExperimentError> {
-    // Try parsing as integer first (Algolia-compatible path).
-    if let Ok(numeric) = id_str.parse::<i64>() {
-        let uuid = store
-            .get_uuid_for_numeric(numeric)
-            .ok_or_else(|| ExperimentError::NotFound(id_str.to_string()))?;
-        return Ok((uuid, numeric));
-    }
-    // Fall back to UUID string lookup.
-    let numeric = store
-        .get_numeric_id(id_str)
-        .ok_or_else(|| ExperimentError::NotFound(id_str.to_string()))?;
-    Ok((id_str.to_string(), numeric))
-}
-
-#[allow(clippy::result_large_err)] // Response is the handler boundary type and boxing would add indirection for this small resolver.
-fn resolve_store_and_experiment_id<'a>(
-    state: &'a AppState,
-    id_str: &str,
-) -> Result<(&'a ExperimentStore, String, i64), Response> {
-    let store = require_experiment_store(state)?;
-    let (uuid, numeric_id) = resolve_experiment_id_response(store, id_str)?;
-    Ok((store, uuid, numeric_id))
-}
-
-#[allow(clippy::result_large_err)] // Response is the handler boundary type and boxing would add indirection to a small helper.
-fn resolve_experiment_id_response(
-    store: &ExperimentStore,
-    id_str: &str,
-) -> Result<(String, i64), Response> {
-    if id_str.parse::<i64>().is_err() && store.get_numeric_id(id_str).is_none() {
-        match store.get(id_str) {
-            Ok(_) => return Err(missing_numeric_id_response(id_str)),
-            Err(err) => return Err(experiment_error_to_response(err)),
-        }
-    }
-
-    resolve_experiment_id(store, id_str).map_err(experiment_error_to_response)
-}
-
-/// TODO: Document lifecycle_action_response.
-fn lifecycle_action_response(
-    state: &AppState,
-    id_str: &str,
-    action: fn(&ExperimentStore, &str) -> Result<Experiment, ExperimentError>,
-) -> Response {
-    let (store, uuid, numeric_id) = match resolve_store_and_experiment_id(state, id_str) {
-        Ok(values) => values,
-        Err(response) => return response,
-    };
-
-    match action(store, &uuid) {
-        Ok(experiment) => Json(AlgoliaAbTestActionResponse {
-            ab_test_id: numeric_id,
-            index: experiment.index_name,
-            task_id: numeric_id,
-        })
-        .into_response(),
-        Err(err) => experiment_error_to_response(err),
-    }
-}
-
-fn has_any_variant_metrics(metrics: &metrics::ExperimentMetrics) -> bool {
-    let control = &metrics.control;
-    let variant = &metrics.variant;
-    control.searches > 0
-        || variant.searches > 0
-        || control.clicks > 0
-        || variant.clicks > 0
-        || control.conversions > 0
-        || variant.conversions > 0
-        || control.users > 0
-        || variant.users > 0
-}
-
-fn fill_algolia_variant_metrics(
-    target: &mut dto_algolia::AlgoliaVariant,
-    arm: &metrics::ArmMetrics,
-) {
-    target.average_click_position = Some(arm.mean_click_rank);
-    target.click_count = Some(arm.clicks as i64);
-    target.click_through_rate = Some(arm.ctr);
-    target.conversion_count = Some(arm.conversions as i64);
-    target.conversion_rate = Some(arm.conversion_rate);
-    target.no_result_count = Some(arm.zero_result_searches as i64);
-    target.search_count = Some(arm.searches as i64);
-    target.tracked_search_count = Some(arm.searches as i64);
-    target.user_count = Some(arm.users as i64);
-    target.tracked_user_count = Some(arm.users as i64);
-}
-
-fn apply_metrics_to_algolia_response(
-    payload: &mut dto_algolia::AlgoliaAbTest,
-    metrics: &metrics::ExperimentMetrics,
-) {
-    if payload.variants.len() < 2 || !has_any_variant_metrics(metrics) {
-        return;
-    }
-    fill_algolia_variant_metrics(&mut payload.variants[0], &metrics.control);
-    fill_algolia_variant_metrics(&mut payload.variants[1], &metrics.variant);
-}
-
 fn validate_conclusion_winner(winner: Option<String>) -> Result<Option<String>, ExperimentError> {
     match winner {
         Some(w) if w == "control" || w == "variant" => Ok(Some(w)),
@@ -201,116 +64,14 @@ fn validate_conclusion_winner(winner: Option<String>) -> Result<Option<String>, 
     }
 }
 
-/// Concrete conclude-response schema.
-///
-/// The generic `Experiment` model allows `conclusion` to be absent for draft and
-/// running states, but a successful conclude response always includes it. Keeping
-/// this as a separate DTO lets the OpenAPI contract enforce that stronger promise.
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ConcludedExperimentResponse {
-    pub id: String,
-    pub name: String,
-    pub index_name: String,
-    pub status: ExperimentStatus,
-    pub traffic_split: f64,
-    pub control: ExperimentArm,
-    pub variant: ExperimentArm,
-    pub primary_metric: PrimaryMetric,
-    pub created_at: i64,
-    pub started_at: Option<i64>,
-    pub ended_at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stopped_at: Option<i64>,
-    pub minimum_days: u32,
-    pub winsorization_cap: Option<f64>,
-    pub conclusion: ExperimentConclusion,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interleaving: Option<bool>,
-}
-
-/// Extracts the conclusion payload from a concluded experiment, returning a
-/// structured response or an internal-error response when the store returns an
-/// impossible concluded experiment without a conclusion payload.
-/// TODO: Document concluded_experiment_response.
-#[allow(clippy::result_large_err)] // Response is inherently large in axum; boxing adds indirection without benefit at a single call site
-fn concluded_experiment_response(
-    experiment: Experiment,
-) -> Result<ConcludedExperimentResponse, Response> {
-    let Experiment {
-        id,
-        name,
-        index_name,
-        status,
-        traffic_split,
-        control,
-        variant,
-        primary_metric,
-        created_at,
-        started_at,
-        ended_at,
-        stopped_at,
-        minimum_days,
-        winsorization_cap,
-        conclusion,
-        interleaving,
-    } = experiment;
-
-    let conclusion = match conclusion {
-        Some(conclusion) => conclusion,
-        None => {
-            tracing::error!(
-                experiment_id = %id,
-                experiment_status = ?status,
-                "concluded experiment response missing conclusion payload"
-            );
-            return Err(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "concluded experiment missing conclusion",
-            ));
-        }
-    };
-
-    Ok(ConcludedExperimentResponse {
-        id,
-        name,
-        index_name,
-        status,
-        traffic_split,
-        control,
-        variant,
-        primary_metric,
-        created_at,
-        started_at,
-        ended_at,
-        stopped_at,
-        minimum_days,
-        winsorization_cap,
-        conclusion,
-        interleaving,
-    })
-}
-
-fn attach_experiment_warning_header(
-    mut response: Response,
-    warning: Option<&'static str>,
-) -> Response {
-    if let Some(warning) = warning {
-        response.headers_mut().insert(
-            axum::http::header::HeaderName::from_static(EXPERIMENT_WARNING_HEADER_NAME),
-            axum::http::HeaderValue::from_static(warning),
-        );
-    }
-    response
-}
-
 fn should_promote_variant_settings(experiment: &Experiment) -> bool {
     experiment.conclusion.as_ref().is_some_and(|conclusion| {
         conclusion.promoted && conclusion.winner.as_deref() == Some("variant")
     })
 }
 
-/// TODO: Document promotion_warning_if_variant_promotion_fails.
+/// Attempts variant promotion after a successful conclusion and returns the
+/// warning header value when promotion fails but the conclusion itself succeeds.
 fn promotion_warning_if_variant_promotion_fails(
     state: &AppState,
     experiment: &Experiment,
@@ -331,8 +92,8 @@ fn promotion_warning_if_variant_promotion_fails(
     None
 }
 
-/// Create a new A/B test experiment with traffic splitting between a main
-/// index and variant.
+/// Creates a new experiment and returns the Algolia-compatible action payload
+/// using the stable numeric experiment identifier.
 #[utoipa::path(
     post,
     path = "/2/abtests",
@@ -341,6 +102,7 @@ fn promotion_warning_if_variant_promotion_fails(
     responses(
         (status = 200, description = "Experiment created", body = AlgoliaCreateAbTestResponse),
         (status = 400, description = "Invalid experiment configuration"),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 409, description = "Experiment already exists"),
         (status = 503, description = "Experiment store unavailable")
     ),
@@ -365,29 +127,20 @@ pub async fn create_experiment(
     };
 
     let index_name = experiment.index_name.clone();
-    match store.create(experiment) {
-        Ok(created) => {
-            let numeric_id = store.get_numeric_id(&created.id).unwrap_or(0);
-            (
-                StatusCode::OK,
-                Json(AlgoliaCreateAbTestResponse {
-                    ab_test_id: numeric_id,
-                    index: index_name,
-                    task_id: numeric_id, // use same ID as task placeholder
-                }),
-            )
-                .into_response()
-        }
-        Err(err) => experiment_error_to_response(err),
-    }
+    let created = match store.create(experiment) {
+        Ok(created) => created,
+        Err(err) => return experiment_error_to_response(err),
+    };
+    let numeric_id = match numeric_id_for_experiment(store, &created.id) {
+        Ok(numeric_id) => numeric_id,
+        Err(response) => return response,
+    };
+
+    algolia_action_response(numeric_id, index_name)
 }
 
-/// List experiments with optional index prefix or suffix filtering and
-/// pagination.
-///
-/// Supports Algolia-compatible query parameters for filtering by index name
-/// pattern. Results are sorted by creation time with deterministic tie-breaking
-/// on numeric ID.
+/// Lists experiments with Algolia-compatible pagination and optional index name
+/// prefix/suffix filtering.
 #[utoipa::path(
     get,
     path = "/2/abtests",
@@ -400,6 +153,7 @@ pub async fn create_experiment(
     ),
     responses(
         (status = 200, description = "Experiments list", body = AlgoliaListAbTestsResponse),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 503, description = "Experiment store unavailable")
     ),
     security(
@@ -426,13 +180,17 @@ pub async fn list_experiments(
     }
 
     // Pair each experiment with its numeric ID for deterministic sort and DTO mapping.
-    let mut exp_with_ids: Vec<(Experiment, i64)> = experiments
+    let mut exp_with_ids: Vec<(Experiment, i64)> = match experiments
         .into_iter()
         .map(|e| {
-            let nid = store.get_numeric_id(&e.id).unwrap_or(0);
-            (e, nid)
+            let numeric_id = numeric_id_for_experiment(store, &e.id)?;
+            Ok((e, numeric_id))
         })
-        .collect();
+        .collect::<Result<Vec<_>, Response>>()
+    {
+        Ok(exp_with_ids) => exp_with_ids,
+        Err(response) => return response,
+    };
     exp_with_ids.sort_by(|(a, a_id), (b, b_id)| {
         a.created_at.cmp(&b.created_at).then_with(|| a_id.cmp(b_id))
     });
@@ -464,12 +222,8 @@ pub async fn list_experiments(
     .into_response()
 }
 
-/// Fetch a single experiment by numeric ID or UUID, hydrated with live
-/// analytics metrics when available.
-///
-/// Retrieves the experiment from the store, converts it to the Algolia DTO
-/// format, and overlays click, conversion, and search metrics from the
-/// analytics engine when available.
+/// Fetches a single experiment by numeric ID or UUID and enriches the payload
+/// with analytics-backed results metadata when available.
 #[utoipa::path(
     get,
     path = "/2/abtests/{id}",
@@ -479,6 +233,7 @@ pub async fn list_experiments(
     ),
     responses(
         (status = 200, description = "Experiment details", body = dto_algolia::AlgoliaAbTest),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 404, description = "Experiment not found"),
         (status = 503, description = "Experiment store unavailable")
     ),
@@ -504,16 +259,12 @@ pub async fn get_experiment(
             );
 
             if let Some(engine) = state.analytics_engine.as_ref() {
-                let mut index_names = vec![experiment.index_name.as_str()];
-                if let Some(variant_index) = experiment.variant.index_name.as_deref() {
-                    if variant_index != experiment.index_name {
-                        index_names.push(variant_index);
-                    }
-                }
+                let index_names = results::resolve_experiment_index_names(&experiment);
+                let index_name_refs = results::index_name_refs(&index_names);
 
                 match metrics::get_experiment_metrics(
                     &experiment.id,
-                    &index_names,
+                    &index_name_refs,
                     &engine.config().data_dir,
                     experiment.winsorization_cap,
                 )
@@ -553,6 +304,7 @@ pub async fn get_experiment(
     responses(
         (status = 200, description = "Experiment updated", body = dto_algolia::AlgoliaAbTest),
         (status = 400, description = "Invalid experiment configuration"),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 404, description = "Experiment not found"),
         (status = 409, description = "Experiment is in an invalid status for update"),
         (status = 503, description = "Experiment store unavailable")
@@ -606,10 +358,8 @@ pub async fn update_experiment(
     }
 }
 
-/// Delete an experiment by numeric ID or UUID.
-///
-/// Removes the experiment from the persistent store and returns the Algolia
-/// action envelope confirming which numeric ID and index were deleted.
+/// Deletes an experiment by numeric ID or UUID and returns the Algolia-style
+/// action envelope for the affected experiment.
 #[utoipa::path(
     delete,
     path = "/2/abtests/{id}",
@@ -619,6 +369,7 @@ pub async fn update_experiment(
     ),
     responses(
         (status = 200, description = "Experiment deleted", body = AlgoliaAbTestActionResponse),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 404, description = "Experiment not found"),
         (status = 409, description = "Cannot delete a running experiment"),
         (status = 503, description = "Experiment store unavailable")
@@ -643,12 +394,7 @@ pub async fn delete_experiment(
 
     let index_name = experiment.index_name.clone();
     match store.delete(&uuid) {
-        Ok(()) => Json(AlgoliaAbTestActionResponse {
-            ab_test_id: numeric_id,
-            index: index_name,
-            task_id: numeric_id,
-        })
-        .into_response(),
+        Ok(()) => algolia_action_response(numeric_id, index_name),
         Err(err) => experiment_error_to_response(err),
     }
 }
@@ -671,6 +417,7 @@ pub async fn delete_experiment(
     ),
     responses(
         (status = 200, description = "Experiment started", body = AlgoliaAbTestActionResponse),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 404, description = "Experiment not found"),
         (status = 409, description = "Experiment is in an invalid status for start"),
         (status = 503, description = "Experiment store unavailable")
@@ -704,6 +451,7 @@ pub async fn start_experiment(
     ),
     responses(
         (status = 200, description = "Experiment stopped", body = AlgoliaAbTestActionResponse),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 404, description = "Experiment not found"),
         (status = 409, description = "Experiment is in an invalid status for stop"),
         (status = 503, description = "Experiment store unavailable")
@@ -719,12 +467,8 @@ pub async fn stop_experiment(
     lifecycle_action_response(&state, &id, ExperimentStore::stop)
 }
 
-/// Conclude a running experiment by selecting a winner and promoting the
-/// winning configuration.
-///
-/// Applies the supplied conclusion payload, persists the experiment's final
-/// state, and attempts variant promotion before returning the concluded
-/// experiment response.
+/// Concludes an experiment, optionally promotes the winning variant settings,
+/// and surfaces partial-promotion failures via a warning header.
 #[utoipa::path(
     post,
     path = "/2/abtests/{id}/conclude",
@@ -736,6 +480,7 @@ pub async fn stop_experiment(
     responses(
         (status = 200, description = "Experiment concluded", body = ConcludedExperimentResponse),
         (status = 400, description = "Invalid conclusion payload"),
+        (status = 500, description = "Experiment missing numeric ID mapping"),
         (status = 404, description = "Experiment not found"),
         (status = 409, description = "Experiment is in an invalid status for conclude"),
         (status = 503, description = "Experiment store unavailable")
@@ -749,7 +494,7 @@ pub async fn conclude_experiment(
     Path(id): Path<String>,
     Json(body): Json<ConcludeExperimentRequest>,
 ) -> Response {
-    let (store, uuid, _numeric_id) = match resolve_store_and_experiment_id(&state, &id) {
+    let (store, uuid) = match resolve_store_and_experiment_uuid(&state, &id) {
         Ok(values) => values,
         Err(response) => return response,
     };
@@ -816,7 +561,8 @@ mod review_regression_tests {
             .with_state(state)
     }
 
-    /// TODO: Document conclude_experiment_sets_warning_header_when_variant_promotion_fails.
+    /// Concluding an experiment should preserve the successful response while
+    /// surfacing variant-promotion failures through a warning header.
     #[tokio::test]
     async fn conclude_experiment_sets_warning_header_when_variant_promotion_fails() {
         let tmp = TempDir::new().unwrap();
@@ -872,6 +618,22 @@ mod review_regression_tests {
                 .get(EXPERIMENT_WARNING_HEADER_NAME)
                 .and_then(|value| value.to_str().ok()),
             Some(VARIANT_PROMOTION_FAILED_WARNING)
+        );
+    }
+
+    #[test]
+    fn require_numeric_id_mapping_returns_internal_error_when_mapping_missing() {
+        let response = require_numeric_id_mapping("exp-123", None)
+            .expect_err("missing mapping should return a handler error response");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn require_numeric_id_mapping_preserves_existing_numeric_id() {
+        assert_eq!(
+            require_numeric_id_mapping("exp-123", Some(42)).unwrap(),
+            42,
+            "existing numeric mapping should pass through unchanged"
         );
     }
 }

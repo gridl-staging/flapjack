@@ -1,4 +1,3 @@
-//! Stub summary for main.rs.
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -430,7 +429,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document strip_flapjack_path_entries_removes_marker_block_and_path_lines.
     #[test]
     fn strip_flapjack_path_entries_removes_marker_block_and_path_lines() {
         let contents = [
@@ -450,7 +448,6 @@ mod tests {
         );
     }
 
-    /// TODO: Document run_uninstall_cleans_rc_files_when_default_install_dir_is_missing.
     #[test]
     fn run_uninstall_cleans_rc_files_when_default_install_dir_is_missing() {
         let _guard = ENV_MUTEX.lock().expect("lock env mutex");
@@ -510,7 +507,6 @@ mod tests {
         std::fs::remove_dir_all(&test_home).expect("cleanup temp home");
     }
 
-    /// TODO: Document run_uninstall_prefers_flapjack_install_env_over_default.
     #[test]
     fn run_uninstall_prefers_flapjack_install_env_over_default() {
         let _guard = ENV_MUTEX.lock().expect("lock env mutex");

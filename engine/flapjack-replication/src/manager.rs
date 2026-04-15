@@ -1,4 +1,3 @@
-//! Stub summary for manager.rs.
 use super::circuit_breaker::CircuitState;
 use super::config::NodeConfig;
 use super::peer::PeerClient;
@@ -473,7 +472,6 @@ mod tests {
         let manager = ReplicationManager::new(config, None);
         assert!(manager.peer_statuses().is_empty());
     }
-    /// TODO: Document test_health_probe_handle_starts_and_stops.
     #[tokio::test]
     async fn test_health_probe_handle_starts_and_stops() {
         let config = NodeConfig {

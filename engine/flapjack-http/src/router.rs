@@ -1,4 +1,3 @@
-//! Stub summary for router.rs.
 use std::path::Path;
 use std::sync::Arc;
 
@@ -309,7 +308,6 @@ fn build_protected_routes(state: Arc<AppState>, data_dir: &Path) -> Router {
     ))
 }
 
-/// TODO: Document build_internal_routes.
 fn build_internal_routes(state: Arc<AppState>, auth_enabled: bool) -> Router {
     let public_routes = Router::new()
         .route(
@@ -496,8 +494,14 @@ pub(crate) fn build_cors_layer(mode: &CorsMode) -> CorsLayer {
     }
 }
 
-/// Applies the middleware stack to the router: CORS, body size limit, request
-/// logging, auth, rate limiting, trusted proxy IP extraction, and usage tracking.
+/// Parse `FLAPJACK_MAX_BODY_MB`-style values.
+///
+/// Missing, empty, or invalid values use the default of 100 MB.
+/// Zero is a valid parse result (matches `usize` semantics).
+pub(crate) fn max_body_mb_from_value(raw: Option<&str>) -> usize {
+    raw.and_then(|value| value.parse().ok()).unwrap_or(100)
+}
+
 fn apply_middleware(
     app: Router,
     state: Arc<AppState>,
@@ -505,10 +509,8 @@ fn apply_middleware(
     key_store: Option<Arc<KeyStore>>,
     cors_mode: &CorsMode,
 ) -> Router {
-    let max_body_mb: usize = std::env::var("FLAPJACK_MAX_BODY_MB")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(100);
+    let max_body_mb: usize =
+        max_body_mb_from_value(std::env::var("FLAPJACK_MAX_BODY_MB").ok().as_deref());
 
     let mgr_for_pressure = Arc::clone(&state.manager);
     let default_facet_cache_cap = state

@@ -27,6 +27,37 @@ impl FilterCompiler {
     const MAX_FILTER_DEPTH: usize = 10;
     const MAX_BOOLEAN_CLAUSES: usize = 1000;
 
+    /// Allow only identifier-like JSON filter paths so user-controlled field names
+    /// cannot inject Tantivy query syntax into `_json_filter.<field>:...`.
+    fn json_filter_field_path(&self, field: &str) -> Result<String> {
+        if field.is_empty()
+            || !field
+                .split('.')
+                .all(|segment| !segment.is_empty() && Self::is_safe_field_segment(segment))
+        {
+            return Err(crate::error::FlapjackError::InvalidQuery(format!(
+                "Invalid filter field '{}'",
+                field
+            )));
+        }
+
+        Ok(format!("_json_filter.{}", field))
+    }
+
+    fn is_safe_field_segment(segment: &str) -> bool {
+        segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    }
+
+    fn escape_quoted_query_value(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+
+    fn is_safe_bare_text_char(ch: char) -> bool {
+        ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')
+    }
+
     /// Compile a `Filter` tree into a Tantivy query, enforcing clause-count and
     /// nesting-depth limits. Falls back to facet-only validation when available.
     pub fn compile(
@@ -90,71 +121,64 @@ impl FilterCompiler {
     /// that contain spaces or special characters.
     fn to_query_string(&self, filter: &Filter) -> Result<String> {
         match filter {
-            Filter::Equals { field, value } => match value {
-                crate::types::FieldValue::Text(_s) => Ok(format!(
-                    "_json_filter.{}:{}",
-                    field,
-                    self.format_value(value)
-                )),
-                crate::types::FieldValue::Integer(i) => {
-                    Ok(format!("_json_filter.{}:[{} TO {}]", field, i, i))
-                }
-                crate::types::FieldValue::Float(f) => {
-                    Ok(format!("_json_filter.{}:[{} TO {}]", field, f, f))
-                }
-                crate::types::FieldValue::Date(d) => {
-                    Ok(format!("_json_filter.{}:[{} TO {}]", field, d, d))
-                }
-                _ => Err(crate::error::FlapjackError::InvalidQuery(
-                    "Equals only supports text, integer, float, or date values".to_string(),
-                )),
-            },
-            Filter::Range { field, min, max } => {
-                Ok(format!("_json_filter.{}:[{} TO {}]", field, min, max))
-            }
+            Filter::Equals { field, value } => self.equals_query_string_for_value(field, value),
+            Filter::Range { field, min, max } => Ok(format!(
+                "{}:[{} TO {}]",
+                self.json_filter_field_path(field)?,
+                min,
+                max
+            )),
             Filter::GreaterThan { field, value } => match value {
-                crate::types::FieldValue::Integer(i) => {
-                    Ok(format!("_json_filter.{}:[{} TO *]", field, i + 1))
-                }
+                crate::types::FieldValue::Integer(i) => Ok(format!(
+                    "{}:[{} TO *]",
+                    self.json_filter_field_path(field)?,
+                    i + 1
+                )),
                 crate::types::FieldValue::Float(_) => {
                     Err(crate::error::FlapjackError::InvalidQuery(format!(
                         "Exclusive '>' not supported on floats for field '{}'. Use '>='",
                         field
                     )))
                 }
-                crate::types::FieldValue::Date(d) => {
-                    Ok(format!("_json_filter.{}:[{} TO *]", field, d + 1))
-                }
+                crate::types::FieldValue::Date(d) => Ok(format!(
+                    "{}:[{} TO *]",
+                    self.json_filter_field_path(field)?,
+                    d + 1
+                )),
                 _ => Err(crate::error::FlapjackError::InvalidQuery(
                     "GreaterThan only supports integer/date values".to_string(),
                 )),
             },
             Filter::GreaterThanOrEqual { field, value } => Ok(format!(
-                "_json_filter.{}:[{} TO *]",
-                field,
-                self.format_range_value(value)
+                "{}:[{} TO *]",
+                self.json_filter_field_path(field)?,
+                self.format_range_value(value)?
             )),
             Filter::LessThan { field, value } => match value {
-                crate::types::FieldValue::Integer(i) => {
-                    Ok(format!("_json_filter.{}:[* TO {}]", field, i - 1))
-                }
+                crate::types::FieldValue::Integer(i) => Ok(format!(
+                    "{}:[* TO {}]",
+                    self.json_filter_field_path(field)?,
+                    i - 1
+                )),
                 crate::types::FieldValue::Float(_) => {
                     Err(crate::error::FlapjackError::InvalidQuery(format!(
                         "Exclusive '<' not supported on floats for field '{}'. Use '<='",
                         field
                     )))
                 }
-                crate::types::FieldValue::Date(d) => {
-                    Ok(format!("_json_filter.{}:[* TO {}]", field, d - 1))
-                }
+                crate::types::FieldValue::Date(d) => Ok(format!(
+                    "{}:[* TO {}]",
+                    self.json_filter_field_path(field)?,
+                    d - 1
+                )),
                 _ => Err(crate::error::FlapjackError::InvalidQuery(
                     "LessThan only supports integer/date values".to_string(),
                 )),
             },
             Filter::LessThanOrEqual { field, value } => Ok(format!(
-                "_json_filter.{}:[* TO {}]",
-                field,
-                self.format_range_value(value)
+                "{}:[* TO {}]",
+                self.json_filter_field_path(field)?,
+                self.format_range_value(value)?
             )),
             Filter::And(filters) => {
                 let parts: Result<Vec<_>> =
@@ -174,36 +198,59 @@ impl FilterCompiler {
         }
     }
 
-    /// Format a field value for inclusion in a Tantivy query string, quoting text
-    /// with spaces/colons and panicking on non-scalar types (Object, Array).
-    fn format_value(&self, value: &crate::types::FieldValue) -> String {
+    fn format_value(&self, value: &crate::types::FieldValue) -> Result<String> {
         match value {
-            crate::types::FieldValue::Object(_) => {
-                panic!("Object values cannot be used in filters directly")
-            }
-            crate::types::FieldValue::Array(_) => {
-                panic!("Array values cannot be used in filters directly")
-            }
-            crate::types::FieldValue::Text(s) => {
-                if s.contains(' ') || s.contains(':') || s.contains('%') {
-                    format!("\"{}\"", s.replace('"', "\\\""))
-                } else {
-                    s.clone()
-                }
-            }
-            crate::types::FieldValue::Integer(i) => i.to_string(),
-            crate::types::FieldValue::Float(f) => f.to_string(),
-            crate::types::FieldValue::Date(d) => d.to_string(),
-            crate::types::FieldValue::Facet(s) => format!("\"{}\"", s),
+            crate::types::FieldValue::Object(_) => Err(crate::error::FlapjackError::InvalidQuery(
+                "Object values cannot be used in filters directly".to_string(),
+            )),
+            crate::types::FieldValue::Array(_) => Err(crate::error::FlapjackError::InvalidQuery(
+                "Array values cannot be used in filters directly".to_string(),
+            )),
+            crate::types::FieldValue::Text(s) => Ok(self.format_text_value(s)),
+            crate::types::FieldValue::Integer(i) => Ok(i.to_string()),
+            crate::types::FieldValue::Float(f) => Ok(f.to_string()),
+            crate::types::FieldValue::Date(d) => Ok(d.to_string()),
+            crate::types::FieldValue::Facet(s) => Ok(self.format_facet_value(s)),
         }
     }
 
-    fn format_range_value(&self, value: &crate::types::FieldValue) -> String {
+    fn equals_query_string_for_value(
+        &self,
+        field: &str,
+        value: &crate::types::FieldValue,
+    ) -> Result<String> {
+        let field_path = self.json_filter_field_path(field)?;
         match value {
-            crate::types::FieldValue::Integer(i) => i.to_string(),
-            crate::types::FieldValue::Float(f) => f.to_string(),
-            crate::types::FieldValue::Date(d) => d.to_string(),
-            _ => panic!("Range queries only support numeric/date values"),
+            crate::types::FieldValue::Integer(i) => Ok(format!("{}:[{} TO {}]", field_path, i, i)),
+            crate::types::FieldValue::Float(f) => Ok(format!("{}:[{} TO {}]", field_path, f, f)),
+            crate::types::FieldValue::Date(d) => Ok(format!("{}:[{} TO {}]", field_path, d, d)),
+            _ => {
+                let formatted = self.format_value(value)?;
+                Ok(format!("{}:{}", field_path, formatted))
+            }
+        }
+    }
+
+    fn format_text_value(&self, value: &str) -> String {
+        if value.chars().all(Self::is_safe_bare_text_char) {
+            value.to_string()
+        } else {
+            format!("\"{}\"", Self::escape_quoted_query_value(value))
+        }
+    }
+
+    fn format_facet_value(&self, value: &str) -> String {
+        format!("\"{}\"", Self::escape_quoted_query_value(value))
+    }
+
+    fn format_range_value(&self, value: &crate::types::FieldValue) -> Result<String> {
+        match value {
+            crate::types::FieldValue::Integer(i) => Ok(i.to_string()),
+            crate::types::FieldValue::Float(f) => Ok(f.to_string()),
+            crate::types::FieldValue::Date(d) => Ok(d.to_string()),
+            _ => Err(crate::error::FlapjackError::InvalidQuery(
+                "Range queries only support numeric/date values".to_string(),
+            )),
         }
     }
 
@@ -247,7 +294,7 @@ impl FilterCompiler {
                 ])))
             }
             Filter::NotEquals { field, value } => {
-                let equals_str = format!("_json_filter.{}:{}", field, self.format_value(value));
+                let equals_str = self.equals_query_string_for_value(field, value)?;
                 let equals_query = self
                     .query_parser
                     .parse_query(&equals_str)
@@ -282,345 +329,56 @@ impl FilterCompiler {
 }
 
 #[cfg(test)]
-mod tests {
+#[path = "filter_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "filter_edge_tests.rs"]
+mod edge_tests;
+
+#[cfg(test)]
+mod security_tests {
     use super::*;
+    use crate::error::FlapjackError;
     use crate::index::schema::SchemaBuilder;
     use crate::types::FieldValue;
 
     fn make_compiler() -> FilterCompiler {
         let schema = SchemaBuilder::new().build();
-        let tantivy = schema.to_tantivy();
-        FilterCompiler::new(tantivy)
+        FilterCompiler::new(schema.to_tantivy())
     }
 
-    // ── count_clauses ───────────────────────────────────────────────────
-
     #[test]
-    fn count_clauses_single_equals() {
-        let c = make_compiler();
-        let f = Filter::Equals {
-            field: "x".into(),
-            value: FieldValue::Integer(1),
+    fn invalid_filter_field_is_rejected_before_query_string_build() {
+        let compiler = make_compiler();
+        let filter = Filter::Equals {
+            field: "category:admin".into(),
+            value: FieldValue::Text("books".into()),
         };
-        assert_eq!(c.count_clauses(&f), 1);
-    }
 
-    /// Test: Count clauses in an AND filter with three Equals children.
-    #[test]
-    fn count_clauses_and_of_three() {
-        let c = make_compiler();
-        let f = Filter::And(vec![
-            Filter::Equals {
-                field: "a".into(),
-                value: FieldValue::Integer(1),
-            },
-            Filter::Equals {
-                field: "b".into(),
-                value: FieldValue::Integer(2),
-            },
-            Filter::Equals {
-                field: "c".into(),
-                value: FieldValue::Integer(3),
-            },
-        ]);
-        assert_eq!(c.count_clauses(&f), 3);
-    }
-
-    /// Test: Count clauses in a nested And(Or(...), Not(...)) structure.
-    #[test]
-    fn count_clauses_nested() {
-        let c = make_compiler();
-        let f = Filter::And(vec![
-            Filter::Or(vec![
-                Filter::Equals {
-                    field: "a".into(),
-                    value: FieldValue::Integer(1),
-                },
-                Filter::Equals {
-                    field: "b".into(),
-                    value: FieldValue::Integer(2),
-                },
-            ]),
-            Filter::Not(Box::new(Filter::Equals {
-                field: "c".into(),
-                value: FieldValue::Integer(3),
-            })),
-        ]);
-        assert_eq!(c.count_clauses(&f), 3);
-    }
-
-    // ── has_not ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn has_not_simple_equals_false() {
-        let c = make_compiler();
-        let f = Filter::Equals {
-            field: "x".into(),
-            value: FieldValue::Integer(1),
-        };
-        assert!(!c.has_not(&f));
+        match compiler.to_query_string(&filter) {
+            Err(FlapjackError::InvalidQuery(message)) => {
+                assert!(message.contains("Invalid filter field"));
+            }
+            other => panic!("expected InvalidQuery, got {other:?}"),
+        }
     }
 
     #[test]
-    fn has_not_with_not_true() {
-        let c = make_compiler();
-        let f = Filter::Not(Box::new(Filter::Equals {
-            field: "x".into(),
-            value: FieldValue::Integer(1),
-        }));
-        assert!(c.has_not(&f));
-    }
+    fn quoted_filter_values_escape_backslashes_and_quotes() {
+        let compiler = make_compiler();
 
-    #[test]
-    fn has_not_with_not_equals_true() {
-        let c = make_compiler();
-        let f = Filter::NotEquals {
-            field: "x".into(),
-            value: FieldValue::Integer(1),
-        };
-        assert!(c.has_not(&f));
-    }
-
-    #[test]
-    fn has_not_nested_in_and() {
-        let c = make_compiler();
-        let f = Filter::And(vec![
-            Filter::Equals {
-                field: "a".into(),
-                value: FieldValue::Integer(1),
-            },
-            Filter::NotEquals {
-                field: "b".into(),
-                value: FieldValue::Integer(2),
-            },
-        ]);
-        assert!(c.has_not(&f));
-    }
-
-    // ── to_query_string ─────────────────────────────────────────────────
-
-    #[test]
-    fn query_string_integer_equals() {
-        let c = make_compiler();
-        let f = Filter::Equals {
-            field: "price".into(),
-            value: FieldValue::Integer(42),
-        };
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "_json_filter.price:[42 TO 42]");
-    }
-
-    #[test]
-    fn query_string_text_equals() {
-        let c = make_compiler();
-        let f = Filter::Equals {
-            field: "color".into(),
-            value: FieldValue::Text("red".into()),
-        };
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "_json_filter.color:red");
-    }
-
-    #[test]
-    fn query_string_text_with_space_quoted() {
-        let c = make_compiler();
-        let f = Filter::Equals {
-            field: "color".into(),
-            value: FieldValue::Text("dark red".into()),
-        };
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "_json_filter.color:\"dark red\"");
-    }
-
-    #[test]
-    fn query_string_range() {
-        let c = make_compiler();
-        let f = Filter::Range {
-            field: "price".into(),
-            min: 10.0,
-            max: 100.0,
-        };
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "_json_filter.price:[10 TO 100]");
-    }
-
-    #[test]
-    fn query_string_gte() {
-        let c = make_compiler();
-        let f = Filter::GreaterThanOrEqual {
-            field: "age".into(),
-            value: FieldValue::Integer(18),
-        };
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "_json_filter.age:[18 TO *]");
-    }
-
-    #[test]
-    fn query_string_lte() {
-        let c = make_compiler();
-        let f = Filter::LessThanOrEqual {
-            field: "age".into(),
-            value: FieldValue::Integer(65),
-        };
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "_json_filter.age:[* TO 65]");
-    }
-
-    #[test]
-    fn query_string_and() {
-        let c = make_compiler();
-        let f = Filter::And(vec![
-            Filter::Equals {
-                field: "a".into(),
-                value: FieldValue::Integer(1),
-            },
-            Filter::Equals {
-                field: "b".into(),
-                value: FieldValue::Integer(2),
-            },
-        ]);
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "(_json_filter.a:[1 TO 1] AND _json_filter.b:[2 TO 2])");
-    }
-
-    #[test]
-    fn query_string_or() {
-        let c = make_compiler();
-        let f = Filter::Or(vec![
-            Filter::Equals {
-                field: "a".into(),
-                value: FieldValue::Integer(1),
-            },
-            Filter::Equals {
-                field: "a".into(),
-                value: FieldValue::Integer(2),
-            },
-        ]);
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "(_json_filter.a:[1 TO 1] OR _json_filter.a:[2 TO 2])");
-    }
-
-    #[test]
-    fn query_string_not_errors() {
-        let c = make_compiler();
-        let f = Filter::Not(Box::new(Filter::Equals {
-            field: "x".into(),
-            value: FieldValue::Integer(1),
-        }));
-        assert!(c.to_query_string(&f).is_err());
-    }
-
-    // ── compile ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn compile_simple_succeeds() {
-        let c = make_compiler();
-        let f = Filter::Equals {
-            field: "price".into(),
-            value: FieldValue::Integer(10),
-        };
-        assert!(c.compile(&f, None).is_ok());
-    }
-
-    #[test]
-    fn compile_with_not_succeeds() {
-        let c = make_compiler();
-        let f = Filter::Not(Box::new(Filter::Equals {
-            field: "price".into(),
-            value: FieldValue::Integer(10),
-        }));
-        assert!(c.compile(&f, None).is_ok());
-    }
-
-    #[test]
-    fn compile_too_many_clauses_errors() {
-        let c = make_compiler();
-        let clauses: Vec<Filter> = (0..1001)
-            .map(|i| Filter::Equals {
-                field: "x".into(),
-                value: FieldValue::Integer(i),
-            })
-            .collect();
-        let f = Filter::And(clauses);
-        assert!(c.compile(&f, None).is_err());
-    }
-
-    // ── format_value ────────────────────────────────────────────────────
-
-    #[test]
-    fn format_value_text_simple() {
-        let c = make_compiler();
-        assert_eq!(c.format_value(&FieldValue::Text("hello".into())), "hello");
-    }
-
-    #[test]
-    fn format_value_text_with_spaces() {
-        let c = make_compiler();
         assert_eq!(
-            c.format_value(&FieldValue::Text("hello world".into())),
-            "\"hello world\""
+            compiler
+                .format_value(&FieldValue::Text("promo\\bundle\"today".into()))
+                .unwrap(),
+            "\"promo\\\\bundle\\\"today\""
         );
-    }
-
-    #[test]
-    fn format_value_integer() {
-        let c = make_compiler();
-        assert_eq!(c.format_value(&FieldValue::Integer(42)), "42");
-    }
-
-    #[test]
-    fn format_value_float() {
-        let c = make_compiler();
-        assert_eq!(c.format_value(&FieldValue::Float(2.5)), "2.5");
-    }
-
-    #[test]
-    fn format_value_facet() {
-        let c = make_compiler();
-        assert_eq!(c.format_value(&FieldValue::Facet("cat".into())), "\"cat\"");
-    }
-
-    // ── gt/lt edge cases ────────────────────────────────────────────────
-
-    #[test]
-    fn gt_float_unsupported() {
-        let c = make_compiler();
-        let f = Filter::GreaterThan {
-            field: "price".into(),
-            value: FieldValue::Float(10.5),
-        };
-        assert!(c.to_query_string(&f).is_err());
-    }
-
-    #[test]
-    fn lt_float_unsupported() {
-        let c = make_compiler();
-        let f = Filter::LessThan {
-            field: "price".into(),
-            value: FieldValue::Float(10.5),
-        };
-        assert!(c.to_query_string(&f).is_err());
-    }
-
-    #[test]
-    fn gt_integer_adds_one() {
-        let c = make_compiler();
-        let f = Filter::GreaterThan {
-            field: "age".into(),
-            value: FieldValue::Integer(18),
-        };
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "_json_filter.age:[19 TO *]");
-    }
-
-    #[test]
-    fn lt_integer_subtracts_one() {
-        let c = make_compiler();
-        let f = Filter::LessThan {
-            field: "age".into(),
-            value: FieldValue::Integer(65),
-        };
-        let qs = c.to_query_string(&f).unwrap();
-        assert_eq!(qs, "_json_filter.age:[* TO 64]");
+        assert_eq!(
+            compiler
+                .format_value(&FieldValue::Facet("brand\\\"name".into()))
+                .unwrap(),
+            "\"brand\\\\\\\"name\""
+        );
     }
 }

@@ -87,6 +87,17 @@ docker compose start node-b
 docker compose exec -T node-b curl -sf http://localhost:7700/health
 ```
 
+## Known soak divergence boundary
+
+Under sustained rolling restarts with continuous writes, per-node document counts can
+diverge in this topology. This is an inherent boundary of async replication combined
+with nginx round-robin routing while nodes repeatedly leave and rejoin.
+
+The canonical retained evidence is the HA soak proof in
+[`engine/loadtest/BENCHMARKS.md`](../../loadtest/BENCHMARKS.md), including the
+`warning-findings` / `diverged` final classification and the Per-Node Consistency
+Finding.
+
 ## Configuration
 
 > For authoritative env var defaults, see [OPS_CONFIGURATION.md](../../docs2/3_IMPLEMENTATION/OPS_CONFIGURATION.md). Values below are example-specific.

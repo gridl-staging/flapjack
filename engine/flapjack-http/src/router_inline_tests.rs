@@ -1,8 +1,11 @@
 use super::*;
 use crate::startup::CorsMode;
-use crate::test_helpers::{body_json, send_empty_request, send_json_request, TestStateBuilder};
+use crate::test_helpers::{
+    body_json, send_empty_request, send_json_request, with_env_var, EnvVarRestoreGuard,
+    TestStateBuilder, ENV_MUTEX,
+};
 use axum::body::Body;
-use axum::http::{Method, Request};
+use axum::http::{Method, Request, StatusCode};
 use axum::routing::post;
 use flapjack::analytics::{AnalyticsCollector, AnalyticsConfig};
 #[cfg(unix)]
@@ -61,7 +64,6 @@ fn build_test_router_for_data_dir(
     build_test_router_with_state_for_data_dir(tmp, key_store, data_dir).0
 }
 
-/// TODO: Document build_test_router_with_state_for_data_dir.
 fn build_test_router_with_state_for_data_dir(
     tmp: &TempDir,
     key_store: Option<Arc<KeyStore>>,
@@ -107,7 +109,58 @@ async fn body_text(resp: axum::http::Response<axum::body::Body>) -> String {
         .unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
 }
-/// TODO: Document build_router_open_mode_allows_protected_routes_without_auth_layer.
+
+#[test]
+fn max_body_mb_from_value_defaults_to_100_when_unset() {
+    assert_eq!(max_body_mb_from_value(None), 100);
+}
+
+#[test]
+fn max_body_mb_from_value_parses_valid_integer() {
+    assert_eq!(max_body_mb_from_value(Some("50")), 50);
+    assert_eq!(max_body_mb_from_value(Some("0")), 0);
+}
+
+#[test]
+fn max_body_mb_from_value_defaults_to_100_for_invalid_values() {
+    assert_eq!(max_body_mb_from_value(Some("abc")), 100);
+    assert_eq!(max_body_mb_from_value(Some("")), 100);
+    assert_eq!(max_body_mb_from_value(Some("-1")), 100);
+}
+
+#[tokio::test]
+async fn body_limit_from_env_rejects_payload_over_limit() {
+    let (_tmp, app, _restore) = {
+        let _env_lock = ENV_MUTEX.lock().expect("env mutex should lock");
+        let restore = EnvVarRestoreGuard::set("FLAPJACK_MAX_BODY_MB", "1");
+        let tmp = TempDir::new().unwrap();
+        let app = build_test_router(&tmp, None);
+        (tmp, app, restore)
+    };
+    let oversized_payload = serde_json::json!({
+        "uid": "body-limit-over",
+        "padding": "a".repeat(1_048_577)
+    });
+
+    let response = send_json_request(&app, Method::POST, "/1/indexes", oversized_payload).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn body_limit_from_env_allows_payload_under_limit() {
+    let (_tmp, app, _restore) = {
+        let _env_lock = ENV_MUTEX.lock().expect("env mutex should lock");
+        let restore = EnvVarRestoreGuard::set("FLAPJACK_MAX_BODY_MB", "1");
+        let tmp = TempDir::new().unwrap();
+        let app = build_test_router(&tmp, None);
+        (tmp, app, restore)
+    };
+    let small_payload = serde_json::json!({ "uid": "body-limit-under" });
+
+    let response = send_json_request(&app, Method::POST, "/1/indexes", small_payload).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn build_router_open_mode_allows_protected_routes_without_auth_layer() {
     let tmp = TempDir::new().unwrap();
@@ -137,7 +190,6 @@ async fn build_router_open_mode_allows_protected_routes_without_auth_layer() {
         "search response should include hits"
     );
 }
-/// TODO: Document build_router_open_mode_allows_dictionary_routes_without_auth_layer.
 #[tokio::test]
 async fn build_router_open_mode_allows_dictionary_routes_without_auth_layer() {
     let tmp = TempDir::new().unwrap();
@@ -185,7 +237,6 @@ async fn build_router_open_mode_does_not_expose_internal_routes() {
     let response = send_empty_request(&app, Method::GET, "/internal/storage").await;
     assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
 }
-/// TODO: Document build_router_does_not_log_trusted_proxy_initialization.
 #[tokio::test]
 async fn build_router_does_not_log_trusted_proxy_initialization() {
     let tmp = TempDir::new().unwrap();
@@ -205,7 +256,6 @@ async fn build_router_does_not_log_trusted_proxy_initialization() {
         "router construction should not re-log trusted proxy initialization"
     );
 }
-/// TODO: Document cors_preflight_returns_expected_allow_origin_for_restricted_and_permissive_modes.
 #[tokio::test]
 async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_permissive_modes() {
     let restricted_router = Router::new()
@@ -255,7 +305,6 @@ async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_permiss
         .and_then(|value| value.to_str().ok());
     assert_eq!(permissive_origin, Some("https://allowed.example"));
 }
-/// TODO: Document cors_preflight_rejects_blocked_origins_in_restricted_mode.
 #[tokio::test]
 async fn cors_preflight_rejects_blocked_origins_in_restricted_mode() {
     let app = Router::new()
@@ -314,7 +363,6 @@ async fn metrics_returns_403_without_auth_headers() {
         })
     );
 }
-/// TODO: Document metrics_returns_200_with_admin_key_only.
 #[tokio::test]
 async fn metrics_returns_200_with_admin_key_only() {
     use axum::body::Body;
@@ -387,4 +435,52 @@ async fn metrics_returns_200_with_admin_key_only() {
         .parse()
         .expect("metric value should parse as f64");
     assert!(value > 0.0, "expected positive oplog seq, got: {value}");
+}
+
+/// Proves that the `DefaultBodyLimit` layer returns HTTP 413 with an
+/// Algolia-compatible JSON error when the request body exceeds the configured
+/// `FLAPJACK_MAX_BODY_MB`. The `ensure_json_errors` middleware wraps the
+/// plain-text rejection from Axum's body-limit extractor into
+/// `{"message": "...", "status": 413}`, ensuring clients always receive JSON.
+/// This prevents denial-of-service via unbounded request bodies.
+#[tokio::test]
+async fn oversized_body_returns_413_json_error() {
+    let tmp = TempDir::new().unwrap();
+
+    // Set a 1 MB body limit for this test, then build the router while the
+    // env var is active. The guard restores the previous value on drop.
+    let _env_guard = with_env_var("FLAPJACK_MAX_BODY_MB", "1");
+    let app = build_test_router(&tmp, None);
+    drop(_env_guard);
+
+    // Build a body slightly over 1 MB.
+    let oversized = vec![b'x'; 1_048_576 + 1024];
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/1/indexes/products/batch")
+                .header("content-type", "application/json")
+                .body(Body::from(oversized))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+        "oversized body must be rejected with 413"
+    );
+
+    let body = body_json(resp).await;
+    assert_eq!(
+        body["status"], 413,
+        "JSON error wrapper must include status 413"
+    );
+    assert!(
+        body["message"].as_str().is_some(),
+        "JSON error wrapper must include a message string"
+    );
 }

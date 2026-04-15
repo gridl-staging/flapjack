@@ -21,7 +21,7 @@ cp flapjack.local.conf.example flapjack.local.conf
 
 Important:
 - Dashboard Playwright + Vite config read this repo-local file.
-- The canonical `./s/test` runner also reads this repo-local file; an older internal wrapper does too in the dev repo.
+- The canonical `./s/test` runner reads this repo-local file.
 - `flapjack.local.conf` can use either `KEY=value` or `export KEY=value` syntax (inline `# comments` are supported).
 - Do not run multiple active test suites against the same backend port or same `data_dir`.
 - If running multiple explicit server processes, use unique instance/data-dir per process.
@@ -62,9 +62,9 @@ Important:
 ./s/test --list           # print all flags and exit
 ```
 
-### Legacy note
+### Supported entrypoint
 
-An older internal wrapper still exists in the dev repo, but the public and maintained entrypoint is `./s/test`.
+`./s/test` is the only maintained test-runner entrypoint.
 
 ---
 

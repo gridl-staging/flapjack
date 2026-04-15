@@ -137,6 +137,30 @@ pub fn validate_user_token(user_token: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub const ROLLUP_SCHEMA_VERSION: &str = "1";
+
+/// Rollup schema version as a numeric value for JSON-serialized manifest fields.
+pub fn rollup_schema_version_u32() -> u32 {
+    ROLLUP_SCHEMA_VERSION
+        .parse::<u32>()
+        .expect("ROLLUP_SCHEMA_VERSION must be a valid u32 literal")
+}
+
+/// Arrow schema for pre-aggregated search rollup data (per query, per time window).
+pub fn search_rollup_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("window_start_ms", DataType::Int64, false),
+        Field::new("window_end_ms", DataType::Int64, false),
+        Field::new("query", DataType::Utf8, false),
+        Field::new("count", DataType::Int64, false),
+        Field::new("nb_hits_sum", DataType::Int64, false),
+        Field::new("nb_hits_count", DataType::Int64, false),
+        Field::new("no_results_count", DataType::Int64, false),
+        Field::new("has_results_count", DataType::Int64, false),
+        Field::new("unique_users_hll", DataType::Binary, true),
+    ]))
+}
+
 /// Arrow schema for search events stored in Parquet.
 pub fn search_event_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -572,5 +596,95 @@ mod tests {
             event.query_id.as_deref(),
             Some("abcdef0123456789abcdef0123456789")
         );
+    }
+
+    // ── Rollup schema ──────────────────────────────────────────────────
+
+    #[test]
+    fn rollup_schema_version_is_1() {
+        assert_eq!(ROLLUP_SCHEMA_VERSION, "1");
+    }
+
+    #[test]
+    fn rollup_schema_version_u32_is_1() {
+        assert_eq!(rollup_schema_version_u32(), 1);
+    }
+
+    #[test]
+    fn search_rollup_schema_has_9_fields() {
+        let schema = search_rollup_schema();
+        assert_eq!(schema.fields().len(), 9);
+    }
+
+    #[test]
+    fn search_rollup_schema_window_start_ms() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("window_start_ms").unwrap();
+        assert_eq!(*field.data_type(), DataType::Int64);
+        assert!(!field.is_nullable());
+    }
+
+    #[test]
+    fn search_rollup_schema_window_end_ms() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("window_end_ms").unwrap();
+        assert_eq!(*field.data_type(), DataType::Int64);
+        assert!(!field.is_nullable());
+    }
+
+    #[test]
+    fn search_rollup_schema_query() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("query").unwrap();
+        assert_eq!(*field.data_type(), DataType::Utf8);
+        assert!(!field.is_nullable());
+    }
+
+    #[test]
+    fn search_rollup_schema_count() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("count").unwrap();
+        assert_eq!(*field.data_type(), DataType::Int64);
+        assert!(!field.is_nullable());
+    }
+
+    #[test]
+    fn search_rollup_schema_nb_hits_sum() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("nb_hits_sum").unwrap();
+        assert_eq!(*field.data_type(), DataType::Int64);
+        assert!(!field.is_nullable());
+    }
+
+    #[test]
+    fn search_rollup_schema_nb_hits_count() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("nb_hits_count").unwrap();
+        assert_eq!(*field.data_type(), DataType::Int64);
+        assert!(!field.is_nullable());
+    }
+
+    #[test]
+    fn search_rollup_schema_no_results_count() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("no_results_count").unwrap();
+        assert_eq!(*field.data_type(), DataType::Int64);
+        assert!(!field.is_nullable());
+    }
+
+    #[test]
+    fn search_rollup_schema_has_results_count() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("has_results_count").unwrap();
+        assert_eq!(*field.data_type(), DataType::Int64);
+        assert!(!field.is_nullable());
+    }
+
+    #[test]
+    fn search_rollup_schema_unique_users_hll() {
+        let schema = search_rollup_schema();
+        let field = schema.field_with_name("unique_users_hll").unwrap();
+        assert_eq!(*field.data_type(), DataType::Binary);
+        assert!(field.is_nullable());
     }
 }

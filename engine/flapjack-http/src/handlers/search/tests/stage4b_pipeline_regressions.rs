@@ -1,4 +1,3 @@
-//! Stub summary for stage4b_pipeline_regressions.rs.
 use super::*;
 use crate::test_helpers::body_json;
 use axum::http::StatusCode;
@@ -30,7 +29,6 @@ fn measure_pipeline_elapsed_includes_closure_runtime() {
     );
 }
 
-/// TODO: Document dense_geoloc_points.
 fn dense_geoloc_points(doc_seed: usize, points_per_doc: usize) -> flapjack::types::FieldValue {
     flapjack::types::FieldValue::Array(
         (0..points_per_doc)

@@ -294,8 +294,7 @@ test.describe('System Page', () => {
     await expect(s3Section).toBeVisible({ timeout: 15_000 });
     await expect(s3Section.getByRole('heading', { name: /S3 Backups/i })).toBeVisible({ timeout: 5_000 });
 
-    // S3 configured: shows per-index backup/restore buttons
-    // S3 not configured: shows config instructions
+    // Valid dual-state: S3 configured (per-index backup buttons) vs not configured (setup instructions)
     const notConfigured = page.getByTestId('s3-not-configured');
     const s3Index = page.getByTestId(`s3-index-${TEST_INDEX}`);
     await expect(notConfigured.or(s3Index)).toBeVisible({ timeout: 10_000 });

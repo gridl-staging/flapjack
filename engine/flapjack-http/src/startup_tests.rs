@@ -3,6 +3,7 @@ use super::{
     cors_origins_from_value, initialize_key_store, log_format_from_value, normalize_admin_key,
     read_admin_key, shutdown_timeout_secs_from_value, CorsMode, LogFormat, ServerConfig,
 };
+use crate::test_helpers::{EnvVarRestoreGuard, ENV_MUTEX};
 use axum::http::HeaderValue;
 use serde_json::Value;
 #[cfg(unix)]
@@ -44,15 +45,6 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TestWriter {
     }
 }
 
-static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
-    match previous {
-        Some(value) => std::env::set_var(name, value),
-        None => std::env::remove_var(name),
-    }
-}
-
 #[cfg(feature = "otel")]
 fn capture_log_output(action: impl FnOnce()) -> String {
     let writer = TestWriter::new();
@@ -64,24 +56,14 @@ fn capture_log_output(action: impl FnOnce()) -> String {
     writer.output()
 }
 
-/// TODO: Document with_log_format_env.
 fn with_log_format_env<T>(value: Option<&str>, action: impl FnOnce() -> T) -> T {
     let _guard = ENV_MUTEX.lock().expect("env mutex should lock");
-    let previous = std::env::var("FLAPJACK_LOG_FORMAT").ok();
+    let _restore = match value {
+        Some(value) => EnvVarRestoreGuard::set("FLAPJACK_LOG_FORMAT", value),
+        None => EnvVarRestoreGuard::remove("FLAPJACK_LOG_FORMAT"),
+    };
 
-    match value {
-        Some(value) => std::env::set_var("FLAPJACK_LOG_FORMAT", value),
-        None => std::env::remove_var("FLAPJACK_LOG_FORMAT"),
-    }
-
-    let result = action();
-
-    match previous {
-        Some(value) => std::env::set_var("FLAPJACK_LOG_FORMAT", value),
-        None => std::env::remove_var("FLAPJACK_LOG_FORMAT"),
-    }
-
-    result
+    action()
 }
 
 // --- LogFormat parsing tests ---
@@ -102,7 +84,6 @@ fn log_format_from_value_defaults_to_text() {
     assert_eq!(log_format_from_value(Some("xml")), LogFormat::Text);
     assert_eq!(log_format_from_value(Some("bogus")), LogFormat::Text);
 }
-/// TODO: Document flapjack_log_format_env_selects_json_layer.
 #[test]
 fn flapjack_log_format_env_selects_json_layer() {
     with_log_format_env(Some("json"), || {
@@ -124,7 +105,6 @@ fn flapjack_log_format_env_selects_json_layer() {
         assert_eq!(parsed["fields"]["message"], "env-selected json logging");
     });
 }
-/// TODO: Document flapjack_log_format_env_defaults_to_text_layer_for_invalid_values.
 #[test]
 fn flapjack_log_format_env_defaults_to_text_layer_for_invalid_values() {
     with_log_format_env(Some("bogus"), || {
@@ -211,7 +191,6 @@ fn cors_origins_from_value_ignores_trailing_commas_and_empty_segments() {
 }
 
 // --- JSON output format tests ---
-/// TODO: Document json_mode_emits_valid_json_with_expected_fields.
 #[test]
 fn json_mode_emits_valid_json_with_expected_fields() {
     let writer = TestWriter::new();
@@ -252,7 +231,6 @@ fn json_mode_emits_valid_json_with_expected_fields() {
         assert_eq!(fields["message"], "test message");
     }
 }
-/// TODO: Document json_mode_includes_span_context.
 #[test]
 fn json_mode_includes_span_context() {
     let writer = TestWriter::new();
@@ -287,7 +265,6 @@ fn json_mode_includes_span_context() {
 }
 
 // --- Text output format test ---
-/// TODO: Document text_mode_emits_human_readable_non_json_output.
 #[test]
 fn text_mode_emits_human_readable_non_json_output() {
     let writer = TestWriter::new();
@@ -317,7 +294,6 @@ fn text_mode_emits_human_readable_non_json_output() {
 }
 
 // --- request_id in JSON span context test ---
-/// TODO: Document json_mode_includes_request_id_from_span.
 #[test]
 fn json_mode_includes_request_id_from_span() {
     let writer = TestWriter::new();
@@ -377,7 +353,6 @@ fn read_admin_key_rejects_blank_files() {
     );
 }
 
-/// TODO: Document initialize_key_store_persists_env_admin_key_with_restrictive_permissions.
 #[cfg(unix)]
 #[test]
 fn initialize_key_store_persists_env_admin_key_with_restrictive_permissions() {
@@ -399,7 +374,6 @@ fn initialize_key_store_persists_env_admin_key_with_restrictive_permissions() {
     assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
 }
 
-/// TODO: Document shared_admin_key_persistence_sets_restrictive_permissions.
 #[cfg(unix)]
 #[test]
 fn shared_admin_key_persistence_sets_restrictive_permissions() {
@@ -471,14 +445,11 @@ fn startup_banner_shows_capabilities() {
 
 // --- Tracing subscriber builder tests ---
 
-/// TODO: Document build_tracing_subscriber_produces_working_dispatch.
 #[test]
 fn build_tracing_subscriber_produces_working_dispatch() {
     let _guard = ENV_MUTEX.lock().expect("env mutex");
-    let prev_rust_log = std::env::var_os("RUST_LOG");
-    let prev_log_format = std::env::var_os("FLAPJACK_LOG_FORMAT");
-    std::env::set_var("RUST_LOG", "info");
-    std::env::remove_var("FLAPJACK_LOG_FORMAT");
+    let _rust_log = EnvVarRestoreGuard::set("RUST_LOG", "info");
+    let _log_format = EnvVarRestoreGuard::remove("FLAPJACK_LOG_FORMAT");
 
     let writer = TestWriter::new();
 
@@ -496,21 +467,15 @@ fn build_tracing_subscriber_produces_working_dispatch() {
         output.contains("subscriber-init-smoke-test"),
         "expected subscriber to capture log output, got: {output}"
     );
-
-    restore_env_var("RUST_LOG", prev_rust_log);
-    restore_env_var("FLAPJACK_LOG_FORMAT", prev_log_format);
 }
 
-/// TODO: Document build_tracing_subscriber_returns_none_guard_without_endpoint.
 #[cfg(feature = "otel")]
 #[test]
 fn build_tracing_subscriber_returns_none_guard_without_endpoint() {
     let _guard = ENV_MUTEX.lock().expect("env mutex");
-    let prev_rust_log = std::env::var_os("RUST_LOG");
-    let prev_otel = std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT");
-    std::env::set_var("RUST_LOG", "info");
-    std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
-    std::env::remove_var("FLAPJACK_LOG_FORMAT");
+    let _rust_log = EnvVarRestoreGuard::set("RUST_LOG", "info");
+    let _otel = EnvVarRestoreGuard::remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+    let _log_format = EnvVarRestoreGuard::remove("FLAPJACK_LOG_FORMAT");
 
     let writer = TestWriter::new();
     let (_dispatch, otel_guard) = build_tracing_subscriber(writer);
@@ -519,12 +484,8 @@ fn build_tracing_subscriber_returns_none_guard_without_endpoint() {
         otel_guard.is_none(),
         "expected no OtelGuard when OTEL_EXPORTER_OTLP_ENDPOINT is unset"
     );
-
-    restore_env_var("RUST_LOG", prev_rust_log);
-    restore_env_var("OTEL_EXPORTER_OTLP_ENDPOINT", prev_otel);
 }
 
-/// TODO: Document otel_startup_status_logs_initialized_message.
 #[cfg(feature = "otel")]
 #[test]
 fn otel_startup_status_logs_initialized_message() {
@@ -538,7 +499,6 @@ fn otel_startup_status_logs_initialized_message() {
     );
 }
 
-/// TODO: Document otel_startup_status_logs_disabled_message.
 #[cfg(feature = "otel")]
 #[test]
 fn otel_startup_status_logs_disabled_message() {

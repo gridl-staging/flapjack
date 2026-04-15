@@ -9,11 +9,23 @@ const RETENTION_INTERVAL_SECONDS: u64 = 86_400;
 /// Walks the analytics directory looking for `date=YYYY-MM-DD/` directories
 /// and removes any that are older than `retention_days`.
 pub fn cleanup_old_partitions(analytics_dir: &Path, retention_days: u32) -> Result<usize, String> {
+    cleanup_old_partitions_at(analytics_dir, retention_days, chrono::Utc::now())
+}
+
+fn cleanup_old_partitions_at(
+    analytics_dir: &Path,
+    retention_days: u32,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<usize, String> {
+    if retention_days == 0 {
+        return Ok(0);
+    }
+
     if !analytics_dir.exists() {
         return Ok(0);
     }
 
-    let cutoff = cutoff_date(retention_days);
+    let cutoff = cutoff_date(now, retention_days);
     let mut removed = 0;
 
     for index_dir in read_root_subdirectories(analytics_dir)? {
@@ -29,8 +41,8 @@ pub fn cleanup_old_partitions(analytics_dir: &Path, retention_days: u32) -> Resu
     Ok(removed)
 }
 
-fn cutoff_date(retention_days: u32) -> chrono::NaiveDate {
-    chrono::Utc::now().date_naive() - chrono::Duration::days(retention_days as i64)
+fn cutoff_date(now: chrono::DateTime<chrono::Utc>, retention_days: u32) -> chrono::NaiveDate {
+    now.date_naive() - chrono::Duration::days(retention_days as i64)
 }
 
 fn read_root_subdirectories(path: &Path) -> Result<Vec<std::path::PathBuf>, String> {
@@ -54,6 +66,7 @@ fn filter_directory_entries(entries: std::fs::ReadDir) -> Vec<std::path::PathBuf
 }
 
 fn partition_date_from_name(name: &str) -> Option<chrono::NaiveDate> {
+    // Only `date=YYYY-MM-DD` partition directory names participate in retention cleanup.
     let date_str = name.strip_prefix(PARTITION_PREFIX)?;
     chrono::NaiveDate::parse_from_str(date_str, PARTITION_DATE_FORMAT).ok()
 }
@@ -68,6 +81,7 @@ fn remove_partition_if_expired(partition_dir: &Path, cutoff: chrono::NaiveDate) 
     let Some(partition_date) = partition_date_from_name(partition_name) else {
         return false;
     };
+    // Retention keeps the cutoff day and newer data; delete only when `partition_date < cutoff`.
     if partition_date >= cutoff {
         return false;
     }
@@ -106,6 +120,10 @@ fn log_cleanup_result(phase: &str, cleanup_result: Result<usize, String>) {
 }
 
 fn run_cleanup_phase(analytics_dir: &Path, retention_days: u32, phase: &str) {
+    if retention_days == 0 {
+        return;
+    }
+
     let cleanup_result = cleanup_old_partitions(analytics_dir, retention_days);
     log_cleanup_result(phase, cleanup_result);
 }
@@ -114,7 +132,41 @@ fn run_cleanup_phase(analytics_dir: &Path, retention_days: u32, phase: &str) {
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{fs, path::Path, path::PathBuf};
+
+    fn create_partition_dir(
+        base: &Path,
+        index: &str,
+        event_type: &str,
+        partition_name: &str,
+        marker_file_name: Option<&str>,
+    ) -> PathBuf {
+        let partition_dir = base.join(index).join(event_type).join(partition_name);
+        fs::create_dir_all(&partition_dir).unwrap();
+        if let Some(file_name) = marker_file_name {
+            fs::write(partition_dir.join(file_name), b"marker").unwrap();
+        }
+        partition_dir
+    }
+
+    fn create_event_file(base: &Path, index: &str, event_type: &str, file_name: &str) -> PathBuf {
+        let event_dir = base.join(index).join(event_type);
+        fs::create_dir_all(&event_dir).unwrap();
+        let file_path = event_dir.join(file_name);
+        fs::write(&file_path, b"event-file").unwrap();
+        file_path
+    }
+
+    fn date(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    fn fixed_now(y: i32, m: u32, d: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_naive_utc_and_offset(
+            date(y, m, d).and_hms_opt(12, 0, 0).unwrap(),
+            chrono::Utc,
+        )
+    }
 
     #[test]
     fn partition_date_from_name_parses_valid_partition_name() {
@@ -132,9 +184,96 @@ mod tests {
 
     #[test]
     fn cleanup_nonexistent_dir_returns_zero() {
-        let dir = std::env::temp_dir().join("fj_retention_test_nonexistent");
-        let _ = fs::remove_dir_all(&dir); // ensure it doesn't exist
-        assert_eq!(cleanup_old_partitions(&dir, 30).unwrap(), 0);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let nonexistent = temp_dir.path().join("analytics_root_missing");
+        assert_eq!(cleanup_old_partitions(&nonexistent, 30).unwrap(), 0);
+        assert_eq!(cleanup_old_partitions(&nonexistent, 0).unwrap(), 0);
+        assert!(!nonexistent.exists());
+    }
+
+    #[test]
+    fn remove_partition_if_expired_removes_partition_before_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let partition = create_partition_dir(
+            dir.path(),
+            "myindex",
+            "searches",
+            "date=2024-03-31",
+            Some("data.parquet"),
+        );
+
+        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1));
+
+        assert!(removed);
+        assert!(!partition.exists());
+    }
+
+    #[test]
+    fn remove_partition_if_expired_keeps_cutoff_day_partition() {
+        let dir = tempfile::tempdir().unwrap();
+        let partition = create_partition_dir(
+            dir.path(),
+            "myindex",
+            "searches",
+            "date=2024-04-01",
+            Some("data.parquet"),
+        );
+
+        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1));
+
+        assert!(!removed);
+        assert!(partition.exists());
+    }
+
+    #[test]
+    fn remove_partition_if_expired_keeps_partition_after_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let partition = create_partition_dir(
+            dir.path(),
+            "myindex",
+            "searches",
+            "date=2024-04-02",
+            Some("data.parquet"),
+        );
+
+        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1));
+
+        assert!(!removed);
+        assert!(partition.exists());
+    }
+
+    #[test]
+    fn remove_partition_if_expired_skips_malformed_or_non_partition_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let malformed_text = create_partition_dir(
+            dir.path(),
+            "myindex",
+            "searches",
+            "date=not-a-date",
+            Some("data.parquet"),
+        );
+        let malformed_calendar = create_partition_dir(
+            dir.path(),
+            "myindex",
+            "searches",
+            "date=2024-13-45",
+            Some("data.parquet"),
+        );
+        let non_partition = create_partition_dir(
+            dir.path(),
+            "myindex",
+            "searches",
+            "not_a_partition",
+            Some("data.parquet"),
+        );
+        let cutoff = date(2024, 4, 1);
+
+        assert!(!remove_partition_if_expired(&malformed_text, cutoff));
+        assert!(!remove_partition_if_expired(&malformed_calendar, cutoff));
+        assert!(!remove_partition_if_expired(&non_partition, cutoff));
+        assert!(malformed_text.exists());
+        assert!(malformed_calendar.exists());
+        assert!(non_partition.exists());
     }
 
     #[test]
@@ -142,9 +281,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
         // Create: base/myindex/searches/date=2020-01-01/  (very old)
-        let old_part = base.join("myindex/searches/date=2020-01-01");
-        fs::create_dir_all(&old_part).unwrap();
-        fs::write(old_part.join("data.parquet"), b"fake").unwrap();
+        let old_part = create_partition_dir(
+            base,
+            "myindex",
+            "searches",
+            "date=2020-01-01",
+            Some("data.parquet"),
+        );
 
         let removed = cleanup_old_partitions(base, 30).unwrap();
         assert_eq!(removed, 1);
@@ -155,12 +298,16 @@ mod tests {
     fn cleanup_keeps_recent_partitions() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let recent_part = base.join(format!("myindex/searches/date={}", today));
-        fs::create_dir_all(&recent_part).unwrap();
-        fs::write(recent_part.join("data.parquet"), b"fake").unwrap();
+        let today = "2024-04-10".to_string();
+        let recent_part = create_partition_dir(
+            base,
+            "myindex",
+            "searches",
+            &format!("date={}", today),
+            Some("data.parquet"),
+        );
 
-        let removed = cleanup_old_partitions(base, 30).unwrap();
+        let removed = cleanup_old_partitions_at(base, 30, fixed_now(2024, 4, 10)).unwrap();
         assert_eq!(removed, 0);
         assert!(recent_part.exists());
     }
@@ -169,8 +316,7 @@ mod tests {
     fn cleanup_skips_non_date_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
-        let non_date = base.join("myindex/searches/not_a_date_dir");
-        fs::create_dir_all(&non_date).unwrap();
+        let non_date = create_partition_dir(base, "myindex", "searches", "not_a_date_dir", None);
 
         let removed = cleanup_old_partitions(base, 30).unwrap();
         assert_eq!(removed, 0);
@@ -181,18 +327,105 @@ mod tests {
     fn cleanup_handles_multiple_indexes() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
-        let old1 = base.join("idx_a/searches/date=2020-01-01");
-        let old2 = base.join("idx_b/events/date=2020-06-15");
-        fs::create_dir_all(&old1).unwrap();
-        fs::create_dir_all(&old2).unwrap();
+        let old1 = create_partition_dir(base, "idx_a", "searches", "date=2020-01-01", None);
+        let old2 = create_partition_dir(base, "idx_b", "events", "date=2020-06-15", None);
 
         let removed = cleanup_old_partitions(base, 30).unwrap();
         assert_eq!(removed, 2);
+        assert!(!old1.exists());
+        assert!(!old2.exists());
+    }
+
+    #[test]
+    fn cleanup_traversal_removes_only_old_partitions_and_keeps_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let now = fixed_now(2024, 4, 10);
+
+        let old_a = create_partition_dir(
+            base,
+            "idx_a",
+            "searches",
+            "date=2024-03-31",
+            Some("a.parquet"),
+        );
+        let old_b = create_partition_dir(
+            base,
+            "idx_b",
+            "events",
+            "date=2024-03-01",
+            Some("b.parquet"),
+        );
+        let cutoff_day = create_partition_dir(
+            base,
+            "idx_c",
+            "events",
+            "date=2024-04-01",
+            Some("cutoff.parquet"),
+        );
+        let recent_a = create_partition_dir(
+            base,
+            "idx_a",
+            "searches",
+            "date=2024-04-10",
+            Some("recent-a.parquet"),
+        );
+        let recent_b = create_partition_dir(
+            base,
+            "idx_b",
+            "events",
+            "date=2024-04-02",
+            Some("recent-b.parquet"),
+        );
+        let non_partition_file_a = create_event_file(base, "idx_a", "searches", "notes.txt");
+        let non_partition_file_b = create_event_file(base, "idx_b", "events", "meta.json");
+
+        let removed = cleanup_old_partitions_at(base, 9, now).unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(!old_a.exists());
+        assert!(!old_b.exists());
+        assert!(cutoff_day.exists());
+        assert!(recent_a.exists());
+        assert!(recent_b.exists());
+        assert!(non_partition_file_a.exists());
+        assert!(non_partition_file_b.exists());
+    }
+
+    #[test]
+    fn cleanup_with_zero_retention_days_removes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let old_partition = create_partition_dir(
+            base,
+            "idx_a",
+            "searches",
+            "date=2010-01-01",
+            Some("old.parquet"),
+        );
+        let recent_partition = create_partition_dir(
+            base,
+            "idx_a",
+            "searches",
+            "date=2024-04-10",
+            Some("new.parquet"),
+        );
+
+        let removed = cleanup_old_partitions(base, 0).unwrap();
+
+        assert_eq!(removed, 0);
+        assert!(old_partition.exists());
+        assert!(recent_partition.exists());
     }
 }
 
 /// Run retention cleanup as a background task (daily).
 pub async fn run_retention_loop(analytics_dir: std::path::PathBuf, retention_days: u32) {
+    if retention_days == 0 {
+        tracing::info!("[analytics] Retention cleanup disabled (retention_days=0)");
+        return;
+    }
+
     run_cleanup_phase(&analytics_dir, retention_days, "Startup");
 
     // Then every 24 hours

@@ -1,4 +1,3 @@
-//! Stub summary for engine/tests/common/http.rs.
 use axum::extract::ConnectInfo;
 use std::net::SocketAddr;
 
@@ -187,7 +186,6 @@ pub fn extract_task_id(body: &serde_json::Value) -> i64 {
         .unwrap_or_else(|| panic!("missing taskID in response: {body}"))
 }
 
-/// TODO: Document build_authed_request.
 fn build_authed_request(
     method: axum::http::Method,
     uri: &str,
@@ -347,7 +345,6 @@ mod local_request_helper_tests {
         }))
     }
 
-    /// TODO: Document send_json_response_with_headers_preserves_single_content_type_header.
     #[test]
     fn send_json_response_with_headers_preserves_single_content_type_header() {
         run_local_request_test(async {

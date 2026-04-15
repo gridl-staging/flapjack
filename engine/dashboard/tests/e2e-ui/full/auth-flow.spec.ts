@@ -67,7 +67,9 @@ test.describe('Auth Gate', () => {
     // Should show help text about finding the key
     const helpText = page.getByTestId('auth-help');
     await expect(helpText).toBeVisible();
-    await expect(helpText).toContainText('flapjack reset-admin-key');
+    await expect(helpText).toContainText(
+      'flapjack --data-dir <data-dir> reset-admin-key'
+    );
   });
 
   test('rejects invalid API key with error message', async ({ page }) => {

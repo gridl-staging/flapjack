@@ -1,4 +1,3 @@
-//! Stub summary for experiments_tests.rs.
 use super::*;
 use crate::test_helpers::{body_json, send_empty_request, send_json_request};
 use axum::{
@@ -550,7 +549,6 @@ async fn estimate_uses_historical_analytics_traffic_for_duration() {
     assert_eq!(json["durationDays"], 16);
 }
 
-/// TODO: Document list_experiments_filters_by_index_prefix_and_suffix.
 #[tokio::test]
 async fn list_experiments_filters_by_index_prefix_and_suffix() {
     let tmp = TempDir::new().unwrap();
@@ -588,7 +586,6 @@ async fn list_experiments_filters_by_index_prefix_and_suffix() {
     assert_eq!(json["abtests"][0]["variants"][0]["index"], "prod_beta_v2");
 }
 
-/// TODO: Document algolia_lifecycle_create_get_stop_get_matches_wire_schema.
 #[tokio::test]
 async fn algolia_lifecycle_create_get_stop_get_matches_wire_schema() {
     let tmp = TempDir::new().unwrap();
@@ -630,7 +627,6 @@ async fn algolia_lifecycle_create_get_stop_get_matches_wire_schema() {
     assert_eq!(get_stopped_json["abTestID"], ab_test_id);
 }
 
-/// TODO: Document stop_preserves_scheduled_end_at_and_sets_distinct_stopped_at.
 #[tokio::test]
 async fn stop_preserves_scheduled_end_at_and_sets_distinct_stopped_at() {
     let tmp = TempDir::new().unwrap();
@@ -671,7 +667,6 @@ async fn stop_preserves_scheduled_end_at_and_sets_distinct_stopped_at() {
     assert_ne!(get_json["stoppedAt"], get_json["endAt"]);
 }
 
-/// TODO: Document stopped_experiment_releases_active_slot_for_same_index.
 #[tokio::test]
 async fn stopped_experiment_releases_active_slot_for_same_index() {
     let tmp = TempDir::new().unwrap();
@@ -1121,7 +1116,6 @@ async fn conclude_draft_experiment_returns_409() {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 }
 
-/// TODO: Document create_experiment_default_minimum_days.
 #[tokio::test]
 async fn create_experiment_default_minimum_days() {
     let tmp = TempDir::new().unwrap();
@@ -1441,6 +1435,93 @@ async fn experiment_store_unavailable_returns_503() {
 }
 
 #[tokio::test]
+async fn results_store_unavailable_returns_503() {
+    let tmp = TempDir::new().unwrap();
+    let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
+    let app = app_router(state);
+
+    let resp = send_empty_request(&app, Method::GET, "/2/abtests/any-id/results").await;
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let json = body_json(resp).await;
+    assert_error_message_and_status(&json, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json["message"], "experiment store unavailable");
+}
+
+#[test]
+fn results_handler_uses_shared_store_and_id_resolver_seam() {
+    let source = include_str!("experiments/results.rs");
+    let handler_start = source
+        .find("pub async fn get_experiment_results")
+        .expect("results handler function must exist");
+    let handler_end = source[handler_start..]
+        .find("fn resolve_analytics_data_dir")
+        .map(|offset| handler_start + offset)
+        .expect("results handler helper boundary must exist");
+    let handler_source = &source[handler_start..handler_end];
+
+    assert!(
+        handler_source.contains("resolve_store_and_experiment_id(&state, &id)"),
+        "results handler must use the shared store/id resolver seam"
+    );
+    assert!(
+        !handler_source.contains("require_experiment_store(&state)"),
+        "results handler should not call require_experiment_store directly"
+    );
+    assert!(
+        !handler_source.contains("resolve_experiment_id(store, &id)"),
+        "results handler should not call resolve_experiment_id directly"
+    );
+}
+
+#[tokio::test]
+async fn results_numeric_id_resolves_to_experiment() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_experiments_state(&tmp);
+    // Hold a store reference to resolve UUID independently of the endpoint under test.
+    let store = state.experiment_store.as_ref().unwrap().clone();
+    let app = app_router(state);
+
+    let ab_test_id = create_experiment_and_get_id(&app).await;
+    let experiment_uuid = store
+        .get_uuid_for_numeric(ab_test_id)
+        .expect("store must map numeric ID to UUID after creation");
+
+    let resp = send_empty_request(
+        &app,
+        Method::GET,
+        &format!("/2/abtests/{ab_test_id}/results"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["experimentID"], experiment_uuid);
+}
+
+#[tokio::test]
+async fn results_uuid_resolves_to_experiment() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_experiments_state(&tmp);
+    // Hold a store reference to resolve UUID independently of the endpoint under test.
+    let store = state.experiment_store.as_ref().unwrap().clone();
+    let app = app_router(state);
+
+    let ab_test_id = create_experiment_and_get_id(&app).await;
+    let experiment_uuid = store
+        .get_uuid_for_numeric(ab_test_id)
+        .expect("store must map numeric ID to UUID after creation");
+
+    let resp = send_empty_request(
+        &app,
+        Method::GET,
+        &format!("/2/abtests/{experiment_uuid}/results"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["experimentID"], experiment_uuid);
+}
+
+#[tokio::test]
 async fn start_nonexistent_experiment_returns_404() {
     let tmp = TempDir::new().unwrap();
     let state = make_experiments_state(&tmp);
@@ -1492,7 +1573,6 @@ async fn delete_nonexistent_experiment_returns_404() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
-/// TODO: Document list_experiments_default_limit_is_ten.
 #[tokio::test]
 async fn list_experiments_default_limit_is_ten() {
     let tmp = TempDir::new().unwrap();
@@ -1579,7 +1659,6 @@ async fn list_experiments_ordered_by_creation_then_id() {
     );
 }
 
-/// TODO: Document list_experiments_pagination_slices_ordered_list.
 #[tokio::test]
 async fn list_experiments_pagination_slices_ordered_list() {
     let tmp = TempDir::new().unwrap();
@@ -1673,7 +1752,6 @@ async fn list_experiments_pagination_slices_ordered_list() {
     );
 }
 
-/// TODO: Document list_experiments_filter_applied_before_pagination.
 #[tokio::test]
 async fn list_experiments_filter_applied_before_pagination() {
     let tmp = TempDir::new().unwrap();
@@ -1744,7 +1822,6 @@ async fn list_experiments_filter_applied_before_pagination() {
     assert_eq!(json["count"], 3);
 }
 
-/// TODO: Document list_experiments_count_equals_page_size_total_equals_filtered.
 #[tokio::test]
 async fn list_experiments_count_equals_page_size_total_equals_filtered() {
     let tmp = TempDir::new().unwrap();
@@ -1815,7 +1892,6 @@ async fn start_already_running_experiment_returns_409() {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 }
 
-/// TODO: Document start_second_experiment_on_same_index_returns_409.
 #[tokio::test]
 async fn start_second_experiment_on_same_index_returns_409() {
     let tmp = TempDir::new().unwrap();
@@ -1860,7 +1936,6 @@ async fn start_experiment_sets_started_at_timestamp() {
     assert_eq!(json["endedAt"], serde_json::Value::Null);
 }
 
-/// TODO: Document list_experiments_exposes_started_at_only_after_start.
 #[tokio::test]
 async fn list_experiments_exposes_started_at_only_after_start() {
     let tmp = TempDir::new().unwrap();
@@ -3665,7 +3740,6 @@ fn load_index_settings(tmp: &TempDir, index_name: &str) -> IndexSettings {
     IndexSettings::load(index_settings_path(tmp, index_name)).unwrap()
 }
 
-/// TODO: Document create_index_with_custom_ranking.
 fn create_index_with_custom_ranking(
     tmp: &TempDir,
     state: &Arc<AppState>,
@@ -3685,7 +3759,6 @@ fn create_index_with_custom_ranking(
     settings.save(&settings_path).unwrap();
 }
 
-/// TODO: Document create_start_conclude_mode_b.
 async fn create_start_conclude_mode_b(
     app: &Router,
     state: &Arc<AppState>,
@@ -3734,7 +3807,6 @@ async fn create_start_conclude_mode_b(
     id
 }
 
-/// TODO: Document promote_mode_b_copies_variant_settings_to_main_index.
 #[tokio::test]
 async fn promote_mode_b_copies_variant_settings_to_main_index() {
     let tmp = TempDir::new().unwrap();
@@ -3761,7 +3833,6 @@ async fn promote_mode_b_copies_variant_settings_to_main_index() {
     );
 }
 
-/// TODO: Document promote_mode_b_control_winner_does_not_change_settings.
 #[tokio::test]
 async fn promote_mode_b_control_winner_does_not_change_settings() {
     let tmp = TempDir::new().unwrap();
@@ -3781,7 +3852,6 @@ async fn promote_mode_b_control_winner_does_not_change_settings() {
     );
 }
 
-/// TODO: Document conclude_without_promote_does_not_change_settings.
 #[tokio::test]
 async fn conclude_without_promote_does_not_change_settings() {
     let tmp = TempDir::new().unwrap();
@@ -3801,7 +3871,6 @@ async fn conclude_without_promote_does_not_change_settings() {
     );
 }
 
-/// TODO: Document promote_mode_a_applies_custom_ranking_to_main_index.
 #[tokio::test]
 async fn promote_mode_a_applies_custom_ranking_to_main_index() {
     let tmp = TempDir::new().unwrap();
@@ -4251,7 +4320,6 @@ fn build_results_response_cuped_safety_fallback_when_adjusted_variance_not_lower
     );
 }
 
-/// TODO: Document resolve_experiment_index_names_deduplicates_variant_index.
 #[test]
 fn resolve_experiment_index_names_deduplicates_variant_index() {
     let experiment = Experiment {

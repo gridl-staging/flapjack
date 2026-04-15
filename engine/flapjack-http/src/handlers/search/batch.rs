@@ -1,4 +1,3 @@
-//! Stub summary for batch.rs.
 use std::sync::Arc;
 
 use axum::{extract::State, Json};
@@ -444,7 +443,6 @@ mod tests {
     use super::{federation_fetch_hits_per_page, normalize_request_for_federation};
     use crate::dto::SearchRequest;
     use crate::federation::FederationConfig;
-    /// TODO: Document federation_fetch_hits_per_page_uses_only_top_level_window.
     #[test]
     fn federation_fetch_hits_per_page_uses_only_top_level_window() {
         let request = SearchRequest {

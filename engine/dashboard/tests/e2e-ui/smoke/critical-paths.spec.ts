@@ -97,6 +97,7 @@ test.describe('Smoke Tests', () => {
     // Navigate to API Keys
     await sidebar.getByRole('link', { name: /api keys/i }).click();
     await expect(page).toHaveURL(/\/keys/);
+    // Valid dual-state: "Create Key" header button vs "Create Your First Key" empty-state CTA
     await expect(page.getByRole('button', { name: 'Create Key' }).or(page.getByRole('button', { name: 'Create Your First Key' })).first()).toBeVisible();
   });
 
@@ -129,12 +130,10 @@ test.describe('Smoke Tests', () => {
     // Heading should be visible
     await expect(page.getByText(/api keys/i).first()).toBeVisible();
 
-    // The Create Key button should be visible (either the header button or empty-state CTA)
+    // Valid dual-state: "Create Key" header button vs "Create Your First Key" empty-state CTA
     await expect(page.getByRole('button', { name: 'Create Key' }).or(page.getByRole('button', { name: 'Create Your First Key' })).first()).toBeVisible();
 
-    // The keys list section should be visible (either key cards or empty state)
-    // The seeded admin key should have created at least
-    // one key entry, or there should be a "no keys" message with a create prompt
+    // Valid dual-state: keys-list with key cards vs "no keys" empty message
     const keysList = page.getByTestId('keys-list');
     const emptyState = page.getByText(/no.*key/i);
     await expect(keysList.or(emptyState).first()).toBeVisible({ timeout: 10000 });

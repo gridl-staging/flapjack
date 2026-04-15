@@ -1,4 +1,3 @@
-//! Stub summary for dictionaries.rs.
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -350,7 +349,6 @@ mod tests {
         .unwrap();
         assert!(langs_json.as_object().is_some());
     }
-    /// TODO: Document dictionary_handlers_isolate_data_per_authenticated_app_id.
     #[tokio::test]
     async fn dictionary_handlers_isolate_data_per_authenticated_app_id() {
         let tmp = TempDir::new().unwrap();

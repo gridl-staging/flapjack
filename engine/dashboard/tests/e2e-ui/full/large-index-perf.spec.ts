@@ -148,7 +148,8 @@ test.describe('Large-Index Performance (benchmark_100k)', () => {
       page.getByRole('heading', { name: 'Synonyms' }),
     ).toBeVisible({ timeout: PAGE_LOAD_TIMEOUT });
 
-    // Either the synonyms list or an empty state should render
+    // Valid dual state: synonyms-list renders when synonyms exist,
+    // "No synonyms" empty state renders when the index has none configured.
     const synonymsList = page.getByTestId('synonyms-list');
     const emptyState = page.getByText(/no synonyms/i);
     await expect(

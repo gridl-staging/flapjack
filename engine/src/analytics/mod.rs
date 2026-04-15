@@ -8,6 +8,7 @@ pub mod aggregation;
 pub mod collector;
 pub mod config;
 pub mod hll;
+pub mod manifest;
 pub mod merge;
 pub mod query;
 pub mod retention;

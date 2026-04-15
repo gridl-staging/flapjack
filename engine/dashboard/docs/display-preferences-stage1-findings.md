@@ -10,7 +10,7 @@
 - `engine/dashboard/tests/specs/display-preferences.md` (Stage 1 Tier 2 contract output)
 - `engine/dashboard/src/components/search/DocumentCard.tsx` (Browse-card baseline chrome and fail-soft rendering behavior)
 - `engine/dashboard/src/components/search/DocumentCard.test.tsx` (shipped regression coverage for configured-card controls and safe image fallback)
-- `<home>/.matt/projects/flapjack_dev-a9fbf891/MAR17_12_02_display_preferences.md-9e13c491/refined_input.md` (goal/non-goal source of truth)
+- `<home>/.matt/projects/<project>/MAR17_12_02_display_preferences.md-9e13c491/refined_input.md` (goal/non-goal source of truth)
 
 ## Research Audit Findings
 

@@ -49,7 +49,6 @@ fn assert_epoch_millis_integer(val: &serde_json::Value, label: &str) {
     );
 }
 
-/// TODO: Document create_test_key.
 async fn create_test_key(app: &Router) -> Value {
     let resp = app
         .clone()
@@ -453,7 +452,6 @@ async fn create_key_no_content_type_accepted_with_middleware() {
 
 // ── restrictSources CRUD round-trip tests ──
 
-/// TODO: Document post_key_with_restrict_sources_round_trips_through_get.
 #[tokio::test]
 async fn post_key_with_restrict_sources_round_trips_through_get() {
     let tmp = TempDir::new().unwrap();
@@ -591,7 +589,6 @@ async fn create_key_rejects_malformed_restrict_sources() {
     );
 }
 
-/// TODO: Document update_key_rejects_malformed_restrict_sources.
 #[tokio::test]
 async fn update_key_rejects_malformed_restrict_sources() {
     let tmp = TempDir::new().unwrap();
@@ -630,7 +627,6 @@ async fn update_key_rejects_malformed_restrict_sources() {
     );
 }
 
-/// TODO: Document generate_secured_key_rejects_malformed_restrict_sources.
 #[tokio::test]
 async fn generate_secured_key_rejects_malformed_restrict_sources() {
     let tmp = TempDir::new().unwrap();

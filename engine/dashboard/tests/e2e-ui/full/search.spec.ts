@@ -24,7 +24,7 @@
  */
 import type { APIRequestContext, Locator, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
-import { TEST_INDEX } from '../helpers';
+import { TEST_INDEX, waitForSearchResultsOrEmptyState } from '../helpers';
 import { addDocuments, createIndex, deleteDocument, deleteIndex, searchIndex } from '../../fixtures/api-helpers';
 import {
   extractObjectIdFromText,
@@ -178,20 +178,8 @@ async function cleanupCreatedDocuments(
 test.describe('Search & Browse', () => {
 
   test.beforeEach(async ({ page }) => {
-    const resultsState = page.getByTestId('results-panel').or(page.getByText(/no results found/i));
-    const initialQueryResponse = page
-      .waitForResponse(
-        (response) => responseMatchesIndexQuery(response, TEST_INDEX),
-        { timeout: 15_000 },
-      )
-      .catch(() => null);
     await page.goto(`/index/${TEST_INDEX}`);
-    await Promise.race([
-      initialQueryResponse,
-      expect(resultsState).toBeVisible({ timeout: 15_000 }),
-    ]);
-    // Wait for the results panel to appear (initial empty-query search returns all docs)
-    await expect(resultsState).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
   });
 
   // ---------------------------------------------------------------------------

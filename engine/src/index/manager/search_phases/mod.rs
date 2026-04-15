@@ -1,4 +1,3 @@
-//! Stub summary for mod.rs.
 use super::*;
 
 mod plural_expansion;
@@ -67,7 +66,6 @@ impl super::IndexManager {
     }
 }
 
-/// TODO: Document preprocess_query.
 pub(super) fn preprocess_query(
     tenant_id: &str,
     settings: &Option<Arc<IndexSettings>>,
@@ -297,7 +295,6 @@ pub(super) fn prepare_search_filters(
     })
 }
 
-/// TODO: Document execute_search_query.
 pub(super) fn execute_search_query(
     manager: &super::IndexManager,
     tenant_id: &str,
@@ -395,7 +392,6 @@ struct RuleEffectsResult {
     rendering_content: Option<serde_json::Value>,
 }
 
-/// TODO: Document lookup_cached_facets.
 fn lookup_cached_facets(
     manager: &super::IndexManager,
     tenant_id: &str,
@@ -452,7 +448,6 @@ fn lookup_cached_facets(
     (Some(cache_key), cached_result)
 }
 
-/// TODO: Document sort_with_stage2_ranking.
 fn sort_with_stage2_ranking(
     all_results: &mut Vec<crate::types::ScoredDocument>,
     effective_sort: Option<&Sort>,
@@ -504,7 +499,6 @@ fn sort_with_stage2_ranking(
     );
 }
 
-/// TODO: Document apply_rule_effects.
 fn apply_rule_effects(
     all_results: Vec<crate::types::ScoredDocument>,
     total: usize,
@@ -552,7 +546,6 @@ fn apply_rule_effects(
     })
 }
 
-/// TODO: Document finalize_search_result.
 fn finalize_search_result(
     prepared: &PreparedSearchFilters,
     ruled_result: RuleEffectsResult,
@@ -722,7 +715,6 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// TODO: Document lookup_cached_facets_returns_cached_hit_with_computed_key.
     #[tokio::test]
     async fn lookup_cached_facets_returns_cached_hit_with_computed_key() {
         let temp_dir = TempDir::new().unwrap();

@@ -308,7 +308,6 @@ async fn chat_json_response_contains_answer_sources_query_id() {
         "missing 'queryID' field — expected in Stage 3 response"
     );
 }
-/// TODO: Document chat_sources_hide_unretrievable_attributes_without_acl.
 #[tokio::test]
 async fn chat_sources_hide_unretrievable_attributes_without_acl() {
     let _guard = lock_env_guard().await;
@@ -630,7 +629,6 @@ async fn chat_openai_provider_upstream_401_maps_to_502_error() {
         body
     );
 }
-/// TODO: Document sse_sender_exits_cleanly_when_receiver_dropped.
 #[tokio::test]
 async fn sse_sender_exits_cleanly_when_receiver_dropped() {
     let (tx, rx) = mpsc::channel(2);

@@ -12,7 +12,6 @@ sdk_is_allowed() {
   return 1
 }
 
-# TODO: Document configure_sdks.
 configure_sdks() {
   local requested="${MATRIX_SDKS:-}"
   local normalized sdk

@@ -1,4 +1,3 @@
-//! Stub summary for middleware_tests.rs.
 use super::*;
 
 /// Verify that authentication middleware returns 403 Forbidden and 429 Too Many Requests responses in Algolia-compatible JSON format with `message` and `status` fields.
@@ -74,7 +73,6 @@ async fn auth_middleware_returns_algolia_error_shape_for_403_and_429() {
         })
     );
 }
-/// TODO: Document auth_middleware_enforces_secured_key_restrict_sources.
 #[tokio::test]
 async fn auth_middleware_enforces_secured_key_restrict_sources() {
     let temp_dir = TempDir::new().unwrap();
@@ -137,7 +135,6 @@ async fn auth_middleware_enforces_secured_key_restrict_sources() {
         })
     );
 }
-/// TODO: Document auth_middleware_internal_storage_requires_app_id_even_for_admin_key.
 #[tokio::test]
 async fn auth_middleware_internal_storage_requires_app_id_even_for_admin_key() {
     let temp_dir = TempDir::new().unwrap();
@@ -169,7 +166,6 @@ async fn auth_middleware_internal_storage_requires_app_id_even_for_admin_key() {
         })
     );
 }
-/// TODO: Document auth_middleware_secured_key_restrict_sources_rejection_does_not_consume_rate_limit.
 #[tokio::test]
 async fn auth_middleware_secured_key_restrict_sources_rejection_does_not_consume_rate_limit() {
     let temp_dir = TempDir::new().unwrap();
@@ -218,7 +214,62 @@ async fn auth_middleware_secured_key_restrict_sources_rejection_does_not_consume
         );
     }
 }
-/// TODO: Document auth_middleware_allows_non_admin_key_to_get_own_key_record.
+/// Proves that requests with an unrecognized API key return 403 without consuming
+/// a rate-limit bucket. The `authenticate_and_authorize` middleware calls
+/// `lookup_authenticated_key` before `ensure_rate_limit_allows_request`; when the
+/// key is not found, the early return exits before rate-limit accounting runs.
+/// This prevents an attacker from exhausting a legitimate user's rate-limit quota
+/// by spraying invalid keys from the same IP.
+#[tokio::test]
+async fn auth_middleware_invalid_key_does_not_consume_rate_limit() {
+    let temp_dir = TempDir::new().unwrap();
+    let key_store = Arc::new(KeyStore::load_or_create(temp_dir.path(), "admin-key"));
+    // Create a key with a very tight rate limit so any bucket consumption would
+    // immediately surface as a 429 instead of the expected 403.
+    let mut search_key = test_search_api_key("Invalid-key rate-limit ordering test key");
+    search_key.max_queries_per_ip_per_hour = 1;
+    let _ = key_store.create_key(search_key);
+
+    let app = Router::new()
+        .route(
+            "/1/indexes/products/query",
+            post(|| async { (StatusCode::OK, "ok") }),
+        )
+        .layer(axum::middleware::from_fn(authenticate_and_authorize))
+        .layer(Extension(key_store))
+        .layer(Extension(RateLimiter::new()));
+
+    // Send multiple requests with a completely unrecognized key.
+    // If any request returns 429 instead of 403, the rate limiter was wrongly consulted.
+    for i in 0..3 {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/1/indexes/products/query")
+                    .header("x-algolia-application-id", "app-id")
+                    .header("x-algolia-api-key", "completely-bogus-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "request {i} with invalid key must return 403, not 429"
+        );
+        assert_eq!(
+            body_json(resp).await,
+            serde_json::json!({
+                "message": "Invalid Application-ID or API key",
+                "status": 403
+            })
+        );
+    }
+}
+
 #[tokio::test]
 async fn auth_middleware_allows_non_admin_key_to_get_own_key_record() {
     let (_temp_dir, key_store, plaintext_key) = create_non_admin_test_key("Own-key read test key");
@@ -243,7 +294,6 @@ async fn auth_middleware_allows_non_admin_key_to_get_own_key_record() {
 
     assert_eq!(response.status(), StatusCode::OK);
 }
-/// TODO: Document auth_middleware_rejects_non_admin_key_for_own_restore_route.
 #[tokio::test]
 async fn auth_middleware_rejects_non_admin_key_for_own_restore_route() {
     let (_temp_dir, key_store, plaintext_key) =
@@ -276,7 +326,6 @@ async fn auth_middleware_rejects_non_admin_key_for_own_restore_route() {
         })
     );
 }
-/// TODO: Document auth_middleware_rejects_protected_routes_when_keystore_is_missing.
 #[tokio::test]
 async fn auth_middleware_rejects_protected_routes_when_keystore_is_missing() {
     let app = Router::new()

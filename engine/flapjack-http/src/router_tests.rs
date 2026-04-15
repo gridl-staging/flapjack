@@ -1,4 +1,3 @@
-//! Stub summary for router_tests.rs.
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -59,7 +58,6 @@ async fn health_route_is_public() {
     assert_eq!(body["status"], "ok");
     assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
 }
-/// TODO: Document dashboard_route_is_public_and_serves_html.
 #[tokio::test]
 async fn dashboard_route_is_public_and_serves_html() {
     let (_tmp, app) = build_auth_test_app();
@@ -119,7 +117,6 @@ async fn metrics_returns_403_without_auth_headers() {
     let resp = send_empty_request(&app, Method::GET, "/metrics").await;
     assert_invalid_credentials_response(resp).await;
 }
-/// TODO: Document request_id_present_on_auth_403.
 #[tokio::test]
 async fn request_id_present_on_auth_403() {
     let (_tmp, app) = build_auth_test_app();
@@ -139,7 +136,6 @@ async fn request_id_present_on_auth_403() {
         "request ID should be UUID v4"
     );
 }
-/// TODO: Document metrics_returns_200_with_admin_key_only.
 #[tokio::test]
 async fn metrics_returns_200_with_admin_key_only() {
     let (_tmp, app) = build_auth_test_app();
@@ -185,7 +181,6 @@ async fn metrics_rejects_query_param_admin_key() {
     assert_invalid_credentials_response(resp).await;
 }
 
-/// TODO: Document internal_replication_routes_remain_available_when_auth_disabled.
 #[tokio::test]
 async fn internal_replication_routes_remain_available_when_auth_disabled() {
     let (_tmp, app) = build_no_auth_test_app();
@@ -204,7 +199,6 @@ async fn internal_replication_routes_remain_available_when_auth_disabled() {
         "no-auth mode must still expose /internal/cluster/status for HA checks"
     );
 }
-/// TODO: Document internal_storage_returns_403_with_admin_key_only_no_app_id.
 #[tokio::test]
 async fn internal_storage_returns_403_with_admin_key_only_no_app_id() {
     let (_tmp, app) = build_auth_test_app();

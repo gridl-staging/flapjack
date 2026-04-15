@@ -1,16 +1,16 @@
 # Flapjack CI/CD Workflows
 
-This directory contains GitHub Actions workflows that are synced to the public `gridl-hq/flapjack` repository.
+This directory contains GitHub Actions workflows that are synced to the public `gridl-staging/flapjack` repository.
 
 ## How It Works
 
-1. **Development (flapjack_dev)**: Tests are run manually via the script
+1. **Development (private dev repo)**: Tests are run manually via the canonical runner
    ```bash
-   ./engine/_dev/s/run-all-tests.sh
+   ./engine/s/test --ci
    ```
 
-2. **Public Repo (gridl-hq/flapjack)**: Tests run automatically
-   - On every push to `main` (via sync-and-deploy.sh)
+2. **Public Repo (gridl-staging/flapjack)**: Tests run automatically
+   - On every push to `main` after `debbie sync staging` / `debbie sync prod`
    - Nightly at 2 AM UTC (comprehensive test suite)
 
 ## Workflows
@@ -29,7 +29,7 @@ Runs on every push to `main` in the public repo only.
 - Integrations (Laravel Scout, WordPress)
 
 **Repository Check:**
-All jobs check `github.repository == 'gridl-hq/flapjack'` to ensure they only run in the public repo.
+All jobs check `github.repository == gridl-staging/flapjack` to ensure they only run in the public repo.
 
 ### nightly.yml - Comprehensive Nightly Tests
 
@@ -44,38 +44,35 @@ Runs every night at 2 AM UTC on the public repo only.
 
 ## Sync Process
 
-The `sync-and-deploy.sh` script automatically syncs these workflows to the public repo:
+Use Debbie from the canonical dev repo to publish workflow updates:
 
 ```bash
-cd engine/_dev/s
-./sync-and-deploy.sh "commit message"
+uv run --project <path-to-debbie-project> debbie sync staging
+uv run --project <path-to-debbie-project> debbie sync prod
 ```
-
-This script:
-1. Syncs files including `.github/workflows/`
-2. Runs tests in the public repo
-3. Commits and pushes to `gridl-hq/flapjack`
-4. Triggers the CI workflow on push to main
 
 ## Required GitHub Secrets
 
-Set these in the public repo settings (`gridl-hq/flapjack`):
+Set these in the public repo settings (`gridl-staging/flapjack`):
 
 - `ALGOLIA_APP_ID` - For integration tests
 - `ALGOLIA_ADMIN_KEY` - For integration tests
 
 ## Local Development
 
-To run the full test suite locally in flapjack_dev:
+To run the full test suite locally in the private dev repo:
 
 ```bash
-# Run all tests (equivalent to CI)
-./engine/_dev/s/run-all-tests.sh
+# Run the CI-aligned suite (unit + integ + server + dashboard)
+./engine/s/test --ci
+
+# Run the broad local suite (everything except Algolia-gated lane)
+./engine/s/test --all
 
 # With Algolia credentials for integration tests
 export ALGOLIA_APP_ID="your-app-id"
 export ALGOLIA_ADMIN_KEY="your-admin-key"
-./engine/_dev/s/run-all-tests.sh
+./engine/s/test --all --sdk-algolia
 ```
 
 ## Workflow Design

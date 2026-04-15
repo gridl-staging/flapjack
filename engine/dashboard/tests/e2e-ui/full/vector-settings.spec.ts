@@ -12,6 +12,7 @@
  */
 import type { Page, Response } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
+import { waitForSearchResultsOrEmptyState } from '../helpers';
 import {
   configureEmbedder,
   createIndex,
@@ -326,9 +327,7 @@ test.describe('Vector Search Settings', () => {
 
     // Navigate away to search page
     await page.goto(`/index/${vectorTestIndex}`);
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
 
     // Navigate back to settings
     await page.goto(`/index/${vectorTestIndex}/settings`);

@@ -1,4 +1,3 @@
-//! Stub summary for startup_catchup.rs.
 use crate::handlers::internal::apply_ops_to_manager;
 use crate::handlers::AppState;
 use flapjack::index::oplog::read_committed_seq;
@@ -30,13 +29,17 @@ async fn delayed_catchup_from_peers(state: &AppState) {
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
     tracing::info!("[REPL-catchup] Starting startup catch-up from peers");
-    if let Err(error) = catchup_all_tenants(state, "REPL-catchup", false).await {
-        tracing::debug!("[REPL-catchup] delayed startup catch-up skipped: {}", error);
-    }
+    run_lenient_catchup_round(state, "REPL-catchup", "delayed startup catch-up skipped").await;
     tracing::info!("[REPL-catchup] Startup catch-up complete");
 }
 
-/// TODO: Document run_pre_serve_catchup.
+/// Run one non-strict catch-up round and log failures as debug-only skips.
+async fn run_lenient_catchup_round(state: &AppState, log_prefix: &str, skip_reason: &str) {
+    if let Err(error) = catchup_all_tenants(state, log_prefix, false).await {
+        tracing::debug!("[{}] {}: {}", log_prefix, skip_reason, error);
+    }
+}
+
 pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
     let has_peers = state
         .replication_manager
@@ -64,10 +67,9 @@ pub async fn run_pre_serve_catchup(state: &AppState) -> Result<(), String> {
     }
 
     execute_timed_catchup(state, timeout, timeout_secs, strict_bootstrap).await?;
-    wait_for_write_queues(state, timeout, timeout_secs).await
+    wait_for_write_queues(state, timeout, timeout_secs, strict_bootstrap).await
 }
 
-/// TODO: Document execute_timed_catchup.
 async fn execute_timed_catchup(
     state: &AppState,
     timeout: tokio::time::Duration,
@@ -82,37 +84,28 @@ async fn execute_timed_catchup(
 
     match catchup_result {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => handle_catchup_error(strict_bootstrap, error),
-        Err(_) => handle_catchup_timeout(strict_bootstrap, timeout_secs),
+        Ok(Err(error)) => strict_or_skip(
+            strict_bootstrap,
+            format!("Pre-serve catch-up failed: {}", error),
+        ),
+        Err(_) => strict_or_skip(
+            strict_bootstrap,
+            format!(
+                "pre-serve catch-up timed out after {}s; refusing to serve stale data",
+                timeout_secs
+            ),
+        ),
     }
 }
 
-fn handle_catchup_error(strict_bootstrap: bool, error: String) -> Result<(), String> {
+/// If strict, logs at error level and returns `Err`; otherwise logs at warn
+/// level and returns `Ok(())` so the caller can continue.
+fn strict_or_skip(strict_bootstrap: bool, error: String) -> Result<(), String> {
     if strict_bootstrap {
-        tracing::error!("[REPL-catchup] Pre-serve catch-up failed: {}", error);
-        Err(error)
-    } else {
-        tracing::warn!(
-            "[REPL-catchup] Pre-serve catch-up skipped (non-strict): {}",
-            error
-        );
-        Ok(())
-    }
-}
-
-fn handle_catchup_timeout(strict_bootstrap: bool, timeout_secs: u64) -> Result<(), String> {
-    if strict_bootstrap {
-        let error = format!(
-            "pre-serve catch-up timed out after {}s; refusing to serve stale data",
-            timeout_secs
-        );
         tracing::error!("[REPL-catchup] {}", error);
         Err(error)
     } else {
-        tracing::warn!(
-            "[REPL-catchup] Pre-serve catch-up timed out after {}s (non-strict, continuing)",
-            timeout_secs
-        );
+        tracing::warn!("[REPL-catchup] {} (non-strict, continuing)", error);
         Ok(())
     }
 }
@@ -122,17 +115,27 @@ async fn wait_for_write_queues(
     state: &AppState,
     timeout: tokio::time::Duration,
     timeout_secs: u64,
+    strict_bootstrap: bool,
 ) -> Result<(), String> {
     if state.manager.wait_for_pending_tasks(timeout).await {
         tracing::info!("[REPL-catchup] Pre-serve catch-up complete");
         Ok(())
     } else {
-        let error = format!(
-            "write queues did not drain within {}s after pre-serve catch-up",
-            timeout_secs
-        );
+        handle_write_queue_timeout(strict_bootstrap, timeout_secs)
+    }
+}
+
+fn handle_write_queue_timeout(strict_bootstrap: bool, timeout_secs: u64) -> Result<(), String> {
+    let error = format!(
+        "write queues did not drain within {}s after pre-serve catch-up",
+        timeout_secs
+    );
+    if strict_bootstrap {
         tracing::error!("[REPL-catchup] {}", error);
         Err(error)
+    } else {
+        tracing::warn!("[REPL-catchup] {} (non-strict, continuing)", error);
+        Ok(())
     }
 }
 
@@ -162,9 +165,7 @@ pub async fn run_periodic_catchup(state: Arc<AppState>) {
     if state.replication_manager.is_none() {
         return;
     }
-    if let Err(error) = catchup_all_tenants(&state, "REPL-sync", false).await {
-        tracing::debug!("[REPL-sync] periodic catch-up skipped: {}", error);
-    }
+    run_lenient_catchup_round(&state, "REPL-sync", "periodic catch-up skipped").await;
 }
 
 /// Spawn a background task that runs catch-up from peers on a timer.
@@ -558,6 +559,29 @@ mod tests {
     }
 
     #[test]
+    fn write_queue_timeout_is_error_in_strict_mode() {
+        let result = super::handle_write_queue_timeout(true, 7);
+        assert!(
+            result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.contains("write queues did not drain within 7s")),
+            "strict mode must fail on write-queue timeout, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn write_queue_timeout_is_ok_in_non_strict_mode() {
+        let result = super::handle_write_queue_timeout(false, 7);
+        assert!(
+            result.is_ok(),
+            "non-strict mode should continue on write-queue timeout, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
     fn retention_gap_true_when_local_seq_before_oldest_retained() {
         let response = GetOpsResponse {
             tenant_id: "t1".to_string(),
@@ -615,7 +639,6 @@ mod tests {
         // oldest retained entry — definitely not a gap.
         assert!(!retention_gap_detected(250, &response));
     }
-    /// TODO: Document retention_gap_true_even_when_ops_present.
     #[test]
     fn retention_gap_true_even_when_ops_present() {
         let dummy_op = flapjack::index::oplog::OpLogEntry {
@@ -637,7 +660,6 @@ mod tests {
         // full snapshot restore is needed.
         assert!(retention_gap_detected(150, &response));
     }
-    /// TODO: Document install_snapshot_bytes_keeps_existing_tenant_on_invalid_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_keeps_existing_tenant_on_invalid_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -655,7 +677,6 @@ mod tests {
             "existing tenant data should remain if snapshot import fails"
         );
     }
-    /// TODO: Document install_snapshot_bytes_replaces_existing_tenant_on_valid_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_replaces_existing_tenant_on_valid_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -682,7 +703,6 @@ mod tests {
             "restored tenant should contain snapshot content"
         );
     }
-    /// TODO: Document install_snapshot_bytes_restores_backup_before_retrying_failed_snapshot.
     #[tokio::test]
     async fn install_snapshot_bytes_restores_backup_before_retrying_failed_snapshot() {
         let tmp = TempDir::new().unwrap();
@@ -707,7 +727,6 @@ mod tests {
             "restored backup should be moved back to the active tenant path"
         );
     }
-    /// TODO: Document install_snapshot_bytes_rejects_path_traversal_tenant_id.
     #[tokio::test]
     async fn install_snapshot_bytes_rejects_path_traversal_tenant_id() {
         let tmp = TempDir::new().unwrap();

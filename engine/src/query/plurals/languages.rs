@@ -1,4 +1,3 @@
-//! Stub summary for languages.rs.
 // ── French plural rules ──
 // French plurals are simpler than English: mostly add -s.
 // Key exceptions: -eau → -eaux, -al → -aux, -ou (some) → -oux
@@ -227,7 +226,6 @@ fn generate_spanish_plural(word: &str) -> String {
 // ── Portuguese plural rules ──
 // Rule-based approximation for common productive patterns.
 
-/// TODO: Document is_portuguese_vowel.
 fn is_portuguese_vowel(ch: char) -> bool {
     matches!(
         ch,
@@ -462,4 +460,131 @@ fn generate_dutch_plural(word: &str) -> String {
         return format!("{}s", word);
     }
     format!("{}en", word)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sorted(mut forms: Vec<String>) -> Vec<String> {
+        forms.sort();
+        forms
+    }
+
+    #[test]
+    fn french_singular_generates_expected_plural_exception() {
+        assert_eq!(
+            expand_plurals_french("bateau"),
+            vec!["bateau".to_string(), "bateaux".to_string()]
+        );
+    }
+
+    #[test]
+    fn french_plural_recovers_expected_singular() {
+        assert_eq!(
+            expand_plurals_french("chevaux"),
+            vec!["chevaux".to_string(), "cheval".to_string()]
+        );
+    }
+
+    #[test]
+    fn french_z_words_are_invariant_in_current_rules() {
+        assert_eq!(expand_plurals_french("nez"), vec!["nez".to_string()]);
+    }
+
+    #[test]
+    fn german_singular_generates_expected_plural() {
+        assert_eq!(
+            expand_plurals_german("tag"),
+            vec!["tag".to_string(), "tage".to_string()]
+        );
+    }
+
+    #[test]
+    fn german_en_plural_returns_candidate_singulars() {
+        assert_eq!(
+            sorted(expand_plurals_german("frauen")),
+            vec![
+                "frau".to_string(),
+                "fraue".to_string(),
+                "frauen".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn spanish_singular_z_word_generates_ces_plural() {
+        assert_eq!(
+            expand_plurals_spanish("luz"),
+            vec!["luz".to_string(), "luces".to_string()]
+        );
+    }
+
+    #[test]
+    fn spanish_plural_recovers_expected_singular() {
+        assert_eq!(
+            expand_plurals_spanish("casas"),
+            vec!["casas".to_string(), "casa".to_string()]
+        );
+    }
+
+    #[test]
+    fn portuguese_singular_ao_generates_oes_plural() {
+        assert_eq!(
+            expand_plurals_portuguese("ação"),
+            vec!["ação".to_string(), "ações".to_string()]
+        );
+    }
+
+    #[test]
+    fn portuguese_plural_recovers_expected_singular() {
+        assert_eq!(
+            expand_plurals_portuguese("ações"),
+            vec!["ações".to_string(), "ação".to_string()]
+        );
+    }
+
+    #[test]
+    fn portuguese_invariant_words_do_not_add_forms() {
+        assert_eq!(
+            expand_plurals_portuguese("lápis"),
+            vec!["lápis".to_string()]
+        );
+    }
+
+    #[test]
+    fn italian_singular_co_generates_chi_plural() {
+        assert_eq!(
+            expand_plurals_italian("banco"),
+            vec!["banco".to_string(), "banchi".to_string()]
+        );
+    }
+
+    #[test]
+    fn italian_i_plural_returns_multiple_singular_candidates() {
+        assert_eq!(
+            sorted(expand_plurals_italian("libri")),
+            vec![
+                "libre".to_string(),
+                "libri".to_string(),
+                "libro".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn dutch_vowel_ending_generates_apostrophe_plural() {
+        assert_eq!(
+            expand_plurals_dutch("auto"),
+            vec!["auto".to_string(), "auto's".to_string()]
+        );
+    }
+
+    #[test]
+    fn dutch_apostrophe_plural_recovers_singular() {
+        assert_eq!(
+            expand_plurals_dutch("auto's"),
+            vec!["auto's".to_string(), "auto".to_string()]
+        );
+    }
 }

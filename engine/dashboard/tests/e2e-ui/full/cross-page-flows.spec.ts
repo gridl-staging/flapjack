@@ -14,7 +14,7 @@
  * - Settings → modify attribute → save → Search → verify → revert
  */
 import { test, expect } from '../../fixtures/auth.fixture';
-import { API_BASE, API_HEADERS, TEST_INDEX, waitForOverviewIndexRow } from '../helpers';
+import { API_BASE, API_HEADERS, TEST_INDEX, getSidebar, waitForOverviewIndexRow, waitForSearchResultsOrEmptyState } from '../helpers';
 import { deleteIndex, addDocuments, searchIndex, getSettings, updateSettings } from '../../fixtures/api-helpers';
 import { createIsolatedMerchandisingScenario } from '../scenario-helpers';
 
@@ -32,9 +32,7 @@ test.describe('Cross-Page Flows', () => {
     await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}`));
 
     // Search page should load with results panel
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i))
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
   });
 
   // ---------- Full Index Lifecycle: Create → Docs → Search → Delete ----------
@@ -72,9 +70,7 @@ test.describe('Cross-Page Flows', () => {
 
     // Step 3: Open the new index through visible UI on Overview
     await overviewRow.getByRole('heading', { name: tempIndex }).click();
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i))
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
 
     // Search for the document we added
     const searchInput = page.getByPlaceholder(/search/i).first();
@@ -85,7 +81,7 @@ test.describe('Cross-Page Flows', () => {
     await expect(page.getByText('Lifecycle Test Product').first()).toBeVisible({ timeout: 15_000 });
 
     // Step 4: Return to Overview and delete the index through visible UI
-    const sidebar = page.locator('aside').or(page.locator('nav'));
+    const sidebar = getSidebar(page);
     await sidebar.getByRole('link', { name: 'Overview' }).click();
     await expect(page.getByTestId('stat-card-indexes')).toBeVisible({ timeout: 10_000 });
     const refreshedOverviewRow = await waitForOverviewIndexRow(page, tempIndex);
@@ -162,9 +158,7 @@ test.describe('Cross-Page Flows', () => {
     await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}`));
 
     // Search page should load
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i))
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
   });
 
   // ---------- Settings → Save → Reload → Verify Persistence ----------
@@ -254,9 +248,7 @@ test.describe('Cross-Page Flows', () => {
     // Navigate to Search via index click
     await page.getByText(TEST_INDEX).first().click();
     await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}`));
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i))
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
 
     // Navigate to Settings via shared index tab bar
     await page.getByTestId('index-tab-settings').click();
@@ -274,7 +266,7 @@ test.describe('Cross-Page Flows', () => {
     await expect(page.getByRole('button', { name: /add synonym/i })).toBeVisible({ timeout: 15_000 });
 
     // Navigate back to Overview via sidebar
-    const sidebar = page.locator('aside').or(page.locator('nav'));
+    const sidebar = getSidebar(page);
     await sidebar.getByText('Overview').first().click();
     await expect(page).toHaveURL(/\/overview/);
     await expect(page.getByTestId('stat-card-indexes')).toBeVisible({ timeout: 10_000 });

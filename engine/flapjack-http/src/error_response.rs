@@ -1,4 +1,3 @@
-//! Stub summary for error_response.rs.
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -140,7 +139,6 @@ mod tests {
     }
 
     // ── HandlerError adapter: delegates to FlapjackError ──
-    /// TODO: Document handler_error_core_io_produces_sanitized_500_json.
     #[tokio::test]
     async fn handler_error_core_io_produces_sanitized_500_json() {
         let he = HandlerError::from(std::io::Error::new(

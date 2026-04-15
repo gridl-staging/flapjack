@@ -208,9 +208,7 @@ test.describe('Analytics', () => {
     const beforeCount = await page.locator('table tbody tr').count();
 
     // Type a specific query in the filter — use a seeded search term
-    const filterInput = page.getByTestId('searches-filter-input').or(
-      page.getByPlaceholder(/filter/i)
-    );
+    const filterInput = page.getByTestId('searches-filter-input');
     await expect(filterInput).toBeVisible({ timeout: 5_000 });
     await filterInput.fill('batman');
 
@@ -230,8 +228,7 @@ test.describe('Analytics', () => {
     await expect(filtersTable).toBeVisible({ timeout: 10_000 });
     await expect(filtersTable.getByText('Top Filter Attributes')).toBeVisible();
 
-    // Filter analytics may show data or "No filter usage recorded" empty state
-    // Both are valid — depends on whether filter aggregation has been computed
+    // Valid dual-state: filter data rows vs "No filter usage" empty state
     const hasData = filtersTable.locator('table tbody tr').first();
     const emptyState = filtersTable.getByText(/No filter usage/i);
     await expect(hasData.or(emptyState)).toBeVisible({ timeout: 10_000 });

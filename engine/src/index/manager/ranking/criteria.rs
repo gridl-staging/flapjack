@@ -1,4 +1,3 @@
-//! Stub summary for criteria.rs.
 use super::super::*;
 
 #[derive(Clone, Copy)]
@@ -53,7 +52,6 @@ pub(in crate::index::manager) fn str_prefix_by_chars(input: &str, char_count: us
     input.chars().take(char_count).collect()
 }
 
-/// TODO: Document typo_distance_strict.
 pub(in crate::index::manager) fn typo_distance_strict(
     query_term: &str,
     candidate_token: &str,
@@ -131,7 +129,6 @@ pub(in crate::index::manager) fn compute_typo_bucket_from_tokens(
     }
 }
 
-/// TODO: Document classify_match.
 pub(in crate::index::manager) fn classify_match(
     query_term: &str,
     candidate_token: &str,
@@ -440,7 +437,6 @@ fn any_fallback_match(
     })
 }
 
-/// TODO: Document compute_exact_vs_prefix_bucket.
 pub(in crate::index::manager) fn compute_exact_vs_prefix_bucket(
     query_terms: &[String],
     tokens_by_path: &[(usize, Vec<String>)],

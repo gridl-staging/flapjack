@@ -1,4 +1,3 @@
-//! Stub summary for browse.rs.
 use axum::{
     extract::{Path, State},
     Json,
@@ -78,7 +77,6 @@ impl BrowseRequest {
     }
 }
 
-/// TODO: Document decode_and_validate_cursor.
 fn decode_and_validate_cursor(
     cursor_str: &str,
     current_gen_hash: u64,
@@ -100,7 +98,6 @@ fn decode_and_validate_cursor(
     Ok(cursor)
 }
 
-/// TODO: Document resolve_browse_params.
 fn resolve_browse_params(
     req: &BrowseRequest,
     cursor: Option<&BrowseCursor>,
@@ -120,7 +117,6 @@ fn resolve_browse_params(
     (effective_query, effective_filters, effective_hits_per_page)
 }
 
-/// TODO: Document shape_browse_hits.
 fn shape_browse_hits(
     documents: &[flapjack::types::ScoredDocument],
     attributes_to_retrieve: Option<&[String]>,
@@ -148,7 +144,6 @@ fn shape_browse_hits(
         .collect()
 }
 
-/// TODO: Document build_next_cursor.
 fn build_next_cursor(
     next_offset: usize,
     total: usize,
@@ -315,7 +310,6 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(cursor_json.as_bytes())
     }
 
-    /// TODO: Document decode_and_validate_cursor_accepts_valid_cursor.
     #[test]
     fn decode_and_validate_cursor_accepts_valid_cursor() {
         let current_gen_hash = 777_u64;
@@ -347,7 +341,6 @@ mod tests {
         }
     }
 
-    /// TODO: Document decode_and_validate_cursor_rejects_mismatched_generation.
     #[test]
     fn decode_and_validate_cursor_rejects_mismatched_generation() {
         let encoded = encode_cursor(BrowseCursor {
@@ -399,7 +392,6 @@ mod tests {
         }
     }
 
-    /// TODO: Document resolve_browse_params_prefers_cursor_values.
     #[test]
     fn resolve_browse_params_prefers_cursor_values() {
         let req = BrowseRequest {
@@ -424,7 +416,6 @@ mod tests {
         assert_eq!(hits_per_page, 70);
     }
 
-    /// TODO: Document resolve_browse_params_cursor_without_filters_clears_request_filters.
     #[test]
     fn resolve_browse_params_cursor_without_filters_clears_request_filters() {
         let req = BrowseRequest {

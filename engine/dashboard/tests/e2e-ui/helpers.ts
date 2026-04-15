@@ -62,7 +62,15 @@ export async function gotoOverviewPage(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible({ timeout: 10_000 });
 }
 
-export async function waitForSearchResultsOrEmptyState(page: Page): Promise<void> {
+export async function waitForSearchResultsOrEmptyState(
+  page: Page,
+  opts?: { requireResults?: boolean },
+): Promise<void> {
+  if (opts?.requireResults) {
+    await expect(page.getByTestId('results-panel')).toBeVisible({ timeout: 15_000 });
+    return;
+  }
+  // Valid dual-state: seeded index may have results or may be empty
   await expect(
     page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
   ).toBeVisible({ timeout: 15_000 });
@@ -73,9 +81,6 @@ export async function gotoIndexPage(page: Page, indexName: string): Promise<void
   await waitForSearchResultsOrEmptyState(page);
 }
 
-/**
- * TODO: Document waitForOverviewIndexRow.
- */
 export async function waitForOverviewIndexRow(page: Page, indexName: string): Promise<Locator> {
   const row = getOverviewIndexRow(page, indexName);
 

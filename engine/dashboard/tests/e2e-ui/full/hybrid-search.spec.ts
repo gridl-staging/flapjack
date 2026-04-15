@@ -15,6 +15,7 @@
  */
 import type { APIRequestContext, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/auth.fixture';
+import { waitForSearchResultsOrEmptyState } from '../helpers';
 import {
   addDocuments,
   createIndex,
@@ -104,9 +105,7 @@ test.describe('Hybrid Search Controls', () => {
     // Index has no embedders configured
     await waitForNoEmbedders(request, hybridIndex);
     await page.goto(`/index/${hybridIndex}`);
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
 
     // Hybrid controls should NOT be visible
     await expect(page.getByTestId('hybrid-controls')).not.toBeVisible();
@@ -139,9 +138,7 @@ test.describe('Hybrid Search Controls', () => {
     });
 
     await page.goto(`/index/${hybridIndex}`);
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
     await expect(page.getByTestId('hybrid-controls')).not.toBeVisible();
   });
 
@@ -157,9 +154,7 @@ test.describe('Hybrid Search Controls', () => {
     await waitForEmbedder(request, hybridIndex, 'default');
 
     await page.goto(`/index/${hybridIndex}`);
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i)),
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
 
     if (!vectorSearchEnabled) {
       await expectHybridControlsUnavailable(page);

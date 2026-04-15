@@ -74,7 +74,6 @@ generate_admin_key() {
   printf 'fj_upgrade_smoke_%s\n' "$random_hex"
 }
 
-# TODO: Document http_json.
 http_json() {
   local method="$1"
   local url="$2"
@@ -138,7 +137,6 @@ start_server() {
   printf '%s' "$!"
 }
 
-# TODO: Document main.
 main() {
   while [ "$#" -gt 0 ]; do
     case "$1" in

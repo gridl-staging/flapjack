@@ -1,4 +1,3 @@
-//! Stub summary for migration.rs.
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -708,7 +707,6 @@ mod tests {
         );
         assert_eq!(extract_string_array(&settings_json, "missingField"), None);
     }
-    /// TODO: Document parse_algolia_documents_strips_metadata_and_skips_non_objects.
     #[test]
     fn parse_algolia_documents_strips_metadata_and_skips_non_objects() {
         let documents = parse_algolia_documents(&[

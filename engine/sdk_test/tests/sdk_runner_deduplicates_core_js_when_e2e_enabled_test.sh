@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SDK_TEST_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENGINE_DIR="$(cd "$SDK_TEST_DIR/.." && pwd)"
-RUNNER="$ENGINE_DIR/_dev/s/test"
+RUNNER="$ENGINE_DIR/s/test"
 
 TMP_DIR="$(mktemp -d)"
 BIN_DIR="$TMP_DIR/bin"
@@ -17,7 +17,25 @@ SDK_NODE_MODULES_BACKUP="$TMP_DIR/sdk_node_modules.backup"
 SDK_NODE_MODULES_WAS_PRESENT=false
 SDK_LOCKFILE="$ENGINE_DIR/sdk_test/package-lock.json"
 
-CLI_SMOKE_SCRIPT="$ENGINE_DIR/_dev/s/manual-tests/cli_smoke.sh"
+resolve_cli_smoke_script() {
+  local canonical_path="$ENGINE_DIR/s/manual-tests/cli_smoke.sh"
+  local dev_path="$ENGINE_DIR/_dev/s/manual-tests/cli_smoke.sh"
+
+  if [ -f "$canonical_path" ]; then
+    echo "$canonical_path"
+    return 0
+  fi
+
+  if [ -f "$dev_path" ]; then
+    echo "$dev_path"
+    return 0
+  fi
+
+  echo "Unable to locate cli_smoke.sh under canonical or dev runner paths" >&2
+  exit 1
+}
+
+CLI_SMOKE_SCRIPT="$(resolve_cli_smoke_script)"
 CLI_SMOKE_MODE_BEFORE=""
 
 file_mode() {
@@ -147,4 +165,4 @@ if ! grep -Fq "E2E: JS test.js" "$OUTPUT_FILE"; then
   exit 1
 fi
 
-echo "PASS: _dev/s/test --sdk --e2e runs core JS suite once and skips SDK-only duplicate path"
+echo "PASS: s/test --sdk --e2e runs core JS suite once and skips SDK-only duplicate path"

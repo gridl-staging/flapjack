@@ -1,4 +1,3 @@
-//! Stub summary for openapi_export_tests.rs.
 use std::path::PathBuf;
 
 use crate::openapi_test_helpers::{schema_composition_refs, schema_ref};
@@ -73,7 +72,6 @@ fn default_output_path_targets_engine_docs2_openapi_json() {
     );
 }
 
-/// TODO: Document committed_docs2_openapi_matches_export_output.
 #[test]
 fn committed_docs2_openapi_matches_export_output() {
     let committed_path = crate::openapi_export::default_docs2_output_path();
@@ -94,8 +92,14 @@ fn committed_docs2_openapi_matches_export_output() {
         Some("TODO: Document conclude_experiment."),
         "conclude_experiment summary should not ship as a placeholder in the committed OpenAPI export"
     );
+    assert_ne!(
+        committed_doc
+            .pointer("/paths/~12~1abtests~1{id}~1results/get/summary")
+            .and_then(|value| value.as_str()),
+        Some("TODO: Document get_experiment_results."),
+        "get_experiment_results summary should not ship as a placeholder in the committed OpenAPI export"
+    );
 }
-/// TODO: Document export_output_covers_recommend_personalization_and_experiments_routes.
 #[test]
 fn export_output_covers_recommend_personalization_and_experiments_routes() {
     let doc = exported_openapi_doc();
@@ -113,7 +117,6 @@ fn export_output_covers_recommend_personalization_and_experiments_routes() {
         );
     }
 }
-/// TODO: Document export_output_includes_federated_batch_contract_components.
 #[test]
 fn export_output_includes_federated_batch_contract_components() {
     let doc = exported_openapi_doc();

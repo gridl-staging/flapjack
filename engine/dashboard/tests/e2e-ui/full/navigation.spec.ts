@@ -302,9 +302,7 @@ test.describe('Navigation & Layout', () => {
     // Browse (back to default) — clicking Browse tab returns to the index search page
     await page.getByTestId('index-tab-browse').click();
     await expect(page).toHaveURL(new RegExp(`/index/${TEST_INDEX}$`));
-    await expect(
-      page.getByTestId('results-panel').or(page.getByText(/no results found/i))
-    ).toBeVisible({ timeout: 15_000 });
+    await waitForSearchResultsOrEmptyState(page);
   });
 
   // =========================================================================

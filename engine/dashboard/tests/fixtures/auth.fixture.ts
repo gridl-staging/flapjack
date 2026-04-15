@@ -6,7 +6,7 @@ import { TEST_ADMIN_KEY } from './local-instance';
  * Import { test, expect } from this module instead of '@playwright/test' to get
  * an authenticated page automatically.
  */
-export const test = base.extend({
+export const test = base.extend<{ readClipboard: () => Promise<string> }>({
   page: async ({ page }, use) => {
     await page.addInitScript((apiKey: string) => {
       localStorage.setItem('flapjack-api-key', apiKey);
@@ -18,6 +18,14 @@ export const test = base.extend({
       }));
     }, TEST_ADMIN_KEY);
     await use(page);
+  },
+
+  readClipboard: async ({ context }, use) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await use(async () => {
+      const page = context.pages()[0];
+      return page.evaluate(() => navigator.clipboard.readText());
+    });
   },
 });
 

@@ -1,4 +1,3 @@
-//! Stub summary for startup.rs.
 use axum::http::HeaderValue;
 use fs2::FileExt;
 use std::fs::OpenOptions;
@@ -269,8 +268,6 @@ pub(crate) fn initialize_key_store(
     (key_store, admin_key, key_is_new)
 }
 
-/// Resolves the admin API key: from env var, persisted key file, or generates a new
-/// random key. Returns the key value and whether it was newly generated.
 fn resolve_admin_key(
     server_config: &ServerConfig,
     admin_key_file: &Path,
@@ -289,7 +286,13 @@ fn resolve_admin_key(
     }
 
     if admin_key_file.exists() {
-        return (Some(load_existing_admin_key(admin_key_file)), false);
+        return (
+            Some(load_existing_admin_key(
+                admin_key_file,
+                server_config.data_dir.as_str(),
+            )),
+            false,
+        );
     }
 
     (Some(create_admin_key(admin_key_file)), true)
@@ -306,7 +309,7 @@ fn warn_on_failed_admin_key_persist(admin_key_file: &Path, key: &str) {
     }
 }
 
-fn load_existing_admin_key(admin_key_file: &Path) -> String {
+fn load_existing_admin_key(admin_key_file: &Path, data_dir: &str) -> String {
     match read_admin_key(admin_key_file) {
         Ok(key) => {
             if let Err(error) =
@@ -316,8 +319,33 @@ fn load_existing_admin_key(admin_key_file: &Path) -> String {
             }
             key
         }
-        Err(error) => exit_with_admin_key_reset_hint(&error),
+        Err(error) => exit_with_admin_key_reset_hint(&error, data_dir),
     }
+}
+
+fn shell_quote_argument(value: &str) -> String {
+    let is_shell_safe = !value.is_empty()
+        && value.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-'
+            )
+        });
+
+    if is_shell_safe {
+        value.to_string()
+    } else {
+        // Single-quote the path so operators can paste the hint verbatim even when
+        // their data directory contains spaces or other shell metacharacters.
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+}
+
+fn format_reset_admin_key_command(data_dir: &str) -> String {
+    format!(
+        "flapjack --data-dir {} reset-admin-key",
+        shell_quote_argument(data_dir)
+    )
 }
 
 fn read_admin_key(admin_key_file: &Path) -> Result<String, String> {
@@ -358,9 +386,9 @@ fn persist_admin_key_or_exit(admin_key_file: &Path, key: &str) {
     }
 }
 
-fn exit_with_admin_key_reset_hint(error: &str) -> ! {
+fn exit_with_admin_key_reset_hint(error: &str, data_dir: &str) -> ! {
     eprintln!("❌ Error: {}", error);
-    eprintln!("   Run: flapjack reset-admin-key");
+    eprintln!("   Run: {}", format_reset_admin_key_command(data_dir));
     std::process::exit(1);
 }
 
@@ -481,9 +509,9 @@ pub(crate) fn format_capabilities_line() -> String {
     )
 }
 
-/// Prints the first-run banner showing the auto-generated admin API key.
 fn print_new_key_banner(key: &str, url: &str, data_dir: &str) {
     use colored::Colorize;
+    let reset_admin_key_command = format_reset_admin_key_command(data_dir);
 
     println!();
     println!(
@@ -534,7 +562,7 @@ fn print_new_key_banner(key: &str, url: &str, data_dir: &str) {
     println!(
         "     {} If lost: {}",
         "\u{2192}".dimmed(),
-        "flapjack reset-admin-key".cyan()
+        reset_admin_key_command.cyan()
     );
     println!(
         "     {} Production: set {} env var",

@@ -338,3 +338,143 @@ impl AnalyticsCollector {
         self.query_id_cache.retain(|_, v| v.timestamp_ms > cutoff);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn test_config(temp_dir: &TempDir) -> AnalyticsConfig {
+        AnalyticsConfig {
+            enabled: true,
+            data_dir: temp_dir.path().to_path_buf(),
+            flush_interval_secs: 60,
+            flush_size: 100,
+            retention_days: 90,
+        }
+    }
+
+    fn test_event(
+        timestamp_ms: i64,
+        index: &str,
+        event_type: &str,
+        event_name: &str,
+        http_code: u16,
+    ) -> DebugEvent {
+        DebugEvent {
+            timestamp_ms,
+            index: index.to_string(),
+            event_type: event_type.to_string(),
+            event_subtype: None,
+            event_name: event_name.to_string(),
+            user_token: "user-1".to_string(),
+            object_ids: vec!["obj-1".to_string()],
+            http_code,
+            validation_errors: if http_code == 200 {
+                vec![]
+            } else {
+                vec!["validation failed".to_string()]
+            },
+        }
+    }
+
+    #[test]
+    fn get_debug_events_filters_by_index() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_debug_event(test_event(100, "products", "search", "prod-old", 200));
+        collector.record_debug_event(test_event(200, "users", "search", "users", 200));
+        collector.record_debug_event(test_event(300, "products", "click", "prod-new", 200));
+
+        let events = collector.get_debug_events(10, Some("products"), None, None, None, None);
+
+        let names: Vec<String> = events.into_iter().map(|e| e.event_name).collect();
+        assert_eq!(names, vec!["prod-new".to_string(), "prod-old".to_string()]);
+    }
+
+    #[test]
+    fn get_debug_events_filters_by_event_type() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_debug_event(test_event(100, "products", "search", "search-old", 200));
+        collector.record_debug_event(test_event(200, "products", "click", "click", 200));
+        collector.record_debug_event(test_event(300, "products", "search", "search-new", 200));
+
+        let events = collector.get_debug_events(10, None, Some("search"), None, None, None);
+
+        let names: Vec<String> = events.into_iter().map(|e| e.event_name).collect();
+        assert_eq!(
+            names,
+            vec!["search-new".to_string(), "search-old".to_string()]
+        );
+    }
+
+    #[test]
+    fn get_debug_events_filters_by_status_ok_and_error() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_debug_event(test_event(100, "products", "search", "ok", 200));
+        collector.record_debug_event(test_event(200, "products", "search", "bad-request", 400));
+        collector.record_debug_event(test_event(300, "products", "search", "server-error", 500));
+
+        let ok_events = collector.get_debug_events(10, None, None, Some("ok"), None, None);
+        let error_events = collector.get_debug_events(10, None, None, Some("error"), None, None);
+
+        let ok_names: Vec<String> = ok_events.into_iter().map(|e| e.event_name).collect();
+        let error_names: Vec<String> = error_events.into_iter().map(|e| e.event_name).collect();
+        assert_eq!(ok_names, vec!["ok".to_string()]);
+        assert_eq!(
+            error_names,
+            vec!["server-error".to_string(), "bad-request".to_string()]
+        );
+    }
+
+    #[test]
+    fn get_debug_events_filters_by_timestamp_window() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_debug_event(test_event(100, "products", "search", "old", 200));
+        collector.record_debug_event(test_event(200, "products", "search", "inside", 200));
+        collector.record_debug_event(test_event(300, "products", "search", "new", 200));
+
+        let events = collector.get_debug_events(10, None, None, None, Some(150), Some(250));
+
+        let names: Vec<String> = events.into_iter().map(|e| e.event_name).collect();
+        assert_eq!(names, vec!["inside".to_string()]);
+    }
+
+    #[test]
+    fn get_debug_events_applies_limit_after_filtering() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_debug_event(test_event(100, "products", "search", "one", 200));
+        collector.record_debug_event(test_event(200, "products", "search", "two", 200));
+        collector.record_debug_event(test_event(300, "products", "search", "three", 200));
+
+        let events = collector.get_debug_events(2, Some("products"), None, None, None, None);
+
+        let names: Vec<String> = events.into_iter().map(|e| e.event_name).collect();
+        assert_eq!(names, vec!["three".to_string(), "two".to_string()]);
+    }
+
+    #[test]
+    fn get_debug_events_returns_reverse_chronological_order() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_debug_event(test_event(100, "products", "search", "first", 200));
+        collector.record_debug_event(test_event(200, "products", "search", "second", 200));
+        collector.record_debug_event(test_event(300, "products", "search", "third", 200));
+
+        let events = collector.get_debug_events(10, None, None, None, None, None);
+
+        let names: Vec<String> = events.into_iter().map(|e| e.event_name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "third".to_string(),
+                "second".to_string(),
+                "first".to_string()
+            ]
+        );
+    }
+}

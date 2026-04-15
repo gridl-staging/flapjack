@@ -5,7 +5,7 @@
     "description": "Drop-in replacement for Algolia search. Provides full-text search with filters, facets, geo-search, and more.",
     "contact": {
       "name": "Flapjack",
-      "url": "https://github.com/stuartcrobinson/flapjack"
+      "url": "https://github.com/gridl-hq/flapjack"
     },
     "license": {
       "name": "MIT OR Apache-2.0"
@@ -3334,8 +3334,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "List experiments with optional index prefix or suffix filtering and\npagination.",
-        "description": "Supports Algolia-compatible query parameters for filtering by index name\npattern. Results are sorted by creation time with deterministic tie-breaking\non numeric ID.",
+        "summary": "Lists experiments with Algolia-compatible pagination and optional index name\nprefix/suffix filtering.",
         "operationId": "list_experiments",
         "parameters": [
           {
@@ -3388,6 +3387,9 @@
               }
             }
           },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
+          },
           "503": {
             "description": "Experiment store unavailable"
           }
@@ -3402,7 +3404,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Create a new A/B test experiment with traffic splitting between a main\nindex and variant.",
+        "summary": "Creates a new experiment and returns the Algolia-compatible action payload\nusing the stable numeric experiment identifier.",
         "operationId": "create_experiment",
         "requestBody": {
           "description": "A/B test creation payload",
@@ -3431,6 +3433,9 @@
           },
           "409": {
             "description": "Experiment already exists"
+          },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
           },
           "503": {
             "description": "Experiment store unavailable"
@@ -3489,8 +3494,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Fetch a single experiment by numeric ID or UUID, hydrated with live\nanalytics metrics when available.",
-        "description": "Retrieves the experiment from the store, converts it to the Algolia DTO\nformat, and overlays click, conversion, and search metrics from the\nanalytics engine when available.",
+        "summary": "Fetches a single experiment by numeric ID or UUID and enriches the payload\nwith analytics-backed results metadata when available.",
         "operationId": "get_experiment",
         "parameters": [
           {
@@ -3516,6 +3520,9 @@
           },
           "404": {
             "description": "Experiment not found"
+          },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
           },
           "503": {
             "description": "Experiment store unavailable"
@@ -3576,6 +3583,9 @@
           "409": {
             "description": "Experiment is in an invalid status for update"
           },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
+          },
           "503": {
             "description": "Experiment store unavailable"
           }
@@ -3590,8 +3600,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Delete an experiment by numeric ID or UUID.",
-        "description": "Removes the experiment from the persistent store and returns the Algolia\naction envelope confirming which numeric ID and index were deleted.",
+        "summary": "Deletes an experiment by numeric ID or UUID and returns the Algolia-style\naction envelope for the affected experiment.",
         "operationId": "delete_experiment",
         "parameters": [
           {
@@ -3621,6 +3630,9 @@
           "409": {
             "description": "Cannot delete a running experiment"
           },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
+          },
           "503": {
             "description": "Experiment store unavailable"
           }
@@ -3637,8 +3649,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Conclude a running experiment by selecting a winner and promoting the\nwinning configuration.",
-        "description": "Applies the supplied conclusion payload, persists the experiment's final\nstate, and attempts variant promotion before returning the concluded\nexperiment response.",
+        "summary": "Concludes an experiment, optionally promotes the winning variant settings,\nand surfaces partial-promotion failures via a warning header.",
         "operationId": "conclude_experiment",
         "parameters": [
           {
@@ -3682,6 +3693,9 @@
           "409": {
             "description": "Experiment is in an invalid status for conclude"
           },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
+          },
           "503": {
             "description": "Experiment store unavailable"
           }
@@ -3698,8 +3712,7 @@
         "tags": [
           "experiments"
         ],
-        "summary": "Compute and return experiment results with statistical analysis.",
-        "description": "Fetches experiment metadata and analytics metrics from control and variant indices, computes frequentist z-test significance, Bayesian probability, sample ratio mismatch detection, and CUPED variance reduction when applicable, then returns a comprehensive results response.\n\n# Arguments\n- `state`: Application state containing experiment store and analytics engine\n- `id`: Experiment identifier (UUID or numeric ID)\n\n# Returns\nHTTP JSON response containing experiment metrics, statistical analysis, gate status, and recommendation. Returns error response if experiment store unavailable or experiment not found.",
+        "summary": "Returns statistical results for an experiment addressed by numeric ID or UUID.",
         "operationId": "get_experiment_results",
         "parameters": [
           {
@@ -3725,6 +3738,9 @@
           },
           "404": {
             "description": "Experiment not found"
+          },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
           },
           "503": {
             "description": "Experiment store unavailable"
@@ -3773,6 +3789,9 @@
           "409": {
             "description": "Experiment is in an invalid status for start"
           },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
+          },
           "503": {
             "description": "Experiment store unavailable"
           }
@@ -3819,6 +3838,9 @@
           },
           "409": {
             "description": "Experiment is in an invalid status for stop"
+          },
+          "500": {
+            "description": "Experiment missing numeric ID mapping"
           },
           "503": {
             "description": "Experiment store unavailable"

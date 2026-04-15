@@ -1,4 +1,3 @@
-//! Stub summary for key_store_tests.rs.
 use super::*;
 
 // ── hash_key / verify_key ──
@@ -109,7 +108,6 @@ fn default_admin_key_acls_match_canonical_valid_acls() {
         "default admin ACL set drifted from canonical VALID_ACLS"
     );
 }
-/// TODO: Document load_or_create_recreates_default_keys_when_keys_json_is_corrupt.
 #[test]
 fn load_or_create_recreates_default_keys_when_keys_json_is_corrupt() {
     let temp_dir = TempDir::new().unwrap();
@@ -131,7 +129,6 @@ fn load_or_create_recreates_default_keys_when_keys_json_is_corrupt() {
         "recreated key store should contain a usable admin key"
     );
 }
-/// TODO: Document load_or_create_rotates_admin_hash_when_admin_key_changes.
 #[test]
 fn load_or_create_rotates_admin_hash_when_admin_key_changes() {
     let temp_dir = TempDir::new().unwrap();
@@ -166,7 +163,6 @@ fn load_or_create_rotates_admin_hash_when_admin_key_changes() {
         "admin key rotation should replace both hash and salt"
     );
 }
-/// TODO: Document create_key_persists_restrict_sources_across_reload.
 #[test]
 fn create_key_persists_restrict_sources_across_reload() {
     let temp_dir = TempDir::new().unwrap();
@@ -191,7 +187,6 @@ fn create_key_persists_restrict_sources_across_reload() {
         "restrictSources must round-trip through keys.json persistence"
     );
 }
-/// TODO: Document load_or_create_defaults_missing_restrict_sources_to_none.
 #[test]
 fn load_or_create_defaults_missing_restrict_sources_to_none() {
     let temp_dir = TempDir::new().unwrap();

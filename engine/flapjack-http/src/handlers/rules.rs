@@ -1,4 +1,3 @@
-//! Stub summary for rules.rs.
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -7,7 +6,15 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::{safe_nb_pages, settings::parse_bool_query_param, AppState};
+use super::{
+    index_resource_store::{
+        clear_resource_store, delete_resource_item, forward_store_to_replicas, load_existing_store,
+        load_store_or_empty, save_resource_batch, save_resource_item,
+    },
+    safe_nb_pages,
+    settings::parse_bool_query_param,
+    AppState,
+};
 use crate::error_response::HandlerError;
 use crate::extractors::{validate_index_http, ValidatedIndexName};
 use flapjack::index::rules::{Rule, RuleStore};
@@ -34,16 +41,14 @@ pub async fn get_rule(
     Path((index_name, object_id)): Path<(String, String)>,
 ) -> Result<Json<Rule>, HandlerError> {
     validate_index_http(&index_name)?;
-    let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
-
-    if !rules_path.exists() {
+    let Some(store) = load_existing_store::<RuleStore>(state.manager.as_ref(), &index_name)
+        .map_err(HandlerError::internal)?
+    else {
         return Err(HandlerError::not_found(format!(
             "Rule {} not found",
             object_id
         )));
-    }
-
-    let store = RuleStore::load(&rules_path).map_err(HandlerError::internal)?;
+    };
 
     store
         .get(&object_id)
@@ -75,24 +80,8 @@ pub async fn save_rule(
     Json(rule): Json<Rule>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
     validate_index_http(&index_name)?;
-    state
-        .manager
-        .create_tenant(&index_name)
+    save_resource_item::<RuleStore>(state.manager.as_ref(), &index_name, rule.clone())
         .map_err(HandlerError::internal)?;
-
-    let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
-
-    let mut store = if rules_path.exists() {
-        RuleStore::load(&rules_path).map_err(HandlerError::internal)?
-    } else {
-        RuleStore::new()
-    };
-
-    store.insert(rule.clone());
-
-    store.save(&rules_path).map_err(HandlerError::internal)?;
-
-    state.manager.invalidate_rules_cache(&index_name);
 
     state.manager.append_oplog(
         &index_name,
@@ -133,24 +122,14 @@ pub async fn delete_rule(
     Path((index_name, object_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
     validate_index_http(&index_name)?;
-    let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
-
-    if !rules_path.exists() {
+    if !delete_resource_item::<RuleStore>(state.manager.as_ref(), &index_name, &object_id)
+        .map_err(HandlerError::internal)?
+    {
         return Err(HandlerError::not_found(format!(
             "Rule {} not found",
             object_id
         )));
     }
-
-    let mut store = RuleStore::load(&rules_path).map_err(HandlerError::internal)?;
-
-    store
-        .remove(&object_id)
-        .ok_or_else(|| HandlerError::not_found(format!("Rule {} not found", object_id)))?;
-
-    store.save(&rules_path).map_err(HandlerError::internal)?;
-
-    state.manager.invalidate_rules_cache(&index_name);
 
     state.manager.append_oplog(
         &index_name,
@@ -191,38 +170,24 @@ pub async fn save_rules(
     Query(params): Query<HashMap<String, String>>,
     Json(rules): Json<Vec<Rule>>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
-    state
-        .manager
-        .create_tenant(&index_name)
-        .map_err(HandlerError::internal)?;
-
-    let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
-
     let clear_existing = parse_bool_query_param(&params, "clearExistingRules")?;
-
-    let mut store = if clear_existing || !rules_path.exists() {
-        RuleStore::new()
-    } else {
-        RuleStore::load(&rules_path).map_err(HandlerError::internal)?
-    };
-
     let rules_json: Vec<serde_json::Value> = rules
         .iter()
         .map(|r| serde_json::to_value(r).unwrap_or_default())
         .collect();
-
-    for rule in rules {
-        store.insert(rule);
-    }
-
-    store.save(&rules_path).map_err(HandlerError::internal)?;
-
-    state.manager.invalidate_rules_cache(&index_name);
+    let store = save_resource_batch::<RuleStore, _>(
+        state.manager.as_ref(),
+        &index_name,
+        rules,
+        clear_existing,
+    )
+    .map_err(HandlerError::internal)?;
 
     // Forward rules to replicas if requested
     let forward_to_replicas = parse_bool_query_param(&params, "forwardToReplicas")?;
     if forward_to_replicas {
-        forward_rules_to_replicas(&state, &index_name, &store).map_err(HandlerError::internal)?;
+        forward_store_to_replicas::<RuleStore>(state.manager.as_ref(), &index_name, &store)
+            .map_err(HandlerError::internal)?;
     }
 
     state.manager.append_oplog(
@@ -239,43 +204,6 @@ pub async fn save_rules(
         "taskID": task.numeric_id,
         "updatedAt": chrono::Utc::now().to_rfc3339()
     })))
-}
-
-/// Forward the current rule store from a primary index to all its configured replicas.
-fn forward_rules_to_replicas(
-    state: &Arc<AppState>,
-    primary_index_name: &str,
-    store: &RuleStore,
-) -> Result<(), flapjack::error::FlapjackError> {
-    use flapjack::index::replica::parse_replica_entry;
-    use flapjack::index::settings::IndexSettings;
-
-    let settings_path = state
-        .manager
-        .base_path
-        .join(primary_index_name)
-        .join("settings.json");
-    if !settings_path.exists() {
-        return Ok(());
-    }
-    let primary_settings = IndexSettings::load(&settings_path)?;
-    let replicas = match &primary_settings.replicas {
-        Some(r) => r,
-        None => return Ok(()),
-    };
-
-    for replica_str in replicas {
-        let parsed = parse_replica_entry(replica_str)?;
-        let replica_name = parsed.name();
-        let replica_dir = state.manager.base_path.join(replica_name);
-        if !replica_dir.exists() {
-            continue;
-        }
-        let replica_rules_path = replica_dir.join("rules.json");
-        store.save(&replica_rules_path)?;
-        state.manager.invalidate_rules_cache(replica_name);
-    }
-    Ok(())
 }
 
 /// Remove all query rules from the specified index.
@@ -297,13 +225,8 @@ pub async fn clear_rules(
     State(state): State<Arc<AppState>>,
     ValidatedIndexName(index_name): ValidatedIndexName,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
-    let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
-
-    if rules_path.exists() {
-        std::fs::remove_file(&rules_path).map_err(HandlerError::internal)?;
-    }
-
-    state.manager.invalidate_rules_cache(&index_name);
+    clear_resource_store::<RuleStore>(state.manager.as_ref(), &index_name)
+        .map_err(HandlerError::internal)?;
     state
         .manager
         .append_oplog(&index_name, "clear_rules", serde_json::json!({}));
@@ -355,13 +278,8 @@ pub async fn search_rules(
     ValidatedIndexName(index_name): ValidatedIndexName,
     Json(req): Json<SearchRulesRequest>,
 ) -> Result<Json<serde_json::Value>, HandlerError> {
-    let rules_path = state.manager.base_path.join(&index_name).join("rules.json");
-
-    let store = if rules_path.exists() {
-        RuleStore::load(&rules_path).map_err(HandlerError::internal)?
-    } else {
-        RuleStore::new()
-    };
+    let store = load_store_or_empty::<RuleStore>(state.manager.as_ref(), &index_name)
+        .map_err(HandlerError::internal)?;
 
     let (hits, total) = store.search(&req.query, req.page, req.hits_per_page);
     let nb_pages = safe_nb_pages(total, req.hits_per_page);

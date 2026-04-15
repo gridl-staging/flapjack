@@ -23,8 +23,7 @@ const QS_PAGE_HEADING = { name: 'Query Suggestions', exact: true, level: 2 } as 
 
 async function waitForQuerySuggestionsPageReady(page: Page, timeout: number = 30_000) {
   await page.waitForURL('**/query-suggestions', { timeout });
-  // The loaded UI renders either the configs list or the empty-state heading in the same commit
-  // where the skeleton disappears. Waiting for either avoids acting during the loading phase.
+  // Valid dual-state: configs list vs "No Query Suggestions configs" empty heading
   await expect(
     page
       .getByTestId('qs-configs-list')

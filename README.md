@@ -158,8 +158,8 @@ InstantSearch.js widgets work as-is — `SearchBox`, `Hits`, `RefinementList`, `
 | Batch operations | Add, update, delete, clear, browse |
 | API keys | ACL, index patterns, TTL, secured keys (HMAC) |
 | S3 backup/restore | Scheduled snapshots, auto-restore on startup |
-| Vector / semantic search | OpenAI, REST, FastEmbed, user-provided embedders, HNSW |
-| Hybrid search | Keyword + vector with Reciprocal Rank Fusion (RRF) |
+| Vector / semantic search | OpenAI, REST, FastEmbed, user-provided embedders, HNSW (macOS binaries, Docker, and source builds; pre-built Linux musl/Windows binaries require source build or Docker for vector support) |
+| Hybrid search | Keyword + vector with Reciprocal Rank Fusion (RRF; same platform caveat as vector search) |
 | A/B testing | Mode A (query overrides), Mode B (index rerouting), interleaving, statistics |
 | Personalization | Event scoring, user profile building, query-time `personalizationImpact` |
 | Recommendations | Related products, bought-together, trending, looking-similar |
@@ -194,13 +194,15 @@ Algolia-compatible REST API under `/1/` — works with InstantSearch.js v5, the 
 | Embeddable as library | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | HA / clustering | 🟡 (executed with findings) | ✅ | Cloud only | ✅ | ✅ | ✅ |
 | Multi-language | 30 languages + CJK tokenization | 60+ | Many | Many | Many | Many |
-| Vector / semantic search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Vector / semantic search | ✅* | ✅ | ✅ | ✅ | ✅ | ✅ |
 | AI search (RAG) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Hybrid search (keyword + vector) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Hybrid search (keyword + vector) | ✅* | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Personalization | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Recommendations | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Federated multi-index search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | A/B testing | ✅ | ✅ | ❌ | ❌ | ❌ | Partial |
+
+* Flapjack vector and hybrid search are available in macOS pre-built binaries, Docker images, and source builds. Pre-built Linux musl (`x86_64`/`aarch64`) and Windows (`x86_64`) binaries ship without vector support. Check runtime capability with `GET /health` → `capabilities.vectorSearch`.
 
 ---
 
@@ -211,7 +213,7 @@ cargo build --release
 ./target/release/flapjack
 ```
 
-Requires stable Rust. Pre-built binaries for Linux x86_64 (static musl), Linux ARM64, macOS Intel, and macOS Apple Silicon on the [releases page](https://github.com/gridl-staging/flapjack/releases/latest).
+Requires stable Rust. Pre-built binaries for Linux x86_64 (static musl), Linux ARM64, macOS Intel, macOS Apple Silicon, and Windows x86_64 are available on the [releases page](https://github.com/gridl-staging/flapjack/releases/latest). Vector search is included in macOS pre-built binaries, Docker images, and source builds; pre-built Linux musl and Windows binaries ship without vector support (build from source or use Docker when vector search is required).
 
 ### Single Node
 
@@ -321,7 +323,7 @@ See [LIB.md](engine/LIB.md) for the embedding guide.
 
 ## Architecture
 
-Built on [Tantivy](https://github.com/stuartcrobinson/tantivy) (forked for edge-ngram prefix search). Axum + Tokio HTTP server.
+Built on [Tantivy](https://github.com/quickwit-oss/tantivy) with a pinned fork for edge-ngram prefix search. Axum + Tokio HTTP server.
 
 ```
 flapjack/              # Core library (search, indexing, query execution)
