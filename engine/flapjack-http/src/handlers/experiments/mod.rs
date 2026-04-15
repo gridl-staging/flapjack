@@ -160,6 +160,7 @@ pub async fn create_experiment(
         ("api_key" = [])
     )
 )]
+#[allow(clippy::result_large_err)]
 pub async fn list_experiments(
     State(state): State<Arc<AppState>>,
     Query(params): Query<AlgoliaListAbTestsQuery>,
