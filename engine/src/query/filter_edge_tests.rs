@@ -170,6 +170,7 @@ fn equals_and_not_equals_integer_use_same_range_format() {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn equals_and_not_equals_float_use_same_range_format() {
     let c = make_compiler();
     let eq_qs = c
