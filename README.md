@@ -11,6 +11,8 @@ Drop-in replacement for [Algolia](https://algolia.com) — works with [InstantSe
 
 **[Live Demo](https://flapjack-demo.pages.dev)** · **[Geo Demo](https://flapjack-demo.pages.dev/geo)** · **[API Docs](https://flapjack-demo.pages.dev/api-docs)**
 
+Hosted version: [Flapjack Cloud](https://cloud.flapjack.foo).
+
 ---
 
 ## Quickstart
