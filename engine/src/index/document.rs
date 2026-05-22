@@ -287,10 +287,9 @@ fn apply_camel_case_splitting(value: &mut Value, path: &str, camel_case_attribut
         return;
     }
     match value {
-        Value::String(text)
-            if is_camel_case_attr_path(path, camel_case_attributes) => {
-                *text = split_camel_case_words(text);
-            }
+        Value::String(text) if is_camel_case_attr_path(path, camel_case_attributes) => {
+            *text = split_camel_case_words(text);
+        }
         Value::Object(map) => {
             for (field_name, child) in map.iter_mut() {
                 let child_path = if path.is_empty() {

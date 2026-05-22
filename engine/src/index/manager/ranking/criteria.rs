@@ -235,16 +235,15 @@ pub(in crate::index::manager) fn build_term_alternatives(
                             Synonym::Regular { synonyms, .. }
                                 if synonyms
                                     .iter()
-                                    .any(|value| value.eq_ignore_ascii_case(term))
-                                => {
-                                    collect_synonym_candidates(&mut alternatives, synonyms);
-                                }
+                                    .any(|value| value.eq_ignore_ascii_case(term)) =>
+                            {
+                                collect_synonym_candidates(&mut alternatives, synonyms);
+                            }
                             Synonym::OneWay {
                                 input, synonyms, ..
+                            } if input.eq_ignore_ascii_case(term) => {
+                                collect_synonym_candidates(&mut alternatives, synonyms);
                             }
-                                if input.eq_ignore_ascii_case(term) => {
-                                    collect_synonym_candidates(&mut alternatives, synonyms);
-                                }
                             _ => {}
                         }
                     }

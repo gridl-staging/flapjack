@@ -161,14 +161,12 @@ impl AnalyticsCollector {
                 }
                 if let Some(st) = status {
                     match st {
-                        "ok"
-                            if e.http_code != 200 => {
-                                return false;
-                            }
-                        "error"
-                            if e.http_code == 200 => {
-                                return false;
-                            }
+                        "ok" if e.http_code != 200 => {
+                            return false;
+                        }
+                        "error" if e.http_code == 200 => {
+                            return false;
+                        }
                         _ => {}
                     }
                 }
