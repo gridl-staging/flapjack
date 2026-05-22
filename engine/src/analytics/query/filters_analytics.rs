@@ -93,7 +93,7 @@ impl super::AnalyticsQueryEngine {
         }
 
         let mut sorted: Vec<_> = value_counts.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
         sorted.truncate(limit);
 
         let values: Vec<serde_json::Value> = sorted

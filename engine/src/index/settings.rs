@@ -474,7 +474,7 @@ impl IndexSettings {
             .and_then(|map| map.get("default"))
         {
             let mut entries: Vec<(&String, &String)> = default_map.iter().collect();
-            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+            entries.sort_by_key(|(left_key, _)| *left_key);
 
             for (char_key, replacement) in entries {
                 let mut chars = char_key.chars();

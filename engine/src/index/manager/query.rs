@@ -96,11 +96,7 @@ pub(super) fn build_effective_search_params(
     let configured_facet_set = input.configured_facet_set;
     let rule_effects = input.rule_effects;
     let hits_per_page_cap = input.hits_per_page_cap;
-    let request_page = if request_limit > 0 {
-        request_offset / request_limit
-    } else {
-        0
-    };
+    let request_page = request_offset.checked_div(request_limit).unwrap_or(0);
     let mut filter = request_filter.cloned();
     let mut limit = request_limit;
     let mut offset = request_offset;

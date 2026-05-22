@@ -392,7 +392,7 @@ impl QueryExecutor {
                 .collect();
 
             let mut counts = counts;
-            counts.sort_by(|a, b| b.count.cmp(&a.count));
+            counts.sort_by_key(|b| std::cmp::Reverse(b.count));
             result
                 .entry(req.field.clone())
                 .or_insert_with(Vec::new)

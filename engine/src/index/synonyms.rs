@@ -240,8 +240,8 @@ impl SynonymStore {
                 }
                 Synonym::OneWay {
                     input, synonyms, ..
-                } => {
-                    if query.to_lowercase().contains(&input.to_lowercase()) {
+                }
+                    if query.to_lowercase().contains(&input.to_lowercase()) => {
                         for s in synonyms {
                             let new_query = query
                                 .to_lowercase()
@@ -251,7 +251,6 @@ impl SynonymStore {
                             }
                         }
                     }
-                }
                 _ => {}
             }
         }

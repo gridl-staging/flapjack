@@ -123,7 +123,7 @@ async fn generate_embedder_vectors(
     Some(
         docs_needing_embed
             .iter()
-            .zip(embeddings.into_iter())
+            .zip(embeddings)
             .map(|((doc_id, _), vector)| (doc_id.clone(), vector))
             .collect(),
     )

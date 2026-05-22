@@ -682,11 +682,7 @@ fn build_ranking_info(
             || !params.geo_params.around_precision.ranges.is_empty()
         {
             let bucket = params.geo_params.around_precision.bucket_distance(dist);
-            if bucket > 0 {
-                (dist as u64) / bucket
-            } else {
-                1
-            }
+            (dist as u64).checked_div(bucket).unwrap_or(1)
         } else {
             1
         };

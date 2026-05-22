@@ -134,7 +134,7 @@ fn build_federated_response_value(
     let mut candidates = Vec::new();
     let mut estimated_total_hits_per_query = Vec::with_capacity(query_results.len());
 
-    for (result, metadata) in query_results.into_iter().zip(query_metadata.into_iter()) {
+    for (result, metadata) in query_results.into_iter().zip(query_metadata) {
         let estimated_total_hits = result
             .get("nbHits")
             .and_then(|value| value.as_u64())

@@ -232,21 +232,19 @@ pub(in crate::index::manager) fn build_term_alternatives(
                 if let Some(store) = synonym_store {
                     for synonym in store.values() {
                         match synonym {
-                            Synonym::Regular { synonyms, .. } => {
+                            Synonym::Regular { synonyms, .. }
                                 if synonyms
                                     .iter()
                                     .any(|value| value.eq_ignore_ascii_case(term))
-                                {
+                                => {
                                     collect_synonym_candidates(&mut alternatives, synonyms);
                                 }
-                            }
                             Synonym::OneWay {
                                 input, synonyms, ..
-                            } => {
-                                if input.eq_ignore_ascii_case(term) {
+                            }
+                                if input.eq_ignore_ascii_case(term) => {
                                     collect_synonym_candidates(&mut alternatives, synonyms);
                                 }
-                            }
                             _ => {}
                         }
                     }
