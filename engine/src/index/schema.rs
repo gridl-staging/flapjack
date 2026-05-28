@@ -80,7 +80,6 @@ impl Schema {
 
         let text_indexing = tantivy::schema::TextFieldIndexing::default()
             .set_tokenizer("edge_ngram_lower")
-            .set_search_tokenizer("simple")
             .set_index_option(tantivy::schema::IndexRecordOption::WithFreqsAndPositions);
 
         let json_search_opts = tantivy::schema::JsonObjectOptions::default()
@@ -103,7 +102,6 @@ impl Schema {
 
         let json_exact_indexing = tantivy::schema::TextFieldIndexing::default()
             .set_tokenizer("simple")
-            .set_search_tokenizer("simple")
             .set_index_option(tantivy::schema::IndexRecordOption::WithFreqsAndPositions);
 
         let json_exact_opts =

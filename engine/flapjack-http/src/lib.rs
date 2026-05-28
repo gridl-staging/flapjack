@@ -7,6 +7,7 @@ pub mod dto;
 pub mod filter_parser;
 pub mod geoip;
 pub mod handlers;
+pub mod idempotency;
 pub mod latency_middleware;
 pub mod memory_middleware;
 pub mod middleware;

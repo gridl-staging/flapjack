@@ -129,7 +129,7 @@ sdks/javascript/.yarn/releases/
 .hashbrown
 
 # Tour video artifacts — stored in GitHub Releases, not in git
-# See: https://github.com/gridl-hq/flapjack/releases/tag/tour-videos
+# See: https://github.com/griddlehq/flapjack/releases/tag/tour-videos
 engine/dashboard/tour/videos/*.webm
 engine/dashboard/tour/videos/*.mp4
 
@@ -144,3 +144,12 @@ util/prompts/
 util/notes.md
 util/movedReserach.md
 util/handoff_session*
+
+# Local validation cache artifacts
+validation_cache.jsonl
+validation_summary.md
+
+# scrai incremental scan caches — derived from source code; nothing outside scrai reads them
+.scrai/state.json
+.scrai/summaries.json
+.scrai/dir_summaries.json

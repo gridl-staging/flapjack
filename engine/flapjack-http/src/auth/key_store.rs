@@ -1,7 +1,11 @@
-//! API key storage, persistence, and cryptographic operations.
+use aes_gcm_siv::aead::{Aead, KeyInit};
+use aes_gcm_siv::{Aes256GcmSiv, Nonce};
+use base64::Engine;
 use chrono::Utc;
-use rand::Rng;
+use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -11,8 +15,10 @@ use super::{ApiKey, KeyApiResponse, VALID_ACLS};
 
 const ADMIN_KEY_DESCRIPTION: &str = "Admin API Key";
 const DEFAULT_SEARCH_KEY_DESCRIPTION: &str = "Default Search API Key";
+const KEY_MATERIAL_FILE_NAME: &str = "key_material.json";
+const DEFAULT_SEARCH_KEY_MAX_QUERIES_PER_IP_PER_HOUR: i64 = 3600;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyStoreData {
     pub keys: Vec<ApiKey>,
     #[serde(default)]
@@ -22,7 +28,23 @@ pub struct KeyStoreData {
 pub struct KeyStore {
     pub(super) data: RwLock<KeyStoreData>,
     file_path: PathBuf,
+    key_material_path: PathBuf,
     admin_key_value: RwLock<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct KeyMaterialData {
+    #[serde(default)]
+    encrypted_hmac_by_hash: BTreeMap<String, EncryptedHmacKey>,
+    // Backward-compatibility with legacy plaintext key material files.
+    #[serde(default)]
+    hmac_by_hash: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EncryptedHmacKey {
+    nonce_b64: String,
+    ciphertext_b64: String,
 }
 
 impl KeyStore {
@@ -31,12 +53,15 @@ impl KeyStore {
     /// Automatically re-hashes the admin entry if `admin_key` differs from the stored hash, enabling key rotation via the `FLAPJACK_ADMIN_KEY` env var. Persists the result to disk on return.
     pub fn load_or_create(data_dir: &Path, admin_key: &str) -> Self {
         let file_path = data_dir.join("keys.json");
+        let key_material_path = data_dir.join(KEY_MATERIAL_FILE_NAME);
         let mut data = Self::load_key_store_data_or_default(&file_path, admin_key);
+        hydrate_hmac_keys_from_material_file(&key_material_path, &mut data, admin_key);
         Self::rotate_admin_entry_if_needed(&mut data, admin_key);
 
         let store = Self {
             data: RwLock::new(data),
             file_path,
+            key_material_path,
             admin_key_value: RwLock::new(admin_key.to_string()),
         };
         store.save();
@@ -116,7 +141,8 @@ impl KeyStore {
             description: DEFAULT_SEARCH_KEY_DESCRIPTION.into(),
             indexes: vec![],
             max_hits_per_query: 0,
-            max_queries_per_ip_per_hour: 0,
+            // Secure-by-default baseline: cap anonymous/public search throughput per IP.
+            max_queries_per_ip_per_hour: DEFAULT_SEARCH_KEY_MAX_QUERIES_PER_IP_PER_HOUR,
             query_parameters: String::new(),
             referers: vec![],
             restrict_sources: None,
@@ -131,9 +157,13 @@ impl KeyStore {
 
     /// Persist the current key data to `keys.json` with pretty-printed JSON and set file permissions to `0600` on Unix.
     fn save(&self) {
+        let admin_key = self.admin_key_value.read().unwrap().clone();
         let data = self.data.read().unwrap();
         if let Err(error) = persist_key_store_data(&self.file_path, &data) {
             tracing::warn!("Failed to save keys.json: {}", error);
+        }
+        if let Err(error) = persist_key_material_data(&self.key_material_path, &data, &admin_key) {
+            tracing::warn!("Failed to save {}: {}", KEY_MATERIAL_FILE_NAME, error);
         }
     }
 
@@ -334,7 +364,6 @@ fn generate_salt() -> String {
 
 /// Hash a key value with a salt using SHA-256
 pub(crate) fn hash_key(key_value: &str, salt: &str) -> String {
-    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(salt.as_bytes());
     hasher.update(key_value.as_bytes());
@@ -372,6 +401,7 @@ pub fn read_existing_admin_key(_data_dir: &Path) -> Option<String> {
 /// Generate a new admin key and update both .admin_key file and keys.json. Returns the new key.
 pub fn reset_admin_key(data_dir: &Path) -> Result<String, String> {
     let file_path = data_dir.join("keys.json");
+    let key_material_path = data_dir.join(KEY_MATERIAL_FILE_NAME);
     if !file_path.exists() {
         return Err("No keys.json found. Start the server first to initialize.".into());
     }
@@ -381,9 +411,25 @@ pub fn reset_admin_key(data_dir: &Path) -> Result<String, String> {
     let mut data: KeyStoreData =
         serde_json::from_str(&contents).map_err(|e| format!("Failed to parse keys.json: {}", e))?;
 
+    let key_material = load_key_material_data_or_default(&key_material_path);
+    if !key_material.encrypted_hmac_by_hash.is_empty() {
+        return Err(format!(
+            "Cannot reset admin key offline while {} contains encrypted key material; use /internal/rotate-admin-key so existing search keys remain usable",
+            KEY_MATERIAL_FILE_NAME
+        ));
+    }
+
     let new_key = generate_admin_key();
     let new_salt = generate_salt();
     let new_hash = hash_key(&new_key, &new_salt);
+
+    // Persist the new plaintext admin key first so a later keys.json write
+    // failure does not strand the process with an unknown admin secret.
+    persist_admin_key_file(
+        &data_dir.join(".admin_key"),
+        &new_key,
+        PermissionFailureMode::WarnAndContinue,
+    )?;
 
     if let Some(admin) = admin_key_entry_mut(&mut data.keys) {
         admin.hash = new_hash;
@@ -392,13 +438,11 @@ pub fn reset_admin_key(data_dir: &Path) -> Result<String, String> {
         return Err("No admin key found in keys.json.".into());
     }
 
+    if !key_material.hmac_by_hash.is_empty() {
+        hydrate_hmac_keys_from_material_data(&key_material, &mut data, &new_key);
+        persist_key_material_data(&key_material_path, &data, &new_key)?;
+    }
     persist_key_store_data(&file_path, &data)?;
-
-    persist_admin_key_file(
-        &data_dir.join(".admin_key"),
-        &new_key,
-        PermissionFailureMode::WarnAndContinue,
-    )?;
 
     Ok(new_key)
 }
@@ -424,7 +468,16 @@ fn is_admin_key_entry(key: &ApiKey) -> bool {
 }
 
 fn persist_key_store_data(file_path: &Path, data: &KeyStoreData) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(data)
+    // Never persist plaintext parent-key material in keys.json.
+    let mut persisted = data.clone();
+    for key in &mut persisted.keys {
+        key.hmac_key = None;
+    }
+    for key in &mut persisted.deleted_keys {
+        key.hmac_key = None;
+    }
+
+    let json = serde_json::to_string_pretty(&persisted)
         .map_err(|error| format!("Failed to serialize keys.json: {error}"))?;
 
     if let Some(parent) = file_path.parent() {
@@ -433,11 +486,143 @@ fn persist_key_store_data(file_path: &Path, data: &KeyStoreData) -> Result<(), S
 
     std::fs::write(file_path, &json)
         .map_err(|error| format!("Failed to write keys.json: {error}"))?;
-    ensure_keys_file_permissions(file_path);
+    ensure_private_file_permissions(file_path);
     Ok(())
 }
 
-fn ensure_keys_file_permissions(file_path: &Path) {
+fn persist_key_material_data(
+    file_path: &Path,
+    data: &KeyStoreData,
+    admin_key: &str,
+) -> Result<(), String> {
+    let mut encrypted_hmac_by_hash = BTreeMap::new();
+    for key in data.keys.iter().chain(data.deleted_keys.iter()) {
+        if let Some(hmac_key) = key.hmac_key.as_ref() {
+            let encrypted = encrypt_key_material_value(hmac_key, admin_key)?;
+            encrypted_hmac_by_hash.insert(key.hash.clone(), encrypted);
+        }
+    }
+
+    let payload = KeyMaterialData {
+        encrypted_hmac_by_hash,
+        hmac_by_hash: BTreeMap::new(),
+    };
+    let json = serde_json::to_string_pretty(&payload)
+        .map_err(|error| format!("Failed to serialize {KEY_MATERIAL_FILE_NAME}: {error}"))?;
+    if let Some(parent) = file_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    std::fs::write(file_path, &json)
+        .map_err(|error| format!("Failed to write {KEY_MATERIAL_FILE_NAME}: {error}"))?;
+    ensure_private_file_permissions(file_path);
+    Ok(())
+}
+
+fn hydrate_hmac_keys_from_material_file(
+    file_path: &Path,
+    data: &mut KeyStoreData,
+    admin_key: &str,
+) {
+    let payload = load_key_material_data_or_default(file_path);
+    hydrate_hmac_keys_from_material_data(&payload, data, admin_key);
+}
+
+fn load_key_material_data_or_default(file_path: &Path) -> KeyMaterialData {
+    std::fs::read_to_string(file_path)
+        .ok()
+        .and_then(|contents| serde_json::from_str::<KeyMaterialData>(&contents).ok())
+        .unwrap_or_default()
+}
+
+fn hydrate_hmac_keys_from_material_data(
+    payload: &KeyMaterialData,
+    data: &mut KeyStoreData,
+    admin_key: &str,
+) {
+    if payload.hmac_by_hash.is_empty() && payload.encrypted_hmac_by_hash.is_empty() {
+        return;
+    }
+
+    for key in data.keys.iter_mut().chain(data.deleted_keys.iter_mut()) {
+        if key.hmac_key.is_none() {
+            if let Some(legacy_hmac_key) = payload.hmac_by_hash.get(&key.hash) {
+                key.hmac_key = Some(legacy_hmac_key.clone());
+                continue;
+            }
+
+            if let Some(encrypted_hmac_key) = payload.encrypted_hmac_by_hash.get(&key.hash) {
+                match decrypt_key_material_value(encrypted_hmac_key, admin_key) {
+                    Ok(hmac_key) => key.hmac_key = Some(hmac_key),
+                    Err(error) => tracing::warn!(
+                        "Failed to decrypt key material for hash {}: {}",
+                        key.hash,
+                        error
+                    ),
+                }
+            }
+        }
+    }
+}
+
+fn derive_key_material_encryption_key(admin_key: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(admin_key.as_bytes());
+    let digest = hasher.finalize();
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(&digest);
+    key_bytes
+}
+
+fn encrypt_key_material_value(
+    plaintext_value: &str,
+    admin_key: &str,
+) -> Result<EncryptedHmacKey, String> {
+    let encryption_key = derive_key_material_encryption_key(admin_key);
+    let cipher = Aes256GcmSiv::new_from_slice(&encryption_key)
+        .map_err(|error| format!("Invalid encryption key length: {error}"))?;
+
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let ciphertext_bytes = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext_value.as_bytes())
+        .map_err(|error| format!("Failed to encrypt key material: {error}"))?;
+
+    Ok(EncryptedHmacKey {
+        nonce_b64: base64::engine::general_purpose::STANDARD.encode(nonce_bytes),
+        ciphertext_b64: base64::engine::general_purpose::STANDARD.encode(ciphertext_bytes),
+    })
+}
+
+fn decrypt_key_material_value(
+    encrypted: &EncryptedHmacKey,
+    admin_key: &str,
+) -> Result<String, String> {
+    let nonce_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&encrypted.nonce_b64)
+        .map_err(|error| format!("Invalid nonce encoding: {error}"))?;
+    if nonce_bytes.len() != 12 {
+        return Err(format!(
+            "Invalid nonce length: expected 12 bytes, got {}",
+            nonce_bytes.len()
+        ));
+    }
+
+    let ciphertext_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&encrypted.ciphertext_b64)
+        .map_err(|error| format!("Invalid ciphertext encoding: {error}"))?;
+
+    let encryption_key = derive_key_material_encryption_key(admin_key);
+    let cipher = Aes256GcmSiv::new_from_slice(&encryption_key)
+        .map_err(|error| format!("Invalid decryption key length: {error}"))?;
+    let decrypted_bytes = cipher
+        .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext_bytes.as_ref())
+        .map_err(|error| format!("Failed to decrypt key material: {error}"))?;
+    String::from_utf8(decrypted_bytes)
+        .map_err(|error| format!("Decrypted key material is not valid UTF-8: {error}"))
+}
+
+fn ensure_private_file_permissions(file_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -445,7 +630,7 @@ fn ensure_keys_file_permissions(file_path: &Path) {
         if let Err(error) =
             std::fs::set_permissions(file_path, std::fs::Permissions::from_mode(0o600))
         {
-            tracing::warn!("Failed to set keys.json permissions: {}", error);
+            tracing::warn!("Failed to set file permissions: {}", error);
         }
     }
 }

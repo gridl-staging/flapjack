@@ -2,13 +2,62 @@ mod finalization;
 mod vectors;
 
 use crate::types::{DocFailure, Document, TaskInfo, TaskStatus};
+use once_cell::sync::Lazy;
+use prometheus::{core::Collector, proto::MetricFamily, HistogramOpts, HistogramVec};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time::timeout_at;
 
-const WRITE_QUEUE_BATCH_SIZE: usize = 10;
+// Raised from 10 to amortize the dominant Tantivy commit fixed-cost over more
+// queued ops per flush. Stage-3 multi_phase evidence (see
+// docs/research/pl10_write_bottleneck_20260528T033040Z_classification.md)
+// shows commit_writer_with_panic_guard nested inside commit_batch consuming
+// ~90% of in-batch wall time; WRITE_QUEUE_FLUSH_INTERVAL still caps tail
+// latency and WRITE_QUEUE_CHANNEL_CAPACITY still gates QueueFull admission.
+const WRITE_QUEUE_BATCH_SIZE: usize = 32;
 const WRITE_QUEUE_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+const WRITE_QUEUE_CHANNEL_CAPACITY: usize = 2_000;
+const WRITE_QUEUE_PHASE_METRIC_NAME: &str = "flapjack_write_queue_phase_seconds";
+const WRITE_QUEUE_PHASE_METRIC_HELP: &str = "Write queue phase execution time in seconds";
+
+const PHASE_PROCESS_WRITES: &str = "process_writes";
+const PHASE_FLUSH_PENDING_BATCH: &str = "flush_pending_batch";
+const PHASE_COMMIT_BATCH: &str = "commit_batch";
+pub(super) const PHASE_COMMIT_WRITER_WITH_PANIC_GUARD: &str = "commit_writer_with_panic_guard";
+pub(super) const PHASE_FINALIZE_COMMITTED_BATCH: &str = "finalize_committed_batch";
+
+static WRITE_QUEUE_PHASE_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    let histogram = HistogramVec::new(
+        HistogramOpts::new(WRITE_QUEUE_PHASE_METRIC_NAME, WRITE_QUEUE_PHASE_METRIC_HELP),
+        &["phase"],
+    )
+    .expect("write queue phase histogram should be constructible");
+    for phase in [
+        PHASE_PROCESS_WRITES,
+        PHASE_FLUSH_PENDING_BATCH,
+        PHASE_COMMIT_BATCH,
+        PHASE_COMMIT_WRITER_WITH_PANIC_GUARD,
+        PHASE_FINALIZE_COMMITTED_BATCH,
+    ] {
+        histogram.with_label_values(&[phase]);
+    }
+    histogram
+});
+
+pub(super) fn observe_write_queue_phase(phase: &str, started_at: Instant) {
+    WRITE_QUEUE_PHASE_SECONDS
+        .with_label_values(&[phase])
+        .observe(started_at.elapsed().as_secs_f64());
+}
+
+pub fn gather_write_queue_phase_metric_families() -> Vec<MetricFamily> {
+    WRITE_QUEUE_PHASE_SECONDS
+        .collect()
+        .into_iter()
+        .filter(|family| !family.get_metric().is_empty())
+        .collect()
+}
 
 /// Vector search context for the write queue.
 /// When `vector-search` feature is disabled, this is a zero-sized type.
@@ -175,7 +224,7 @@ pub(crate) fn create_write_queue(
     WriteQueue,
     tokio::task::JoinHandle<crate::error::Result<()>>,
 ) {
-    let (tx, rx) = mpsc::channel(1000);
+    let (tx, rx) = mpsc::channel(WRITE_QUEUE_CHANNEL_CAPACITY);
 
     if let Some(ref ol) = ctx.oplog {
         tracing::info!(
@@ -259,18 +308,22 @@ async fn flush_pending_batch(
     ctx: &WriteQueueContext,
     pending: &mut Vec<WriteOp>,
 ) -> crate::error::Result<()> {
+    let phase_start = Instant::now();
     if pending.is_empty() {
+        observe_write_queue_phase(PHASE_FLUSH_PENDING_BATCH, phase_start);
         return Ok(());
     }
     let index = &ctx.index;
     let tenant_id = &ctx.tenant_id;
     let mut writer = acquire_writer_for_queue(index, tenant_id).await?;
-    commit_batch(ctx, pending, &mut writer).await
+    let result = commit_batch(ctx, pending, &mut writer).await;
+    observe_write_queue_phase(PHASE_FLUSH_PENDING_BATCH, phase_start);
+    result
 }
 
 /// Run the write-queue event loop: receive `WriteOp`s from the channel, batch them by count or timeout, and flush via `commit_batch`.
 ///
-/// The loop flushes when the batch reaches 10 operations, the 100 ms deadline expires, or the channel closes. Compact operations are handled immediately after flushing any pending batch.
+/// The loop flushes when the batch reaches WRITE_QUEUE_BATCH_SIZE operations, the 100 ms deadline expires, or the channel closes. Compact operations are handled immediately after flushing any pending batch.
 ///
 /// # Errors
 ///
@@ -279,6 +332,7 @@ async fn process_writes(
     ctx: WriteQueueContext,
     mut rx: mpsc::Receiver<WriteOp>,
 ) -> crate::error::Result<()> {
+    let phase_start = Instant::now();
     let tenant_id = &ctx.tenant_id;
     tracing::info!("Write queue started for tenant {}", tenant_id);
     let mut pending = Vec::new();
@@ -301,6 +355,7 @@ async fn process_writes(
             }
         }
     }
+    observe_write_queue_phase(PHASE_PROCESS_WRITES, phase_start);
     Ok(())
 }
 
@@ -501,6 +556,7 @@ async fn commit_batch(
     ops: &mut Vec<WriteOp>,
     writer: &mut crate::index::ManagedIndexWriter,
 ) -> crate::error::Result<()> {
+    let phase_start = Instant::now();
     tracing::warn!(
         "[WQ {}] commit_batch: {} operations",
         ctx.tenant_id,
@@ -508,7 +564,14 @@ async fn commit_batch(
     );
     #[cfg(not(feature = "vector-search"))]
     let _ = &ctx.vector_ctx;
-    let settings = load_write_settings(&ctx.base_path, &ctx.tenant_id)?;
+    let batch_task_ids: Vec<String> = ops.iter().map(|op| op.task_id.clone()).collect();
+    let settings = match load_write_settings(&ctx.base_path, &ctx.tenant_id) {
+        Ok(settings) => settings,
+        Err(error) => {
+            finalization::mark_tasks_failed(&ctx.tasks, &batch_task_ids, &error);
+            return Err(error);
+        }
+    };
     #[cfg(feature = "vector-search")]
     let embedder_configs = parse_embedder_configs(settings.as_ref(), &ctx.tenant_id);
     let finalization_context = WriteFinalizationContext {
@@ -525,10 +588,59 @@ async fn commit_batch(
         embedder_configs: &embedder_configs,
     };
 
+    let mut prepared_ops = Vec::with_capacity(ops.len());
+    let mut added_count = 0usize;
+    let mut deleted_count = 0usize;
+    let mut rejected_count = 0usize;
+
     for op in ops.drain(..) {
-        commit_single_write_op(&finalization_context, settings.as_ref(), writer, op).await?;
+        // PL-10 saturation fix: stage every queued op into the same Tantivy
+        // writer and commit once per queue flush. The previous loop committed
+        // once per op, which turned a queue batch into many tiny disk commits.
+        let prepared =
+            match stage_write_op_for_commit(&finalization_context, settings.as_ref(), writer, op)
+                .await
+            {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    finalization::mark_tasks_failed(
+                        finalization_context.tasks,
+                        &batch_task_ids,
+                        &error,
+                    );
+                    return Err(error);
+                }
+            };
+        added_count += prepared.valid_docs.len();
+        deleted_count += prepared.deleted_ids.len();
+        rejected_count += prepared.rejected.len();
+        prepared_ops.push(prepared);
     }
 
+    let build_secs = match finalization::commit_writer_with_panic_guard(
+        writer,
+        ctx.tenant_id.as_str(),
+        added_count,
+        deleted_count,
+        rejected_count,
+    ) {
+        Ok(build_secs) => build_secs,
+        Err(error) => {
+            finalization::mark_tasks_failed(finalization_context.tasks, &batch_task_ids, &error);
+            return Err(error);
+        }
+    };
+    if let Err(error) =
+        finalization::finalize_committed_batch(&finalization_context, &prepared_ops, build_secs)
+    {
+        finalization::mark_tasks_failed(finalization_context.tasks, &batch_task_ids, &error);
+        return Err(error);
+    }
+    for prepared in &prepared_ops {
+        finalization::mark_task_succeeded(finalization_context.tasks, prepared);
+    }
+
+    observe_write_queue_phase(PHASE_COMMIT_BATCH, phase_start);
     Ok(())
 }
 
@@ -585,12 +697,12 @@ fn parse_embedder_configs(
 /// Process one `WriteOp` end-to-end: mark the task as processing, prepare
 /// documents and deletes, embed vectors, write to Tantivy, commit, run
 /// post-commit finalization (oplog, caches, LWW, vectors), and mark succeeded.
-async fn commit_single_write_op(
+async fn stage_write_op_for_commit(
     context: &WriteFinalizationContext<'_>,
     settings: Option<&crate::index::settings::IndexSettings>,
     writer: &mut crate::index::ManagedIndexWriter,
     op: WriteOp,
-) -> crate::error::Result<()> {
+) -> crate::error::Result<PreparedWriteOperation> {
     let numeric_id = mark_task_processing(context.tasks, &op.task_id);
     let id_field = context.index.inner().schema().get_field("_id").unwrap();
     let mut prepared = PreparedWriteOperation::new(op.task_id, numeric_id);
@@ -615,16 +727,7 @@ async fn commit_single_write_op(
         &prepared.deleted_ids,
         context.tenant_id,
     );
-    let build_secs = finalization::commit_writer_with_panic_guard(
-        writer,
-        context.tenant_id,
-        prepared.valid_docs.len(),
-        prepared.deleted_ids.len(),
-        prepared.rejected.len(),
-    )?;
-    finalization::finalize_committed_write(context, &prepared, build_secs)?;
-    finalization::mark_task_succeeded(context.tasks, &prepared);
-    Ok(())
+    Ok(prepared)
 }
 
 fn mark_task_processing(tasks: &Arc<dashmap::DashMap<String, TaskInfo>>, task_id: &str) -> String {

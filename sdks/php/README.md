@@ -1,11 +1,11 @@
 # Flapjack Search PHP SDK
 
-A fully-featured and blazing-fast PHP API client for [Flapjack Search](https://github.com/flapjackhq). Drop-in replacement for the Algolia PHP client.
+A fully-featured and blazing-fast PHP API client for [Flapjack Search](https://github.com/gridl-staging). Drop-in replacement for the Algolia PHP client.
 
 ## Installation
 
 ```bash
-composer require flapjackhq/flapjack-search-php:0.1.0-beta.1
+composer require gridl-staging/flapjack-search-php:0.1.0-beta.1
 ```
 
 ## Quick Start
@@ -113,7 +113,7 @@ See [MIGRATION.md](MIGRATION.md) for a step-by-step guide to migrate from the Al
 
 ## Contributing
 
-This repository hosts the generated Flapjack API client for PHP. To contribute, head over to the [SDK Automation repository](https://github.com/flapjackhq/sdk-automation).
+This repository hosts the generated Flapjack API client for PHP. To contribute, head over to the [SDK Automation repository](https://github.com/gridl-staging/sdk-automation).
 
 ## License
 

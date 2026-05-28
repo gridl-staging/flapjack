@@ -47,6 +47,48 @@ pub(super) fn check_record_size<T: serde::Serialize>(doc: &T) -> Result<(), Flap
     Ok(())
 }
 
+/// Derive a deterministic 32-character hex object ID from a document body.
+///
+/// PL-8 / ADR 0005: nginx does not retry POST writes across upstream failover,
+/// so client retries of the same body must upsert (not duplicate). Hashing the
+/// canonical body keeps that property without persisting any per-request state.
+///
+/// Callers must remove the client-supplied `objectID` / `id` fields before
+/// invoking this helper — both the single-record and batch auto-ID paths
+/// already do so, and including them would tie the hash to fields that this
+/// helper is explicitly replacing.
+///
+/// Canonical form: copy entries into a `BTreeMap` so iteration is sorted by
+/// key, serialize via `serde_json::to_vec`, then take the SHA-256 digest and
+/// keep the first 32 hex characters (matching UUID length).
+pub(crate) fn auto_id_from_body<'a, I, V>(entries: I) -> String
+where
+    I: IntoIterator<Item = (&'a String, V)>,
+    V: serde::Serialize + 'a,
+{
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+
+    let canonical: BTreeMap<&str, serde_json::Value> = entries
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k.as_str(),
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            )
+        })
+        .collect();
+    let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
+    let digest = Sha256::digest(&bytes);
+    let mut hex = String::with_capacity(64);
+    for byte in digest.iter() {
+        use std::fmt::Write;
+        let _ = write!(&mut hex, "{:02x}", byte);
+    }
+    hex.truncate(32);
+    hex
+}
+
 /// Apply a built-in partial update operation (Increment, Decrement, Add, Remove, AddUnique).
 /// Returns the new FieldValue for the field, or None if the operation is invalid.
 fn apply_operation(
@@ -241,15 +283,50 @@ pub(super) fn merge_partial_update(
 pub async fn add_documents(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<serde_json::Value>,
-) -> Result<Json<AddDocumentsResponse>, FlapjackError> {
-    check_not_paused(&state.paused_indexes, &index_name)?;
+) -> Result<axum::response::Response, FlapjackError> {
+    use crate::idempotency::{IdempotencyRecord, IDEMPOTENCY_HEADER};
+    use axum::response::IntoResponse;
+
+    let idem_key = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    if let Some(ref key) = idem_key {
+        if let Some(record) = state.idempotency_cache.lookup(key) {
+            return Ok(record.into_response());
+        }
+    }
+
+    let response = run_add_documents(&state, &index_name, req).await?;
+
+    if let Some(key) = idem_key {
+        if let Ok(body_bytes) = serde_json::to_vec(&response) {
+            state.idempotency_cache.store(
+                key,
+                IdempotencyRecord::json(axum::http::StatusCode::OK, body_bytes.into()),
+            );
+        }
+    }
+
+    Ok(Json(response).into_response())
+}
+
+async fn run_add_documents(
+    state: &Arc<AppState>,
+    index_name: &str,
+    req: serde_json::Value,
+) -> Result<AddDocumentsResponse, FlapjackError> {
+    check_not_paused(&state.paused_indexes, index_name)?;
     if index_name != "*" {
-        reject_writes_to_virtual_replica(&state, &index_name)?;
+        reject_writes_to_virtual_replica(state, index_name)?;
     }
     if let Ok(batch_req) = serde_json::from_value::<AddDocumentsRequest>(req.clone()) {
         if index_name == "*" {
-            return batch::add_documents_multi_index_impl(State(state), batch_req).await;
+            return batch::add_documents_multi_index_impl(State(state.clone()), batch_req)
+                .await
+                .map(|json| json.0);
         }
 
         if let AddDocumentsRequest::Batch { requests } = &batch_req {
@@ -260,7 +337,13 @@ pub async fn add_documents(
             }
         }
 
-        return batch::add_documents_batch_impl(State(state), index_name, batch_req).await;
+        return batch::add_documents_batch_impl(
+            State(state.clone()),
+            index_name.to_string(),
+            batch_req,
+        )
+        .await
+        .map(|json| json.0);
     }
 
     let mut doc_map = req
@@ -304,13 +387,13 @@ pub async fn add_documents(
     };
     let task = state
         .manager
-        .add_documents(&index_name, vec![document.clone()])?;
-    sync_add_documents_to_standard_replicas(&state, &index_name, &[document]).await?;
+        .add_documents(index_name, vec![document.clone()])?;
+    sync_add_documents_to_standard_replicas(state, index_name, &[document]).await?;
 
-    Ok(Json(AddDocumentsResponse::Algolia {
+    Ok(AddDocumentsResponse::Algolia {
         task_id: task.numeric_id,
         object_ids: vec![id],
-    }))
+    })
 }
 
 /// Get a single object by ID
@@ -665,17 +748,33 @@ pub async fn delete_by_query(
 pub async fn add_record_auto_id(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(mut body): Json<serde_json::Map<String, serde_json::Value>>,
-) -> Result<(axum::http::StatusCode, Json<SaveObjectResponse>), FlapjackError> {
+) -> Result<axum::response::Response, FlapjackError> {
+    use crate::idempotency::{IdempotencyRecord, IDEMPOTENCY_HEADER};
+    use axum::response::IntoResponse;
+
+    let idem_key = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+
+    if let Some(ref key) = idem_key {
+        if let Some(record) = state.idempotency_cache.lookup(key) {
+            return Ok(record.into_response());
+        }
+    }
+
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     state.manager.create_tenant(&index_name)?;
     check_record_size(&body)?;
 
-    let generated_id = uuid::Uuid::new_v4().to_string();
-
     body.remove("objectID");
     body.remove("id");
+
+    // Content-hash auto-ID: same body → same ID → client retry is a safe upsert.
+    let generated_id = auto_id_from_body(body.iter());
 
     let mut json_obj = serde_json::Map::new();
     json_obj.insert(
@@ -706,14 +805,21 @@ pub async fn add_record_auto_id(
         .documents_indexed_total
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    Ok((
-        axum::http::StatusCode::CREATED,
-        Json(SaveObjectResponse {
-            task_id: task.numeric_id,
-            object_id: generated_id,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        }),
-    ))
+    let payload = SaveObjectResponse {
+        task_id: task.numeric_id,
+        object_id: generated_id,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let status = axum::http::StatusCode::CREATED;
+
+    if let Some(key) = idem_key {
+        let body_bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        state
+            .idempotency_cache
+            .store(key, IdempotencyRecord::json(status, body_bytes.into()));
+    }
+
+    Ok((status, Json(payload)).into_response())
 }
 
 /// Partially update a record in the specified index by merging fields.

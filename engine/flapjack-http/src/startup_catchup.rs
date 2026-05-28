@@ -230,6 +230,8 @@ async fn catchup_all_tenants(
             tracing::warn!("[{}] skipping invalid tenant id: {}", log_prefix, error);
             continue;
         }
+        repush_failed_peer_ranges(state, &repl_mgr, &tenant_id, log_prefix, strict_bootstrap)
+            .await?;
         catchup_single_tenant(state, &repl_mgr, &tenant_id, log_prefix, strict_bootstrap).await?;
     }
 
@@ -382,6 +384,86 @@ fn remove_path_if_exists(path: &std::path::Path) -> Result<(), String> {
     }
 }
 
+fn read_local_ops_since(
+    state: &AppState,
+    tenant_id: &str,
+    since_seq: u64,
+) -> Result<Vec<flapjack::index::oplog::OpLogEntry>, String> {
+    let Some(oplog) = state.manager.get_oplog(tenant_id) else {
+        return Ok(Vec::new());
+    };
+    oplog.read_since(since_seq).map_err(|error| {
+        format!(
+            "failed to read local oplog for tenant '{}' since seq {}: {}",
+            tenant_id, since_seq, error
+        )
+    })
+}
+
+async fn repush_failed_peer_ranges(
+    state: &AppState,
+    repl_mgr: &Arc<flapjack_replication::manager::ReplicationManager>,
+    tenant_id: &str,
+    log_prefix: &str,
+    strict_bootstrap: bool,
+) -> Result<(), String> {
+    let Some(peer_cursors) = repl_mgr.get_peer_cursors(tenant_id) else {
+        return Ok(());
+    };
+
+    for peer_cursor in peer_cursors.iter() {
+        let peer_id = peer_cursor.key().clone();
+        let cursor = peer_cursor.value().clone();
+        if cursor.last_delivery_error.is_none() {
+            continue;
+        }
+
+        let since_seq = cursor.last_acked_seq.unwrap_or(0);
+        let pending_ops = match read_local_ops_since(state, tenant_id, since_seq) {
+            Ok(ops) => ops,
+            Err(error) => {
+                if strict_bootstrap {
+                    return Err(format!("[{}] {}", log_prefix, error));
+                }
+                tracing::warn!("[{}] {}", log_prefix, error);
+                continue;
+            }
+        };
+        if pending_ops.is_empty() {
+            continue;
+        }
+
+        tracing::warn!(
+            "[{}] re-pushing {} pending ops to failed peer {} for tenant '{}' from seq {}",
+            log_prefix,
+            pending_ops.len(),
+            peer_id,
+            tenant_id,
+            since_seq
+        );
+        if let Err(error) = repl_mgr
+            .replicate_ops_to_peer(tenant_id, &peer_id, pending_ops)
+            .await
+        {
+            if strict_bootstrap {
+                return Err(format!(
+                    "[{}] failed to re-push pending ops for tenant '{}' to peer {}: {}",
+                    log_prefix, tenant_id, peer_id, error
+                ));
+            }
+            tracing::warn!(
+                "[{}] failed to re-push pending ops for tenant '{}' to peer {}: {}",
+                log_prefix,
+                tenant_id,
+                peer_id,
+                error
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Handle a fetch-ops failure: strict mode returns an error to abort catch-up,
 /// lenient mode logs and returns `Ok(())` so the caller can skip this tenant.
 fn handle_fetch_error(
@@ -418,7 +500,7 @@ async fn catchup_single_tenant(
     validate_tenant_id(tenant_id).map_err(|error| format!("[{}] {}", log_prefix, error))?;
     let tenant_path = state.manager.base_path.join(tenant_id);
     let local_seq = read_committed_seq(&tenant_path);
-    let response = match fetch_missed_ops(repl_mgr, tenant_id, local_seq).await {
+    let response = match fetch_missed_ops(repl_mgr, tenant_id, local_seq, strict_bootstrap).await {
         Ok(response) => response,
         Err(error) => {
             return handle_fetch_error(error, log_prefix, tenant_id, strict_bootstrap);
@@ -456,10 +538,17 @@ async fn fetch_missed_ops(
     repl_mgr: &Arc<flapjack_replication::manager::ReplicationManager>,
     tenant_id: &str,
     local_seq: u64,
+    strict_bootstrap: bool,
 ) -> Result<GetOpsResponse, String> {
-    repl_mgr
-        .catch_up_from_peer_with_metadata(tenant_id, local_seq)
-        .await
+    if strict_bootstrap {
+        repl_mgr
+            .catch_up_from_peer_with_metadata_strict(tenant_id, local_seq)
+            .await
+    } else {
+        repl_mgr
+            .catch_up_from_peer_with_metadata(tenant_id, local_seq)
+            .await
+    }
 }
 
 /// Applies a batch of oplog entries to a tenant via the index manager and logs
@@ -490,15 +579,28 @@ async fn apply_and_log_ops(
 #[cfg(test)]
 mod tests {
     use super::{install_snapshot_bytes, parse_strict_bootstrap_override, retention_gap_detected};
+    use crate::handlers::AppState;
+    use axum::{extract::State, routing::get, routing::post, Json, Router};
     use flapjack::index::snapshot::export_to_bytes;
+    use flapjack_replication::config::{NodeConfig, PeerConfig};
+    use flapjack_replication::manager::ReplicationManager;
     use flapjack_replication::types::GetOpsResponse;
+    use flapjack_replication::types::ReplicateOpsRequest;
+    use std::sync::{Arc, Mutex, OnceLock};
     use tempfile::TempDir;
+    use tokio::sync::oneshot;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     /// Non-strict pre-serve catchup must succeed even when peers are unreachable.
     /// Regression: execute_timed_catchup hard-coded strict_bootstrap=true, ignoring
     /// the FLAPJACK_STARTUP_CATCHUP_STRICT=0 env var.
     #[tokio::test]
     async fn pre_serve_catchup_succeeds_with_unreachable_peers_when_not_strict() {
+        let _env_guard = env_lock().lock().unwrap();
         // SAFETY: env vars are process-global; this test must not run in parallel
         // with other tests that read these vars.
         unsafe {
@@ -535,6 +637,84 @@ mod tests {
         assert!(
             result.is_ok(),
             "non-strict pre-serve catchup with unreachable peers should succeed, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_serve_catchup_fails_with_unreachable_peer_when_strict() {
+        let _env_guard = env_lock().lock().unwrap();
+        // SAFETY: env vars are process-global; this test synchronizes reads/writes
+        // via `env_lock` and restores the strict-mode defaults explicitly.
+        unsafe {
+            std::env::remove_var("FLAPJACK_STARTUP_CATCHUP_STRICT");
+            std::env::remove_var("FLAPJACK_STARTUP_CATCHUP_TIMEOUT_SECS");
+        }
+
+        async fn spawn_tenant_listing_peer(
+            addr: std::net::SocketAddr,
+            state: Arc<AppState>,
+        ) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+            let app = Router::new()
+                .route(
+                    "/internal/tenants",
+                    get(crate::handlers::internal::list_tenants),
+                )
+                .with_state(state);
+
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+            (shutdown_tx, handle)
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let peer_tmp = TempDir::new().unwrap();
+        let peer_state = crate::test_helpers::TestStateBuilder::new(&peer_tmp).build_shared();
+
+        let reserved_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let peer_addr = reserved_listener.local_addr().unwrap();
+        drop(reserved_listener);
+
+        let (shutdown_tx, server_handle) =
+            spawn_tenant_listing_peer(peer_addr, Arc::clone(&peer_state)).await;
+
+        let mut state = crate::test_helpers::TestStateBuilder::new(&tmp).build();
+        state.replication_manager = Some(flapjack_replication::manager::ReplicationManager::new(
+            NodeConfig {
+                node_id: "test-node".to_string(),
+                bind_addr: "127.0.0.1:0".to_string(),
+                peers: vec![
+                    PeerConfig {
+                        node_id: "reachable-peer".to_string(),
+                        addr: format!("http://{}", peer_addr),
+                    },
+                    PeerConfig {
+                        node_id: "unreachable-peer".to_string(),
+                        addr: "http://127.0.0.1:1".to_string(),
+                    },
+                ],
+            },
+            None,
+        ));
+        let state = crate::handlers::AppState { ..state };
+
+        let result = super::run_pre_serve_catchup(&state).await;
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+
+        assert!(
+            result.as_ref().err().is_some_and(
+                |error| error.contains("peer unreachable-peer tenant discovery failed")
+            ),
+            "strict pre-serve catchup must fail on partial peer coverage, got: {:?}",
             result
         );
     }
@@ -588,6 +768,7 @@ mod tests {
             ops: Vec::new(),
             current_seq: 250,
             oldest_retained_seq: Some(200),
+            node_current_seqs: std::collections::BTreeMap::new(),
         };
         assert!(retention_gap_detected(150, &response));
     }
@@ -599,6 +780,7 @@ mod tests {
             ops: Vec::new(),
             current_seq: 250,
             oldest_retained_seq: Some(200),
+            node_current_seqs: std::collections::BTreeMap::new(),
         };
         assert!(!retention_gap_detected(0, &response));
     }
@@ -610,6 +792,7 @@ mod tests {
             ops: Vec::new(),
             current_seq: 25,
             oldest_retained_seq: None,
+            node_current_seqs: std::collections::BTreeMap::new(),
         };
         assert!(!retention_gap_detected(10, &response));
     }
@@ -621,6 +804,7 @@ mod tests {
             ops: Vec::new(),
             current_seq: 200,
             oldest_retained_seq: Some(200),
+            node_current_seqs: std::collections::BTreeMap::new(),
         };
         // local_seq == oldest_retained means we are exactly caught up
         // to the oldest retained entry — not a gap.
@@ -634,6 +818,7 @@ mod tests {
             ops: Vec::new(),
             current_seq: 300,
             oldest_retained_seq: Some(200),
+            node_current_seqs: std::collections::BTreeMap::new(),
         };
         // local_seq > oldest_retained means we are ahead of the
         // oldest retained entry — definitely not a gap.
@@ -654,6 +839,7 @@ mod tests {
             ops: vec![dummy_op],
             current_seq: 300,
             oldest_retained_seq: Some(200),
+            node_current_seqs: std::collections::BTreeMap::new(),
         };
         // Even when partial ops are returned (from oldest_retained
         // onwards), the gap is real — ops 151-199 are missing and a
@@ -765,5 +951,188 @@ mod tests {
             "keep-me",
             "victim marker content must remain unchanged"
         );
+    }
+
+    /// Periodic catch-up must proactively re-push only the missing seq range for peers
+    /// left in `PeerCursor::Failed` state, before running the pull round.
+    #[tokio::test]
+    async fn periodic_catchup_repushes_failed_peer_missing_range_before_pull_round() {
+        async fn spawn_internal_server_on(
+            addr: std::net::SocketAddr,
+            state: Arc<AppState>,
+            captured_batches: Arc<Mutex<Vec<Vec<u64>>>>,
+        ) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+            let app = Router::new()
+                .route(
+                    "/internal/replicate",
+                    post(
+                        move |State(state): State<Arc<AppState>>,
+                              Json(req): Json<ReplicateOpsRequest>| {
+                            let captured = Arc::clone(&captured_batches);
+                            async move {
+                                captured
+                                    .lock()
+                                    .unwrap()
+                                    .push(req.ops.iter().map(|entry| entry.seq).collect());
+                                crate::handlers::internal::replicate_ops(State(state), Json(req))
+                                    .await
+                            }
+                        },
+                    ),
+                )
+                .route("/internal/ops", get(crate::handlers::internal::get_ops))
+                .route(
+                    "/internal/tenants",
+                    get(crate::handlers::internal::list_tenants),
+                )
+                .with_state(state);
+
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+            (shutdown_tx, handle)
+        }
+
+        async fn wait_for_cursor<F>(manager: &ReplicationManager, tenant_id: &str, check: F) -> bool
+        where
+            F: Fn(&flapjack_replication::manager::PeerCursor) -> bool,
+        {
+            for _ in 0..300 {
+                if manager
+                    .get_peer_cursors(tenant_id)
+                    .as_ref()
+                    .and_then(|tenant| tenant.get("peer-b").map(|entry| entry.clone()))
+                    .is_some_and(|cursor| check(&cursor))
+                {
+                    return true;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            }
+            false
+        }
+
+        let tmp_local = TempDir::new().unwrap();
+        let tmp_peer = TempDir::new().unwrap();
+        let local_state = crate::test_helpers::TestStateBuilder::new(&tmp_local).build();
+        let peer_state = crate::test_helpers::TestStateBuilder::new(&tmp_peer).build_shared();
+        let peer_capture = Arc::new(Mutex::new(Vec::<Vec<u64>>::new()));
+
+        local_state.manager.create_tenant("tenant-red").unwrap();
+        let local_oplog = local_state
+            .manager
+            .get_or_create_oplog("tenant-red")
+            .unwrap();
+        local_oplog
+            .append(
+                "upsert",
+                serde_json::json!({"objectID": "doc-1", "body": {"_id": "doc-1", "title": "Alpha"}}),
+            )
+            .unwrap();
+        local_oplog
+            .append(
+                "upsert",
+                serde_json::json!({"objectID": "doc-2", "body": {"_id": "doc-2", "title": "Beta"}}),
+            )
+            .unwrap();
+        let local_ops = local_oplog.read_since(0).unwrap();
+        assert_eq!(local_ops.len(), 2);
+
+        let reserved_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let peer_addr = reserved_listener.local_addr().unwrap();
+        drop(reserved_listener);
+
+        let repl_mgr = ReplicationManager::new(
+            NodeConfig {
+                node_id: "node-a".to_string(),
+                bind_addr: "127.0.0.1:0".to_string(),
+                peers: vec![PeerConfig {
+                    node_id: "peer-b".to_string(),
+                    addr: format!("http://{}", peer_addr),
+                }],
+            },
+            None,
+        );
+
+        let local_state = Arc::new(AppState {
+            replication_manager: Some(Arc::clone(&repl_mgr)),
+            ..local_state
+        });
+
+        let (shutdown_tx, server_handle) = spawn_internal_server_on(
+            peer_addr,
+            Arc::clone(&peer_state),
+            Arc::clone(&peer_capture),
+        )
+        .await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        repl_mgr
+            .replicate_ops("tenant-red", vec![local_ops[0].clone()])
+            .await;
+        assert!(
+            wait_for_cursor(&repl_mgr, "tenant-red", |cursor| {
+                cursor.last_acked_seq == Some(1) && cursor.last_delivery_error.is_none()
+            })
+            .await,
+            "initial push should ack seq 1"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        peer_capture.lock().unwrap().clear();
+
+        repl_mgr
+            .replicate_ops("tenant-red", vec![local_ops[1].clone()])
+            .await;
+        assert!(
+            wait_for_cursor(&repl_mgr, "tenant-red", |cursor| {
+                cursor
+                    .last_delivery_error
+                    .as_ref()
+                    .is_some_and(|error| !error.is_empty())
+            })
+            .await,
+            "second push should move cursor to failed state"
+        );
+
+        let (shutdown_tx, server_handle) = spawn_internal_server_on(
+            peer_addr,
+            Arc::clone(&peer_state),
+            Arc::clone(&peer_capture),
+        )
+        .await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        super::run_periodic_catchup(Arc::clone(&local_state)).await;
+
+        for _ in 0..200 {
+            if peer_state
+                .manager
+                .search("tenant-red", "Beta", None, None, 10)
+                .map(|result| result.total == 1)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+
+        let replayed = peer_capture.lock().unwrap().clone();
+        let last_batch = replayed.last().cloned().unwrap_or_default();
+        assert_eq!(
+            last_batch,
+            vec![2],
+            "periodic proactive re-push must replay only the missing range before pull catch-up"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
     }
 }

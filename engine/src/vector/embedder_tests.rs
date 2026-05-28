@@ -1,4 +1,61 @@
 use super::*;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[derive(Debug)]
+struct CountingRebindingResolverState {
+    calls: AtomicUsize,
+    first: SocketAddr,
+    second: SocketAddr,
+}
+
+#[derive(Clone, Debug)]
+struct CountingRebindingResolver {
+    state: Arc<CountingRebindingResolverState>,
+}
+
+impl CountingRebindingResolver {
+    fn new(first: SocketAddr, second: SocketAddr) -> Self {
+        Self {
+            state: Arc::new(CountingRebindingResolverState {
+                calls: AtomicUsize::new(0),
+                first,
+                second,
+            }),
+        }
+    }
+
+    fn call_count(&self) -> usize {
+        self.state.calls.load(Ordering::SeqCst)
+    }
+
+    fn resolve_for_validation(&self) -> std::net::IpAddr {
+        let call_number = self.state.calls.fetch_add(1, Ordering::SeqCst);
+        if call_number == 0 {
+            self.state.first.ip()
+        } else {
+            self.state.second.ip()
+        }
+    }
+}
+
+impl reqwest::dns::Resolve for CountingRebindingResolver {
+    fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let call_number = self.state.calls.fetch_add(1, Ordering::SeqCst);
+        let selected = if call_number == 0 {
+            self.state.first
+        } else {
+            self.state.second
+        };
+        Box::pin(async move {
+            let addrs: reqwest::dns::Addrs = Box::new(std::iter::once(selected));
+            Ok(addrs)
+        })
+    }
+}
 
 // ── UserProvidedEmbedder tests (3.9) ──
 
@@ -54,6 +111,9 @@ async fn test_user_provided_embed_documents_returns_error() {
 
 // ── Factory tests (3.30) ──
 
+// These tests share process-global outbound URL test hooks in `security.rs`
+// and `embedder.rs`, so constructor/request cases stay on one serial lane.
+
 #[test]
 fn test_factory_creates_user_provided() {
     let config = EmbedderConfig {
@@ -77,6 +137,7 @@ fn test_factory_rejects_invalid_config() {
 }
 
 #[test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
 fn test_factory_creates_rest() {
     let config = EmbedderConfig {
         source: EmbedderSource::Rest,
@@ -92,10 +153,24 @@ fn test_factory_creates_rest() {
 }
 
 #[test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
 fn test_factory_creates_openai() {
     let config = EmbedderConfig {
         source: EmbedderSource::OpenAi,
         api_key: Some("sk-test".into()),
+        ..Default::default()
+    };
+    let embedder = create_embedder(&config).unwrap();
+    assert_eq!(embedder.source(), EmbedderSource::OpenAi);
+}
+
+#[test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+fn test_factory_creates_openai_with_localhost_url() {
+    let config = EmbedderConfig {
+        source: EmbedderSource::OpenAi,
+        api_key: Some("sk-test".into()),
+        url: Some("http://localhost:1234".into()),
         ..Default::default()
     };
     let embedder = create_embedder(&config).unwrap();
@@ -113,6 +188,7 @@ mod rest_tests {
 
     /// Verify that RestEmbedder renders request templates by replacing `{{text}}` placeholder with input text.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_rest_embedder_request_format() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -140,6 +216,7 @@ mod rest_tests {
 
     /// Verify that RestEmbedder navigates nested JSON response templates to extract embedding vectors.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_rest_embedder_response_parsing() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -164,6 +241,7 @@ mod rest_tests {
 
     /// Verify that RestEmbedder detects batch templates containing `{{..}}` and expands them with all texts.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_rest_embedder_batch_request() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -193,6 +271,7 @@ mod rest_tests {
 
     /// Verify that RestEmbedder returns error for connection failures to unreachable endpoints.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_rest_embedder_network_error() {
         let config = EmbedderConfig {
             source: EmbedderSource::Rest,
@@ -213,6 +292,7 @@ mod rest_tests {
 
     /// Verify that RestEmbedder returns error when the server responds with non-success HTTP status.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_rest_embedder_bad_response() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -235,6 +315,7 @@ mod rest_tests {
 
     /// Verify that RestEmbedder includes custom headers from configuration in HTTP requests.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_rest_embedder_custom_headers() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -303,6 +384,7 @@ mod openai_tests {
 
     /// Verify that OpenAiEmbedder constructs correct HTTP request with Bearer token and embedding dimensions.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_openai_sends_correct_request() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -328,6 +410,7 @@ mod openai_tests {
 
     /// Verify that OpenAiEmbedder correctly extracts embedding vectors from OpenAI API response format.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_openai_parses_response() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -351,6 +434,7 @@ mod openai_tests {
 
     /// Verify that OpenAiEmbedder batches multiple texts in a single request and returns embeddings in order.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_openai_batch_multiple_texts() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -376,6 +460,7 @@ mod openai_tests {
 
     /// Verify that OpenAiEmbedder respects custom model name in configuration.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_openai_custom_model() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -400,6 +485,7 @@ mod openai_tests {
 
     /// Verify that OpenAiEmbedder accepts custom base URL and strips trailing slashes.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_openai_custom_url() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -424,6 +510,7 @@ mod openai_tests {
 
     /// Verify that OpenAiEmbedder extracts and surfaces error messages from API error responses.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_openai_error_response() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -452,6 +539,7 @@ mod openai_tests {
 
     /// Verify that configured dimensions are included in the OpenAI embeddings request when set.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_openai_dimensions_in_request() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -476,6 +564,7 @@ mod openai_tests {
 
     /// Verify that OpenAiEmbedder auto-detects and caches embedding dimensions from the first response.
     #[tokio::test]
+    #[serial_test::serial(flapjack_outbound_url_policy)]
     async fn test_openai_dimensions_auto_detection() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -498,6 +587,289 @@ mod openai_tests {
         let _ = e.embed_query("test").await.unwrap();
         assert_eq!(e.dimensions(), 5); // Auto-detected from response
     }
+}
+
+/// Stage-1 red test: once validation has approved a hostname, the outbound
+/// request path must not re-resolve into loopback for REST embedders.
+#[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+async fn security_dns_rebind_rest_embedder_loopback_sink_not_contacted() {
+    let blocked_sink = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "embedding": [0.9, 0.8, 0.7]
+        })))
+        .mount(&blocked_sink)
+        .await;
+    let blocked_port = blocked_sink.address().port();
+
+    let config = EmbedderConfig {
+        source: EmbedderSource::Rest,
+        url: Some(format!(
+            "http://vector-dns-rebind.test:{blocked_port}/embed"
+        )),
+        request: Some(serde_json::json!({"input": "{{text}}"})),
+        response: Some(serde_json::json!({"embedding": "{{embedding}}"})),
+        dimensions: Some(3),
+        ..Default::default()
+    };
+    config
+        .validate()
+        .expect("config validation should pass before outbound send");
+
+    let resolver = CountingRebindingResolver::new(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)), blocked_port),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), blocked_port),
+    );
+    let _validation_resolver_guard =
+        crate::security::test_helpers::install_test_outbound_host_resolver(Arc::new({
+            let resolver = resolver.clone();
+            move |_host, _port| Some(vec![resolver.resolve_for_validation()])
+        }));
+    let _resolver_guard = install_test_dns_resolver(Arc::new(resolver.clone()));
+
+    let embedder = RestEmbedder::new(&config).expect("rest embedder should build");
+    let result = embedder.embed_query("hello").await;
+    assert!(
+        result.is_err(),
+        "safe behavior should reject rebound destination instead of contacting loopback sink"
+    );
+    assert_eq!(
+        resolver.call_count(),
+        1,
+        "safe behavior should avoid a post-validation resolver lookup"
+    );
+    let sink_requests = blocked_sink.received_requests().await.unwrap_or_default();
+    assert!(
+        sink_requests.is_empty(),
+        "loopback sink must not receive outbound embedding requests"
+    );
+}
+
+/// Stage-1 red test: metadata rebinding must be blocked before REST outbound send.
+#[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+async fn security_dns_rebind_rest_embedder_metadata_rebind_blocked_before_send() {
+    let config = EmbedderConfig {
+        source: EmbedderSource::Rest,
+        url: Some("http://vector-dns-rebind.test:8081/embed".into()),
+        request: Some(serde_json::json!({"input": "{{text}}"})),
+        response: Some(serde_json::json!({"embedding": "{{embedding}}"})),
+        dimensions: Some(3),
+        ..Default::default()
+    };
+    config
+        .validate()
+        .expect("config validation should pass before outbound send");
+
+    let resolver = CountingRebindingResolver::new(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)), 8081),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)), 8081),
+    );
+    let _validation_resolver_guard =
+        crate::security::test_helpers::install_test_outbound_host_resolver(Arc::new({
+            let resolver = resolver.clone();
+            move |_host, _port| Some(vec![resolver.resolve_for_validation()])
+        }));
+    let _resolver_guard = install_test_dns_resolver(Arc::new(resolver.clone()));
+
+    let embedder = RestEmbedder::new(&config).expect("rest embedder should build");
+    let result = embedder.embed_query("hello").await;
+    assert!(
+        result.is_err(),
+        "safe behavior should block metadata rebound before outbound send"
+    );
+    assert_eq!(
+        resolver.call_count(),
+        1,
+        "safe behavior should avoid a post-validation resolver lookup"
+    );
+}
+
+/// Stage-1 red test: once validation has approved a hostname, the outbound
+/// OpenAI embedder request path must not re-resolve into loopback.
+#[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+async fn security_dns_rebind_openai_embedder_loopback_sink_not_contacted() {
+    let blocked_sink = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/embeddings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 1, "total_tokens": 1}
+        })))
+        .mount(&blocked_sink)
+        .await;
+    let blocked_port = blocked_sink.address().port();
+
+    let config = EmbedderConfig {
+        source: EmbedderSource::OpenAi,
+        api_key: Some("sk-test".into()),
+        url: Some(format!("http://vector-dns-rebind.test:{blocked_port}")),
+        ..Default::default()
+    };
+    config
+        .validate()
+        .expect("config validation should pass before outbound send");
+
+    let resolver = CountingRebindingResolver::new(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)), blocked_port),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), blocked_port),
+    );
+    let _validation_resolver_guard =
+        crate::security::test_helpers::install_test_outbound_host_resolver(Arc::new({
+            let resolver = resolver.clone();
+            move |_host, _port| Some(vec![resolver.resolve_for_validation()])
+        }));
+    let _resolver_guard = install_test_dns_resolver(Arc::new(resolver.clone()));
+
+    let embedder = OpenAiEmbedder::new(&config).expect("openai embedder should build");
+    let result = embedder.embed_query("hello").await;
+    assert!(
+        result.is_err(),
+        "safe behavior should reject rebound destination instead of contacting loopback sink"
+    );
+    assert_eq!(
+        resolver.call_count(),
+        1,
+        "safe behavior should avoid a post-validation resolver lookup"
+    );
+    let sink_requests = blocked_sink.received_requests().await.unwrap_or_default();
+    assert!(
+        sink_requests.is_empty(),
+        "loopback sink must not receive outbound OpenAI embedding requests"
+    );
+}
+
+/// Stage-1 red test: metadata rebinding must be blocked before OpenAI outbound send.
+#[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+async fn security_dns_rebind_openai_embedder_metadata_rebind_blocked_before_send() {
+    let config = EmbedderConfig {
+        source: EmbedderSource::OpenAi,
+        api_key: Some("sk-test".into()),
+        url: Some("http://vector-dns-rebind.test:8082".into()),
+        ..Default::default()
+    };
+    config
+        .validate()
+        .expect("config validation should pass before outbound send");
+
+    let resolver = CountingRebindingResolver::new(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)), 8082),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)), 8082),
+    );
+    let _validation_resolver_guard =
+        crate::security::test_helpers::install_test_outbound_host_resolver(Arc::new({
+            let resolver = resolver.clone();
+            move |_host, _port| Some(vec![resolver.resolve_for_validation()])
+        }));
+    let _resolver_guard = install_test_dns_resolver(Arc::new(resolver.clone()));
+
+    let embedder = OpenAiEmbedder::new(&config).expect("openai embedder should build");
+    let result = embedder.embed_query("hello").await;
+    assert!(
+        result.is_err(),
+        "safe behavior should block metadata rebound before outbound send"
+    );
+    assert_eq!(
+        resolver.call_count(),
+        1,
+        "safe behavior should avoid a post-validation resolver lookup"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+async fn security_rest_embedder_pins_to_vetted_resolution_addresses() {
+    let sink = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "embedding": [0.1, 0.2, 0.3]
+        })))
+        .mount(&sink)
+        .await;
+    let sink_port = sink.address().port();
+    let hostname = "vector-pin-rest.test";
+    let url = format!("http://{hostname}:{sink_port}/embed");
+    let _allow_local_guard = crate::security::test_helpers::AllowLocalUrlsGuard::set("1");
+    let _validation_resolver_guard =
+        crate::security::test_helpers::install_test_outbound_host_resolver(Arc::new({
+            let host = hostname.to_string();
+            move |lookup_host, lookup_port| {
+                if lookup_host == host && lookup_port == Some(sink_port) {
+                    return Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]);
+                }
+                None
+            }
+        }));
+
+    let config = EmbedderConfig {
+        source: EmbedderSource::Rest,
+        url: Some(url),
+        request: Some(serde_json::json!({"input": "{{text}}"})),
+        response: Some(serde_json::json!({"embedding": "{{embedding}}"})),
+        dimensions: Some(3),
+        ..Default::default()
+    };
+    config.validate().expect("validation should pass");
+
+    let embedder = RestEmbedder::new(&config).expect("embedder should build with pinned addresses");
+    let embedding = embedder
+        .embed_query("hello")
+        .await
+        .expect("request should use pinned localhost address");
+    assert_eq!(embedding, vec![0.1, 0.2, 0.3]);
+}
+
+#[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+async fn security_openai_embedder_pins_to_vetted_resolution_addresses() {
+    let sink = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/embeddings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.11, 0.22, 0.33], "index": 0}],
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 1, "total_tokens": 1}
+        })))
+        .mount(&sink)
+        .await;
+    let sink_port = sink.address().port();
+    let hostname = "vector-pin-openai.test";
+    let url = format!("http://{hostname}:{sink_port}");
+    let _allow_local_guard = crate::security::test_helpers::AllowLocalUrlsGuard::set("1");
+    let _validation_resolver_guard =
+        crate::security::test_helpers::install_test_outbound_host_resolver(Arc::new({
+            let host = hostname.to_string();
+            move |lookup_host, lookup_port| {
+                if lookup_host == host && lookup_port == Some(sink_port) {
+                    return Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]);
+                }
+                None
+            }
+        }));
+
+    let config = EmbedderConfig {
+        source: EmbedderSource::OpenAi,
+        api_key: Some("sk-test".into()),
+        url: Some(url),
+        ..Default::default()
+    };
+    config.validate().expect("validation should pass");
+
+    let embedder =
+        OpenAiEmbedder::new(&config).expect("embedder should build with pinned addresses");
+    let embedding = embedder
+        .embed_query("hello")
+        .await
+        .expect("request should use pinned localhost address");
+    assert_eq!(embedding, vec![0.11, 0.22, 0.33]);
 }
 
 // ── FastEmbedEmbedder tests (9.7) ──

@@ -744,7 +744,7 @@ fn search_request_facets_missing() {
 #[test]
 fn build_combined_filter_none_when_empty() {
     let req = SearchRequest::default();
-    assert!(req.build_combined_filter().is_none());
+    assert!(req.build_combined_filter().unwrap().is_none());
 }
 
 #[test]
@@ -753,7 +753,7 @@ fn build_combined_filter_filters_only() {
         filters: Some("brand:Nike".to_string()),
         ..Default::default()
     };
-    let f = req.build_combined_filter().unwrap();
+    let f = req.build_combined_filter().unwrap().unwrap();
     // Should be a single filter, not wrapped in And
     match f {
         flapjack::types::Filter::Equals { field, .. } => assert_eq!(field, "brand"),
@@ -767,7 +767,7 @@ fn build_combined_filter_facet_filters_only() {
         facet_filters: Some(serde_json::json!("color:Red")),
         ..Default::default()
     };
-    let f = req.build_combined_filter().unwrap();
+    let f = req.build_combined_filter().unwrap().unwrap();
     match f {
         flapjack::types::Filter::Equals { field, .. } => assert_eq!(field, "color"),
         _ => panic!("expected Equals from facet filter"),
@@ -781,7 +781,7 @@ fn build_combined_filter_combines_multiple_with_and() {
         facet_filters: Some(serde_json::json!("color:Red")),
         ..Default::default()
     };
-    let f = req.build_combined_filter().unwrap();
+    let f = req.build_combined_filter().unwrap().unwrap();
     match f {
         flapjack::types::Filter::And(parts) => assert_eq!(parts.len(), 2),
         _ => panic!("expected And when combining filters + facet_filters"),
@@ -796,7 +796,7 @@ fn build_combined_filter_all_three_types() {
         numeric_filters: Some(serde_json::json!("price>=10")),
         ..Default::default()
     };
-    let f = req.build_combined_filter().unwrap();
+    let f = req.build_combined_filter().unwrap().unwrap();
     match f {
         flapjack::types::Filter::And(parts) => assert_eq!(parts.len(), 3),
         _ => panic!("expected And with 3 parts"),
@@ -809,7 +809,7 @@ fn build_combined_filter_with_tag_filters() {
         tag_filters: Some(serde_json::json!("electronics")),
         ..Default::default()
     };
-    let f = req.build_combined_filter().unwrap();
+    let f = req.build_combined_filter().unwrap().unwrap();
     match f {
         flapjack::types::Filter::Equals { field, .. } => assert_eq!(field, "_tags"),
         _ => panic!("expected Equals from tag filter"),
@@ -817,15 +817,16 @@ fn build_combined_filter_with_tag_filters() {
 }
 
 #[test]
-fn build_combined_filter_invalid_filter_string_skipped() {
+fn build_combined_filter_invalid_filter_string_returns_error() {
     let req = SearchRequest {
         filters: Some(":::invalid:::".to_string()),
         facet_filters: Some(serde_json::json!("color:Red")),
         ..Default::default()
     };
-    // Invalid filters string should be skipped, facet filter should still work
-    let f = req.build_combined_filter();
-    assert!(f.is_some());
+    let err = req
+        .build_combined_filter()
+        .expect_err("invalid filter must be rejected");
+    assert!(err.to_string().contains("Filter parse error"));
 }
 
 // ── parse_numeric_filter_string edge cases ──

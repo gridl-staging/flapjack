@@ -50,8 +50,8 @@ Verified separately from the harnesses above:
 
 | Name | Type / Values | Default | Description |
 |---|---|---|---|
-| `FLAPJACK_NO_AUTH` | `1` to enable | disabled | Disables API-key auth; blocked in production. |
-| `FLAPJACK_ADMIN_KEY` | Non-empty string | auto-generated in local dev if missing | Admin API key source for auth bootstrap and rotation. |
+| `FLAPJACK_NO_AUTH` | `1` to enable | disabled | Explicit auth opt-out for local/dev bootstrap only; production startup rejects it fail-closed. |
+| `FLAPJACK_ADMIN_KEY` | Non-empty string (production requires length `>=16`) | required in production; auto-generated in local dev if missing | Admin API key source for auth bootstrap and rotation. |
 
 ## Logging / Observability
 
@@ -59,7 +59,7 @@ Verified separately from the harnesses above:
 |---|---|---|---|
 | `FLAPJACK_LOG_FORMAT` | `text` or `json` | `text` | Selects structured JSON logs or human-readable text logs. |
 | `RUST_LOG` | `tracing_subscriber` filter expression | `info` | Log level and target filtering. |
-| `FLAPJACK_ALLOWED_ORIGINS` | Comma-separated origin URLs | permissive mode | CORS allowlist. Empty or invalid entries fall back to permissive mode. |
+| `FLAPJACK_ALLOWED_ORIGINS` | Comma-separated origin URLs | loopback-only browser origins | CORS allowlist. Empty or invalid entries fall back to loopback-only mode (`localhost` / loopback IP origins); non-loopback browser origins require explicit allowlist configuration. |
 | `FLAPJACK_SHUTDOWN_TIMEOUT_SECS` | Positive integer seconds | `30` | Graceful shutdown drain timeout. |
 | `FLAPJACK_TRUSTED_PROXY_CIDRS` | Comma-separated CIDRs, or `off`/`none` | `127.0.0.0/8,::1/128` | Trusted proxy ranges for forwarded client IP handling. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/gRPC collector endpoint URL | unset | Enables OpenTelemetry trace export when the server is built with `--features otel`. |
@@ -112,6 +112,7 @@ Verified separately from the harnesses above:
 | `FLAPJACK_MEMORY_HIGH_WATERMARK` | Integer percent | `80` | Elevated pressure threshold. |
 | `FLAPJACK_MEMORY_CRITICAL` | Integer percent | `90` | Critical pressure threshold. |
 | `FLAPJACK_MEMORY_LIMIT_MB` | Integer MB | auto-detected | Explicit memory-limit override for pressure calculations. |
+| `FLAPJACK_IDEMPOTENCY_TTL_SECS` | Integer seconds | `300` | TTL for the per-node `X-Flapjack-Idempotency-Key` response cache. See [`OPERATIONS.md` — Idempotency contract](./OPERATIONS.md#idempotency-contract). Minimum effective value is `1`. |
 
 ## Email / Alerts
 

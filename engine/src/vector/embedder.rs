@@ -1,4 +1,8 @@
 use std::sync::OnceLock;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::time::Duration;
 
 use super::config::{EmbedderConfig, EmbedderSource};
 use super::VectorError;
@@ -67,7 +71,9 @@ impl RestEmbedder {
     /// Build an HTTP client from the embedder config, applying custom headers and
     /// extracting the endpoint URL, request/response templates, and dimensions.
     pub fn new(config: &EmbedderConfig) -> Result<Self, VectorError> {
-        config.validate()?;
+        // Keep constructor validation split: shape validation first, then a
+        // targeted security SSOT vet/pin pass for the long-lived HTTP client.
+        config.validate_required_fields()?;
         let mut client_builder = reqwest::Client::builder();
         let headers_map = config.headers.clone().unwrap_or_default();
 
@@ -82,9 +88,15 @@ impl RestEmbedder {
         }
         client_builder = client_builder.default_headers(header_map);
 
-        let client = client_builder.build().map_err(|e| {
-            VectorError::EmbeddingError(format!("failed to build HTTP client: {e}"))
-        })?;
+        // Construction-time pinning closes validate→send DNS TOCTOU for long-lived
+        // embedders by reusing the same vetted host/port/IP tuple from security SSOT.
+        let vetted_target = config
+            .url
+            .as_deref()
+            .map(|url| vet_embedder_outbound_target(url, "rest"))
+            .transpose()?
+            .flatten();
+        let client = build_embedder_http_client(client_builder, vetted_target.as_ref())?;
 
         Ok(Self {
             client,
@@ -397,7 +409,9 @@ impl OpenAiEmbedder {
     /// Initialize the OpenAI-compatible embedder, requiring an API key and model name
     /// from the config. Supports custom base URLs for Azure/proxy endpoints.
     pub fn new(config: &EmbedderConfig) -> Result<Self, VectorError> {
-        config.validate()?;
+        // Keep constructor validation split: shape validation first, then a
+        // targeted security SSOT vet/pin pass for the long-lived HTTP client.
+        config.validate_required_fields()?;
         let api_key = config
             .api_key
             .clone()
@@ -413,9 +427,14 @@ impl OpenAiEmbedder {
         // Strip trailing slash for consistent URL building
         let base_url = base_url.trim_end_matches('/').to_owned();
 
-        let client = reqwest::Client::builder().build().map_err(|e| {
-            VectorError::EmbeddingError(format!("failed to build HTTP client: {e}"))
-        })?;
+        let vetted_target = config
+            .url
+            .as_deref()
+            .map(|url| vet_embedder_outbound_target(url, "openAi"))
+            .transpose()?
+            .flatten();
+        let client =
+            build_embedder_http_client(reqwest::Client::builder(), vetted_target.as_ref())?;
 
         Ok(Self {
             client,
@@ -536,6 +555,129 @@ impl OpenAiEmbedder {
     pub fn source(&self) -> EmbedderSource {
         EmbedderSource::OpenAi
     }
+}
+
+fn vet_embedder_outbound_target(
+    raw_url: &str,
+    source: &str,
+) -> Result<Option<crate::security::VettedOutboundUrlTarget>, VectorError> {
+    match crate::security::vet_outbound_url_target(
+        raw_url,
+        crate::security::allow_local_outbound_urls(),
+    ) {
+        Ok(vetted_target) => Ok(vetted_target),
+        Err(error) => {
+            // Preserve pre-existing direct-constructor behavior for localhost-backed
+            // tests and callsites while still pinning any host that successfully vets.
+            // Policy rejection remains owned by intake/load validation boundaries.
+            if is_direct_constructor_localhost_or_private(raw_url) {
+                return Ok(None);
+            }
+            Err(VectorError::EmbeddingError(format!(
+                "{source} embedder URL {error}"
+            )))
+        }
+    }
+}
+
+fn is_direct_constructor_localhost_or_private(raw_url: &str) -> bool {
+    let parsed = match reqwest::Url::parse(raw_url) {
+        Ok(parsed) => parsed,
+        Err(_) => return false,
+    };
+    let host = match parsed.host_str() {
+        Some(host) => host,
+        None => return false,
+    };
+
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    let allow_local = crate::security::allow_local_outbound_urls();
+    matches!(
+        crate::security::first_blocked_outbound_host_ip(
+            host,
+            parsed.port_or_known_default(),
+            allow_local
+        ),
+        Some((_ip, "private or local destination"))
+    )
+}
+
+fn build_embedder_http_client(
+    mut client_builder: reqwest::ClientBuilder,
+    vetted_target: Option<&crate::security::VettedOutboundUrlTarget>,
+) -> Result<reqwest::Client, VectorError> {
+    // Keep the original URL host in request formatting/TLS SNI; only pin connect
+    // addresses from already-vetted resolution output.
+    if let Some(target) = vetted_target {
+        let addrs: Vec<std::net::SocketAddr> = target
+            .resolved_ips
+            .iter()
+            .map(|ip| std::net::SocketAddr::new(*ip, target.port.unwrap_or(0)))
+            .collect();
+        if !addrs.is_empty() {
+            client_builder = client_builder.resolve_to_addrs(&target.host, &addrs);
+        }
+    }
+    let client_builder = apply_test_dns_resolver(client_builder);
+    client_builder
+        .build()
+        .map_err(|e| VectorError::EmbeddingError(format!("failed to build HTTP client: {e}")))
+}
+
+#[cfg(test)]
+fn apply_test_dns_resolver(mut client_builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    if let Some(resolver) = take_test_dns_resolver() {
+        client_builder = client_builder
+            .dns_resolver2(resolver)
+            .connect_timeout(Duration::from_millis(250))
+            .timeout(Duration::from_millis(600));
+    }
+    client_builder
+}
+
+#[cfg(not(test))]
+fn apply_test_dns_resolver(client_builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    client_builder
+}
+
+#[cfg(test)]
+fn test_dns_resolver_slot() -> &'static Mutex<Option<Arc<dyn reqwest::dns::Resolve>>> {
+    static SLOT: OnceLock<Mutex<Option<Arc<dyn reqwest::dns::Resolve>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn take_test_dns_resolver() -> Option<Arc<dyn reqwest::dns::Resolve>> {
+    test_dns_resolver_slot()
+        .lock()
+        .expect("test DNS resolver slot mutex poisoned")
+        .clone()
+}
+
+#[cfg(test)]
+pub struct TestDnsResolverGuard {
+    previous: Option<Arc<dyn reqwest::dns::Resolve>>,
+}
+
+#[cfg(test)]
+impl Drop for TestDnsResolverGuard {
+    fn drop(&mut self) {
+        *test_dns_resolver_slot()
+            .lock()
+            .expect("test DNS resolver slot mutex poisoned") = self.previous.take();
+    }
+}
+
+#[cfg(test)]
+pub fn install_test_dns_resolver(resolver: Arc<dyn reqwest::dns::Resolve>) -> TestDnsResolverGuard {
+    let mut slot = test_dns_resolver_slot()
+        .lock()
+        .expect("test DNS resolver slot mutex poisoned");
+    let previous = slot.replace(resolver);
+    TestDnsResolverGuard { previous }
 }
 
 // ── FastEmbedEmbedder ──
@@ -720,9 +862,12 @@ impl Embedder {
     }
 }
 
-/// Factory: validate config and create the appropriate embedder variant.
+/// Factory: validate required fields and create the appropriate embedder
+/// variant. URL-policy ownership remains in `EmbedderConfig::validate`; REST
+/// and OpenAI constructors do a narrow `vet_outbound_url_target` pass to pin
+/// connect addresses for long-lived clients without persisting derived state.
 pub fn create_embedder(config: &EmbedderConfig) -> Result<Embedder, VectorError> {
-    config.validate()?;
+    config.validate_required_fields()?;
     match config.source {
         EmbedderSource::UserProvided => {
             let dims = config.dimensions.unwrap_or(0);

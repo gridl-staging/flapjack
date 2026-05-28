@@ -194,7 +194,7 @@ Algolia-compatible REST API under `/1/` — works with InstantSearch.js v5, the 
 | S3 backup/restore | ✅ | N/A | ❌ | ❌ | Snapshots | Snapshots |
 | Dashboard UI | ✅ | ✅ | ✅ | Cloud only | Kibana | Dashboards |
 | Embeddable as library | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| HA / clustering | 🟡 (executed with findings) | ✅ | Cloud only | ✅ | ✅ | ✅ |
+| HA / clustering | 🟡 (bounded convergence)† | ✅ | Cloud only | ✅ | ✅ | ✅ |
 | Multi-language | 30 languages + CJK tokenization | 60+ | Many | Many | Many | Many |
 | Vector / semantic search | ✅* | ✅ | ✅ | ✅ | ✅ | ✅ |
 | AI search (RAG) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -206,16 +206,19 @@ Algolia-compatible REST API under `/1/` — works with InstantSearch.js v5, the 
 
 * Flapjack vector and hybrid search are available in macOS pre-built binaries, Docker images, and source builds. Pre-built Linux musl (`x86_64`/`aarch64`) and Windows (`x86_64`) binaries ship without vector support. Check runtime capability with `GET /health` → `capabilities.vectorSearch`.
 
+† HA / clustering replication converges to a bounded steady-state spread (a small residual count difference) rather than exact per-node equality under sustained rolling restarts; the residual reflects nginx restart-window write loss and is tracked as roadmap **PL-8**. Canonical evidence and interpretation: [`engine/loadtest/BENCHMARKS.md`](engine/loadtest/BENCHMARKS.md) (HA Soak Proof).
+
 ---
 
 ## Deployment
 
 ```bash
-cargo build --release
+cd engine
+cargo build -p flapjack-server --release
 ./target/release/flapjack
 ```
 
-Requires stable Rust. Pre-built binaries for Linux x86_64 (static musl), Linux ARM64, macOS Intel, macOS Apple Silicon, and Windows x86_64 are available on the [releases page](https://github.com/gridl-staging/flapjack/releases/latest). Vector search is included in macOS pre-built binaries, Docker images, and source builds; pre-built Linux musl and Windows binaries ship without vector support (build from source or use Docker when vector search is required).
+Requires stable Rust. The Rust workspace lives under `engine/`. Pre-built binaries for Linux x86_64 (static musl), Linux ARM64, macOS Intel, macOS Apple Silicon, and Windows x86_64 are available on the [releases page](https://github.com/gridl-staging/flapjack/releases/latest). Vector search is included in macOS pre-built binaries, Docker images, and source builds; pre-built Linux musl and Windows binaries ship without vector support (build from source or use Docker when vector search is required).
 
 ### Single Node
 
@@ -306,7 +309,7 @@ Verified examples:
 ## API Documentation
 
 - [Online API docs](https://flapjack-demo.pages.dev/api-docs)
-- [Swagger UI](http://localhost:7700/swagger-ui/) (local)
+- [Swagger UI](http://localhost:7700/swagger-ui) (local)
 
 ---
 
@@ -316,7 +319,7 @@ Flapjack's core can be embedded directly:
 
 ```toml
 [dependencies]
-flapjack = { version = "0.1", default-features = false }
+flapjack = { version = "1.0", default-features = false }
 ```
 
 See [LIB.md](engine/LIB.md) for the embedding guide.
@@ -325,14 +328,15 @@ See [LIB.md](engine/LIB.md) for the embedding guide.
 
 ## Architecture
 
-Built on [Tantivy](https://github.com/quickwit-oss/tantivy) with a pinned fork for edge-ngram prefix search. Axum + Tokio HTTP server.
+Built on [Tantivy](https://github.com/quickwit-oss/tantivy) with a pinned fork for edge-ngram prefix search. The Rust workspace lives under `engine/`.
 
 ```
-flapjack/              # Core library (search, indexing, query execution)
-flapjack-http/         # HTTP server (Axum handlers, routing)
-flapjack-replication/  # Cluster coordination
-flapjack-ssl/          # TLS (Let's Encrypt, ACME)
-flapjack-server/  # Binary entrypoint
+engine/src/                   # Core library (search, indexing, query execution)
+engine/flapjack-http/         # HTTP server (Axum handlers, routing)
+engine/flapjack-replication/  # Cluster coordination
+engine/flapjack-ssl/          # TLS (Let's Encrypt, ACME)
+engine/flapjack-server/       # Binary entrypoint
+engine/dashboard/             # Built-in dashboard UI
 ```
 
 ---
@@ -340,15 +344,18 @@ flapjack-server/  # Binary entrypoint
 ## Development
 
 ```bash
+cd engine
 cargo install cargo-nextest
-cargo nextest run
+./s/test
 ```
+
+See [`engine/README.md`](engine/README.md) for the full workspace map, focused test commands, and multi-instance local-development flow.
 
 ---
 
 ## Dashboard Screenshots
 
-Flapjack includes a built-in dashboard UI served at `http://localhost:7700` when the server is running.
+Flapjack includes a built-in dashboard UI served at `http://localhost:7700/dashboard` when the server is running.
 
 <img src="engine/dashboard/img/dash_overview.png" width="600" />
 

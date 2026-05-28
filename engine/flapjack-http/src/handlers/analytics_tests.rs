@@ -1649,3 +1649,242 @@ mod stage_b_contract_parity_tests {
         assert_eq!(keys, expected, "conversionRate unexpected fields");
     }
 }
+
+mod stage3_rollup_http_parity_tests {
+    use super::*;
+    use flapjack::analytics::writer::flush_rollup_window;
+
+    const FIXTURE_INDEX: &str = "products";
+    const FIXTURE_DATE: &str = "2025-06-15";
+    const HOUR_MS: i64 = 3_600_000;
+    const DAY_MS: i64 = 86_400_000;
+
+    struct TestAppFixture {
+        _tmp: TempDir,
+        app: Router,
+    }
+
+    fn fixture_day_start_ms() -> i64 {
+        chrono::NaiveDate::from_ymd_opt(2025, 6, 15)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis()
+    }
+
+    fn fixture_search_event(
+        query: &str,
+        nb_hits: u32,
+        has_results: bool,
+        timestamp_ms: i64,
+        user_token: &str,
+    ) -> SearchEvent {
+        SearchEvent {
+            timestamp_ms,
+            query: query.to_string(),
+            query_id: None,
+            index_name: FIXTURE_INDEX.to_string(),
+            nb_hits,
+            processing_time_ms: 5,
+            user_token: Some(user_token.to_string()),
+            user_ip: None,
+            filters: None,
+            facets: None,
+            analytics_tags: None,
+            page: 0,
+            hits_per_page: 20,
+            has_results,
+            country: None,
+            region: None,
+            experiment_id: None,
+            variant_id: None,
+            assignment_method: None,
+        }
+    }
+
+    fn seed_known_answer_daily_dataset(config: &AnalyticsConfig) {
+        let collector = AnalyticsCollector::new(config.clone());
+        let base_ts = fixture_day_start_ms() + 12 * HOUR_MS;
+
+        let events = vec![
+            fixture_search_event("laptop", 10, true, base_ts, "user-a"),
+            fixture_search_event("laptop", 50, true, base_ts + 1_000, "user-b"),
+            fixture_search_event("laptop", 60, true, base_ts + 2_000, "user-c"),
+            fixture_search_event("phone", 100, true, base_ts + 3_000, "user-a"),
+            fixture_search_event("phone", 200, true, base_ts + 4_000, "user-b"),
+            fixture_search_event("xyzzy", 0, false, base_ts + 5_000, "user-a"),
+            fixture_search_event("zzznothing", 0, false, base_ts + 6_000, "user-d"),
+        ];
+
+        for event in events {
+            collector.record_search(event);
+        }
+        collector.flush_all();
+    }
+
+    fn flush_daily_rollup(config: &AnalyticsConfig) {
+        let day_start = fixture_day_start_ms();
+        for offset in 0..24 {
+            let window_start = day_start + offset * HOUR_MS;
+            let window_end = window_start + HOUR_MS;
+            flush_rollup_window(config, FIXTURE_INDEX, "1hour", window_start, window_end)
+                .expect("hourly rollup flush");
+        }
+        flush_rollup_window(config, FIXTURE_INDEX, "1day", day_start, day_start + DAY_MS)
+            .expect("daily rollup flush");
+    }
+
+    fn build_test_app(remove_raw_searches: bool) -> TestAppFixture {
+        let tmp = TempDir::new().unwrap();
+        let config = test_analytics_config(&tmp);
+        seed_known_answer_daily_dataset(&config);
+        flush_daily_rollup(&config);
+
+        if remove_raw_searches {
+            let searches_dir = config.searches_dir(FIXTURE_INDEX);
+            if searches_dir.exists() {
+                std::fs::remove_dir_all(&searches_dir).unwrap();
+            }
+        }
+
+        let app = Router::new()
+            .route("/2/searches", get(get_top_searches))
+            .route("/2/searches/count", get(get_search_count))
+            .route("/2/users/count", get(get_users_count))
+            .with_state(Arc::new(AnalyticsQueryEngine::new(config)));
+
+        TestAppFixture { _tmp: tmp, app }
+    }
+
+    async fn request_bytes(app: &Router, uri: &str, local_only: bool) -> (StatusCode, Vec<u8>) {
+        let mut request = Request::builder().method(Method::GET).uri(uri);
+        if local_only {
+            request = request.header("X-Flapjack-Local-Only", "1");
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, body)
+    }
+
+    fn assert_count_within_two_percent(raw_count: i64, rollup_count: i64) {
+        let tolerance = ((raw_count as f64) * 0.02).ceil() as i64;
+        let delta = (raw_count - rollup_count).abs();
+        assert!(
+            delta <= tolerance,
+            "rollup count drift {} exceeds allowed tolerance {} (raw={}, rollup={})",
+            delta,
+            tolerance,
+            raw_count,
+            rollup_count
+        );
+    }
+
+    #[tokio::test]
+    async fn rollup_top_searches_and_search_count_payload_parity() {
+        let raw_fixture = build_test_app(false);
+        let rollup_fixture = build_test_app(true);
+        let query =
+            format!("?index={FIXTURE_INDEX}&startDate={FIXTURE_DATE}&endDate={FIXTURE_DATE}");
+
+        let (raw_status, raw_searches) =
+            request_bytes(&raw_fixture.app, &format!("/2/searches{query}"), false).await;
+        let (rollup_status, rollup_searches) =
+            request_bytes(&rollup_fixture.app, &format!("/2/searches{query}"), false).await;
+        assert_eq!(raw_status, StatusCode::OK);
+        assert_eq!(rollup_status, StatusCode::OK);
+        assert_eq!(
+            rollup_searches, raw_searches,
+            "rollup-backed /2/searches response must be byte-equal to raw-backed response"
+        );
+
+        let (raw_status, raw_count) = request_bytes(
+            &raw_fixture.app,
+            &format!("/2/searches/count{query}"),
+            false,
+        )
+        .await;
+        let (rollup_status, rollup_count) = request_bytes(
+            &rollup_fixture.app,
+            &format!("/2/searches/count{query}"),
+            false,
+        )
+        .await;
+        assert_eq!(raw_status, StatusCode::OK);
+        assert_eq!(rollup_status, StatusCode::OK);
+        assert_eq!(
+            rollup_count, raw_count,
+            "rollup-backed /2/searches/count response must be byte-equal to raw-backed response"
+        );
+    }
+
+    #[tokio::test]
+    async fn rollup_users_count_contract_parity_and_header_modes() {
+        let raw_fixture = build_test_app(false);
+        let rollup_fixture = build_test_app(true);
+        let uri = format!(
+            "/2/users/count?index={FIXTURE_INDEX}&startDate={FIXTURE_DATE}&endDate={FIXTURE_DATE}"
+        );
+
+        // Public contract (no local-only header): allow <=2% drift on count, but
+        // all other public fields must be identical and internal sketch fields must
+        // stay stripped.
+        let (raw_status, raw_public_bytes) = request_bytes(&raw_fixture.app, &uri, false).await;
+        let (rollup_status, rollup_public_bytes) =
+            request_bytes(&rollup_fixture.app, &uri, false).await;
+        assert_eq!(raw_status, StatusCode::OK);
+        assert_eq!(rollup_status, StatusCode::OK);
+
+        let raw_public: serde_json::Value = serde_json::from_slice(&raw_public_bytes).unwrap();
+        let rollup_public: serde_json::Value =
+            serde_json::from_slice(&rollup_public_bytes).unwrap();
+
+        let raw_count = raw_public["count"].as_i64().unwrap();
+        let rollup_count = rollup_public["count"].as_i64().unwrap();
+        assert_count_within_two_percent(raw_count, rollup_count);
+
+        assert!(raw_public.get("hll_sketch").is_none());
+        assert!(raw_public.get("daily_sketches").is_none());
+        assert!(rollup_public.get("hll_sketch").is_none());
+        assert!(rollup_public.get("daily_sketches").is_none());
+
+        let mut raw_without_count = raw_public.clone();
+        let mut rollup_without_count = rollup_public.clone();
+        raw_without_count.as_object_mut().unwrap().remove("count");
+        rollup_without_count
+            .as_object_mut()
+            .unwrap()
+            .remove("count");
+        assert_eq!(
+            rollup_without_count, raw_without_count,
+            "public /2/users/count payload must match aside from allowed count drift"
+        );
+
+        // Local-only mode (cluster merge path): sketch fields must remain present
+        // and match across raw-backed and rollup-only backends.
+        let (raw_status, raw_local_bytes) = request_bytes(&raw_fixture.app, &uri, true).await;
+        let (rollup_status, rollup_local_bytes) =
+            request_bytes(&rollup_fixture.app, &uri, true).await;
+        assert_eq!(raw_status, StatusCode::OK);
+        assert_eq!(rollup_status, StatusCode::OK);
+
+        let raw_local: serde_json::Value = serde_json::from_slice(&raw_local_bytes).unwrap();
+        let rollup_local: serde_json::Value = serde_json::from_slice(&rollup_local_bytes).unwrap();
+        assert!(raw_local.get("hll_sketch").is_some());
+        assert!(raw_local.get("daily_sketches").is_some());
+        assert!(rollup_local.get("hll_sketch").is_some());
+        assert!(rollup_local.get("daily_sketches").is_some());
+        assert_eq!(
+            rollup_local, raw_local,
+            "local-only /2/users/count payload must be identical across raw and rollup backends"
+        );
+    }
+}

@@ -5,6 +5,8 @@
   "scripts": {
     "test": "node test.js",
     "test:contract": "node contract_tests.js",
+    "test:stage5": "node stage5_algolia_compat.js",
+    "test:algolia_compat_broader": "node algolia_compat_broader.js",
     "test:compat": "node full_compat_tests.js",
     "test:instantsearch": "node instantsearch_contract_tests.js",
     "test:widgets": "node instantsearch_contract_tests.js",

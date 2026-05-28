@@ -16,12 +16,18 @@ use self::payload_merge::{log_embedder_changes, merge_settings_payload};
 use self::replica_forwarding::forward_settings_to_replicas;
 use super::replicas::{
     clear_removed_replica_primary_links, is_virtual_settings_only_index,
-    persist_replica_primary_links,
+    persist_replica_primary_links, standard_replicas_for_primary,
 };
 use super::AppState;
 use crate::error_response::HandlerError;
 use crate::extractors::ValidatedIndexName;
-use flapjack::index::settings::{IndexMode, IndexSettings, SemanticSearchSettings};
+use flapjack::index::{
+    settings::{IndexMode, IndexSettings, SemanticSearchSettings},
+    SearchOptions,
+};
+
+const FACET_REINDEX_SCAN_PAGE_SIZE: usize = 1000;
+const FACET_REINDEX_WRITE_BATCH_SIZE: usize = 250;
 
 /// Deserializable payload for the `POST /1/indexes/{indexName}/settings` endpoint.
 ///
@@ -215,6 +221,94 @@ fn unsupported_settings_params(payload: &SetSettingsRequest) -> Vec<String> {
     unsupported
 }
 
+fn faceting_configuration_changed(
+    previous_settings: &IndexSettings,
+    next_settings: &IndexSettings,
+) -> bool {
+    previous_settings.attributes_for_faceting != next_settings.attributes_for_faceting
+}
+
+/// TODO: Document collect_index_documents.
+fn collect_index_document_ids(
+    state: &Arc<AppState>,
+    index_name: &str,
+) -> Result<Vec<String>, HandlerError> {
+    let mut object_ids = Vec::new();
+    let mut offset = 0usize;
+
+    loop {
+        let result = state
+            .manager
+            .search_with_options(
+                index_name,
+                "",
+                &SearchOptions {
+                    limit: FACET_REINDEX_SCAN_PAGE_SIZE,
+                    offset,
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| HandlerError::from(error.to_string()))?;
+
+        if result.documents.is_empty() {
+            break;
+        }
+
+        offset += result.documents.len();
+        object_ids.extend(
+            result
+                .documents
+                .into_iter()
+                .map(|scored| scored.document.id),
+        );
+
+        if offset >= result.total {
+            break;
+        }
+    }
+
+    Ok(object_ids)
+}
+
+async fn rebuild_documents_for_updated_faceting(
+    state: &Arc<AppState>,
+    index_name: &str,
+) -> Result<(), HandlerError> {
+    // Snapshot object IDs first, then reload documents in bounded batches so a
+    // settings update cannot buffer the full index payload in request memory.
+    let object_ids = collect_index_document_ids(state, index_name)?;
+    if object_ids.is_empty() {
+        return Ok(());
+    }
+
+    for object_id_batch in object_ids.chunks(FACET_REINDEX_WRITE_BATCH_SIZE) {
+        let mut documents = Vec::with_capacity(object_id_batch.len());
+        for object_id in object_id_batch {
+            // A concurrent delete can remove a document after the ID snapshot
+            // but before the rebuild pass; skipping it keeps the rebuild safe.
+            if let Some(document) = state
+                .manager
+                .get_document(index_name, object_id)
+                .map_err(|error| HandlerError::from(error.to_string()))?
+            {
+                documents.push(document);
+            }
+        }
+
+        if documents.is_empty() {
+            continue;
+        }
+
+        state
+            .manager
+            .add_documents_sync(index_name, documents)
+            .await
+            .map_err(|error| HandlerError::from(error.to_string()))?;
+    }
+
+    Ok(())
+}
+
 /// Parse an optional boolean query parameter, defaulting to `false` when absent.
 pub(super) fn parse_bool_query_param(
     query_params: &HashMap<String, String>,
@@ -288,6 +382,7 @@ pub async fn set_settings(
         .validate_embedders()
         .map_err(HandlerError::bad_request)?;
     log_embedder_changes(&old_embedders, &settings);
+    let faceting_changed = faceting_configuration_changed(&previous_settings, &settings);
 
     save_settings(&settings, &settings_path)?;
     state.manager.invalidate_settings_cache(&index_name);
@@ -313,6 +408,18 @@ pub async fn set_settings(
             query_languages_provided,
         )
         .map_err(|error| HandlerError::from(error.to_string()))?;
+    }
+
+    if faceting_changed && !is_virtual_settings_only {
+        rebuild_documents_for_updated_faceting(&state, &index_name).await?;
+
+        if forward_to_replicas {
+            for replica_name in standard_replicas_for_primary(&state, &index_name)
+                .map_err(|error| HandlerError::from(error.to_string()))?
+            {
+                rebuild_documents_for_updated_faceting(&state, &replica_name).await?;
+            }
+        }
     }
 
     #[cfg(feature = "vector-search")]

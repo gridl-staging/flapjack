@@ -198,6 +198,37 @@ async fn internal_replication_routes_remain_available_when_auth_disabled() {
         StatusCode::OK,
         "no-auth mode must still expose /internal/cluster/status for HA checks"
     );
+
+    // Route-availability probe: malformed tenant IDs must reach handler validation
+    // (400) instead of falling through the router (404).
+    let malformed_ops = send_empty_request(
+        &app,
+        Method::GET,
+        "/internal/ops?tenant_id=../evil&since_seq=0",
+    )
+    .await;
+    assert_eq!(
+        malformed_ops.status(),
+        StatusCode::BAD_REQUEST,
+        "no-auth mode must expose /internal/ops for peer catch-up"
+    );
+
+    let malformed_replicate = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/internal/replicate")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"tenant_id":"../evil","ops":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        malformed_replicate.status(),
+        StatusCode::BAD_REQUEST,
+        "no-auth mode must expose /internal/replicate for peer replication writes"
+    );
 }
 #[tokio::test]
 async fn internal_storage_returns_403_with_admin_key_only_no_app_id() {

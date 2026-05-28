@@ -4,18 +4,62 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 0.1.0)'
+        description: "Release version (e.g. 0.1.0)"
         required: true
 
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate_release_version:
+    name: Validate requested release version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify requested version matches checked-in release files
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The workflow input is reused in Cargo, changelog, git tag, and Docker
+          # tag contexts. Keep it to a literal semver-like subset that those
+          # systems all accept so metacharacters cannot weaken the validation
+          # gate or produce unsafe release identifiers.
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "ERROR: version must match MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-prerelease" >&2
+            exit 1
+          fi
+
+          cargo_files=(
+            engine/Cargo.toml
+            engine/flapjack-http/Cargo.toml
+            engine/flapjack-replication/Cargo.toml
+            engine/flapjack-server/Cargo.toml
+            engine/flapjack-ssl/Cargo.toml
+          )
+
+          for cargo_file in "${cargo_files[@]}"; do
+            if ! grep -Fxq "version = \"$VERSION\"" "$cargo_file"; then
+              echo "ERROR: $cargo_file does not declare version ${VERSION}" >&2
+              exit 1
+            fi
+          done
+
+          if ! grep -Fq "## [${VERSION}] - " CHANGELOG.md; then
+            echo "ERROR: CHANGELOG.md is missing the ${VERSION} release heading" >&2
+            exit 1
+          fi
+
   build:
+    needs: validate_release_version
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     defaults:
@@ -28,11 +72,11 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             use_cross: true
-            features: ""  # usearch/simsimd x86_64-musl cross toolchain incompatibility
+            features: "" # usearch/simsimd x86_64-musl cross toolchain incompatibility
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             use_cross: true
-            features: ""  # usearch/simsimd aarch64-musl toolchain incompatibility
+            features: "" # usearch/simsimd aarch64-musl toolchain incompatibility
           - target: x86_64-apple-darwin
             os: macos-15-intel
             use_cross: false
@@ -44,7 +88,7 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             use_cross: false
-            features: ""  # usearch POSIX bug (unum-cloud/usearch#715)
+            features: "" # usearch POSIX bug (unum-cloud/usearch#715)
 
     steps:
       - uses: actions/checkout@v4
@@ -74,14 +118,14 @@ jobs:
 
       - name: Build (native)
         if: "!matrix.use_cross"
-        run: cargo build --release --target ${{ matrix.target }} --package flapjack-server ${{ matrix.features != '' && format('--features {0}', matrix.features) || '' }}
+        run: cargo build --release --target ${{ matrix.target }} --package flapjack-server --no-default-features ${{ matrix.features != '' && format('--features {0}', matrix.features) || '' }}
 
       - name: Build (cross)
         if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }} --package flapjack-server ${{ matrix.features != '' && format('--features {0}', matrix.features) || '' }}
+        run: cross build --release --target ${{ matrix.target }} --package flapjack-server --no-default-features ${{ matrix.features != '' && format('--features {0}', matrix.features) || '' }}
 
       - name: Package (Unix)
-        if: runner.os != 'Windows'
+        if: ${{ runner.os != 'Windows' }}
         shell: bash
         run: |
           mkdir -p staging
@@ -92,7 +136,7 @@ jobs:
           shasum -a 256 flapjack-${{ matrix.target }}.tar.gz > flapjack-${{ matrix.target }}.tar.gz.sha256
 
       - name: Package (Windows)
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' }}
         shell: bash
         run: |
           mkdir -p staging
@@ -125,8 +169,20 @@ jobs:
         env:
           VERSION: ${{ github.event.inputs.version }}
         run: |
-          git tag "v${VERSION}"
-          git push origin "v${VERSION}"
+          # Idempotent on purpose: release.yml creates the tag here, BEFORE the
+          # Docker promotion jobs run. A run that fails or stalls in the Docker
+          # phase therefore leaves v${VERSION} already published. Re-dispatching
+          # the workflow to finish that partial release must NOT abort at tag
+          # creation, or a half-published release could never be completed via a
+          # clean retry. If the tag already exists on origin, leave it in place
+          # (the release/assets are anchored to it) and continue to the Docker
+          # promotion jobs.
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists on origin; leaving it in place and continuing."
+          else
+            git tag "v${VERSION}"
+            git push origin "v${VERSION}"
+          fi
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -139,10 +195,42 @@ jobs:
             flapjack-*.zip
             flapjack-*.zip.sha256
 
-  docker:
-    name: Docker image
+  docker_prepare:
+    name: Docker tag source
     needs: release
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.tags.outputs.image }}
+      version_tag: ${{ steps.tags.outputs.version_tag }}
+      latest_tag: ${{ steps.tags.outputs.latest_tag }}
+      amd64_candidate_tag: ${{ steps.tags.outputs.amd64_candidate_tag }}
+      arm64_candidate_tag: ${{ steps.tags.outputs.arm64_candidate_tag }}
+      candidate_manifest_tag: ${{ steps.tags.outputs.candidate_manifest_tag }}
+    steps:
+      - name: Resolve canonical Docker tags
+        id: tags
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          image="ghcr.io/gridl-staging/flapjack"
+          version_tag="${image}:${VERSION}"
+          latest_tag="${image}:latest"
+          amd64_candidate_tag="${image}:${VERSION}-linux-amd64"
+          arm64_candidate_tag="${image}:${VERSION}-linux-arm64"
+          candidate_manifest_tag="${image}:${VERSION}-candidate"
+
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "version_tag=${version_tag}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+          echo "amd64_candidate_tag=${amd64_candidate_tag}" >> "$GITHUB_OUTPUT"
+          echo "arm64_candidate_tag=${arm64_candidate_tag}" >> "$GITHUB_OUTPUT"
+          echo "candidate_manifest_tag=${candidate_manifest_tag}" >> "$GITHUB_OUTPUT"
+
+  docker_build_amd64:
+    name: Docker build linux/amd64
+    needs: docker_prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -154,20 +242,150 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ghcr.io/gridl-staging/flapjack
-          tags: |
-            type=raw,value=${{ github.event.inputs.version }}
-            type=raw,value=latest
-
-      - uses: docker/build-push-action@v6
+      - name: Build and publish amd64 candidate image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: engine/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
+          tags: ${{ needs.docker_prepare.outputs.amd64_candidate_tag }}
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  docker_build_arm64_native:
+    name: Docker build linux/arm64 (native)
+    if: ${{ vars.ARM64_NATIVE_RUNNER != '' }}
+    needs: docker_prepare
+    runs-on: ${{ vars.ARM64_NATIVE_RUNNER }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish arm64 candidate image (native runner)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: engine/Dockerfile
+          push: true
+          platforms: linux/arm64
+          tags: ${{ needs.docker_prepare.outputs.arm64_candidate_tag }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker_build_arm64_qemu:
+    name: Docker build linux/arm64 (qemu fallback)
+    if: ${{ vars.ARM64_NATIVE_RUNNER == '' }}
+    needs: docker_prepare
+    runs-on: ubuntu-latest
+    # QEMU emulates the entire arm64 Rust compile and is an order of magnitude
+    # slower than a native runner; without a hard cap a stalled emulated build
+    # hangs the whole release pipeline indefinitely (it did, repeatedly). Cap it
+    # so a stuck build fails fast and surfaces instead of polling forever. Prefer
+    # the native lane: set repo var ARM64_NATIVE_RUNNER (e.g. ubuntu-24.04-arm,
+    # free on public repos) to skip this QEMU path entirely.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish arm64 candidate image (qemu fallback)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: engine/Dockerfile
+          push: true
+          platforms: linux/arm64
+          tags: ${{ needs.docker_prepare.outputs.arm64_candidate_tag }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker_manifest_verify:
+    name: Verify candidate multi-arch manifest
+    needs:
+      - docker_prepare
+      - docker_build_amd64
+      - docker_build_arm64_native
+      - docker_build_arm64_qemu
+    if: ${{ always() && needs.docker_build_amd64.result == 'success' && (needs.docker_build_arm64_native.result == 'success' || needs.docker_build_arm64_qemu.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble candidate manifest from arch tags
+        run: |
+          docker buildx imagetools create \
+            -t "${{ needs.docker_prepare.outputs.candidate_manifest_tag }}" \
+            "${{ needs.docker_prepare.outputs.amd64_candidate_tag }}" \
+            "${{ needs.docker_prepare.outputs.arm64_candidate_tag }}"
+
+      - name: Verify candidate manifest includes required linux architectures
+        run: |
+          set -euo pipefail
+          inspect_output="$(docker buildx imagetools inspect "${{ needs.docker_prepare.outputs.candidate_manifest_tag }}")"
+          printf '%s\n' "$inspect_output"
+          echo "$inspect_output" | grep -q "linux/amd64"
+          echo "$inspect_output" | grep -q "linux/arm64"
+
+  docker_promote_stable:
+    name: Promote verified manifest to stable tags
+    needs:
+      - docker_prepare
+      - docker_manifest_verify
+    # docker_manifest_verify guards itself with `always()` so it can run when the
+    # unused arm64 lane (native OR qemu — one is always skipped) is skipped. That
+    # skipped sibling otherwise transitively propagates a skip to THIS job's
+    # implicit success() gate, silently skipping stable-tag promotion. That bug
+    # bit run 26349967086: the multi-arch candidate was built and verified, but
+    # :version/:latest were never published because this job was skipped. Mirror
+    # the explicit guard: promote whenever verification actually succeeded.
+    # (always() breaks the skip propagation; the result check keeps us from
+    # promoting an unverified manifest.)
+    if: ${{ always() && needs.docker_manifest_verify.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish stable release tags from verified manifest
+        run: |
+          docker buildx imagetools create \
+            -t "${{ needs.docker_prepare.outputs.version_tag }}" \
+            -t "${{ needs.docker_prepare.outputs.latest_tag }}" \
+            "${{ needs.docker_prepare.outputs.candidate_manifest_tag }}"

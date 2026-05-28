@@ -8,9 +8,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use flapjack::error::FlapjackError;
 use flapjack::index::s3::S3Config;
 use flapjack::index::snapshot::export_to_bytes;
 use std::{path::PathBuf, sync::Arc};
+
+const SNAPSHOT_EXPORT_MAX_ATTEMPTS: usize = 3;
 
 fn s3_config_or_error(message: &'static str) -> Result<S3Config, Box<Response>> {
     S3Config::from_env().ok_or_else(|| {
@@ -32,6 +35,33 @@ fn index_path_or_404(state: &AppState, index_name: &str) -> Result<PathBuf, Box<
 fn internal_error(prefix: &str, error: impl std::fmt::Display) -> Response {
     tracing::error!("{prefix}: {error}");
     json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+}
+
+fn should_retry_export_error(error: &FlapjackError) -> bool {
+    matches!(error, FlapjackError::Io(_))
+}
+
+fn export_with_retry(
+    mut export_once: impl FnMut() -> Result<Vec<u8>, FlapjackError>,
+) -> Result<Vec<u8>, FlapjackError> {
+    let mut attempt = 1usize;
+    loop {
+        match export_once() {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => {
+                if attempt >= SNAPSHOT_EXPORT_MAX_ATTEMPTS || !should_retry_export_error(&error) {
+                    return Err(error);
+                }
+                tracing::warn!(
+                    attempt,
+                    max_attempts = SNAPSHOT_EXPORT_MAX_ATTEMPTS,
+                    error = %error,
+                    "Transient snapshot export failed; retrying"
+                );
+                attempt += 1;
+            }
+        }
+    }
 }
 
 fn snapshot_retention() -> usize {
@@ -113,7 +143,7 @@ pub async fn export_snapshot(
         Err(response) => return *response,
     };
 
-    match export_to_bytes(&index_path) {
+    match export_with_retry(|| export_to_bytes(&index_path)) {
         Ok(bytes) => {
             let headers = [
                 ("Content-Type", "application/gzip"),
@@ -301,6 +331,7 @@ mod tests {
     };
     use flapjack::index::snapshot::export_to_bytes;
     use flapjack::types::{Document, FieldValue};
+    use flapjack::FlapjackError;
     use std::collections::HashMap;
     use tempfile::TempDir;
     use tower::ServiceExt;
@@ -461,5 +492,36 @@ mod tests {
             "snapshots/products/20260329T120000Z.tar.gz"
         )
         .is_ok());
+    }
+
+    #[test]
+    fn export_with_retry_retries_transient_io_errors() {
+        let mut attempts = 0usize;
+        let bytes = super::export_with_retry(|| {
+            attempts += 1;
+            if attempts < 3 {
+                Err(FlapjackError::Io("transient".to_string()))
+            } else {
+                Ok(vec![1, 2, 3])
+            }
+        })
+        .expect("third attempt should succeed");
+        assert_eq!(bytes, vec![1, 2, 3]);
+        assert_eq!(attempts, 3, "must retry transient IO errors");
+    }
+
+    #[test]
+    fn export_with_retry_does_not_retry_non_io_errors() {
+        let mut attempts = 0usize;
+        let error = super::export_with_retry(|| {
+            attempts += 1;
+            Err(FlapjackError::Config("not transient".to_string()))
+        })
+        .expect_err("non-IO errors should fail immediately");
+        assert!(matches!(error, FlapjackError::Config(_)));
+        assert_eq!(
+            attempts, 1,
+            "non-IO errors should not be retried because they are not transient file-churn failures"
+        );
     }
 }

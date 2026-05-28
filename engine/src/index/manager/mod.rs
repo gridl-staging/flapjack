@@ -515,7 +515,10 @@ impl IndexManager {
         let term_query =
             tantivy::query::TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
 
-        let top_docs = searcher.search(&term_query, &tantivy::collector::TopDocs::with_limit(1))?;
+        let top_docs = searcher.search(
+            &term_query,
+            &tantivy::collector::TopDocs::with_limit(1).order_by_score(),
+        )?;
 
         if top_docs.is_empty() {
             return Ok(None);

@@ -4,13 +4,51 @@
 
 // ─── Retention cleanup (retention.rs) ─────────────────────────────────────────
 
-use crate::analytics::retention::cleanup_old_partitions;
+use crate::analytics::manifest::{DateState, RollupManifest, TierState, WindowEntry, WindowStatus};
+use crate::analytics::retention::{cleanup_old_partitions, cleanup_old_partitions_at};
+use std::collections::HashMap;
 use tempfile::TempDir;
 
 fn create_partition(base: &std::path::Path, index: &str, table: &str, date: &str) {
     let dir = base.join(index).join(table).join(format!("date={}", date));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("test.parquet"), b"dummy").unwrap();
+}
+
+fn retention_gate_now() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        chrono::NaiveDate::from_ymd_opt(2024, 4, 10)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap(),
+        chrono::Utc,
+    )
+}
+
+fn certified_hourly_windows(date: &str) -> Vec<WindowEntry> {
+    let day_start = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    (0..24)
+        .map(|hour| {
+            let start_ms = day_start + (hour as i64) * 3_600_000;
+            WindowEntry {
+                start_ms,
+                end_ms: start_ms + 3_600_000,
+                status: WindowStatus::Closed,
+                event_count: 10,
+                file: format!("rollup_1hour_{}_0.parquet", start_ms),
+            }
+        })
+        .collect()
+}
+
+fn save_manifest(base: &std::path::Path, index: &str, manifest: &RollupManifest) {
+    let manifest_path = base.join(index).join("rollups").join("manifest.json");
+    manifest.save(&manifest_path).unwrap();
 }
 
 /// Verify that partitions older than the retention window are evicted while recent ones are preserved.
@@ -82,6 +120,84 @@ fn ignores_non_date_directories() {
     let removed = cleanup_old_partitions(tmp.path(), 90).unwrap();
     assert_eq!(removed, 0);
     assert!(weird_dir.exists());
+}
+
+#[test]
+fn retention_gate_retains_uncertified_partitions() {
+    let tmp = TempDir::new().unwrap();
+    let index = "products";
+    let table = "searches";
+    let date = "2024-01-15";
+
+    create_partition(tmp.path(), index, table, date);
+
+    let mut manifest = RollupManifest::new(index);
+    let mut tier = TierState {
+        dates: HashMap::new(),
+    };
+    let mut partial_windows = certified_hourly_windows(date);
+    partial_windows.pop();
+    let total_event_count = partial_windows
+        .iter()
+        .map(|window| window.event_count)
+        .sum();
+    tier.dates.insert(
+        date.to_string(),
+        DateState {
+            windows: partial_windows,
+            complete: false,
+            total_event_count,
+        },
+    );
+    manifest.tiers.insert("1hour".to_string(), tier);
+    save_manifest(tmp.path(), index, &manifest);
+
+    let removed = cleanup_old_partitions_at(tmp.path(), 30, retention_gate_now()).unwrap();
+
+    assert_eq!(removed, 0);
+    assert!(tmp
+        .path()
+        .join(index)
+        .join(table)
+        .join(format!("date={date}"))
+        .exists());
+}
+
+#[test]
+fn retention_gate_deletes_certified_partitions() {
+    let tmp = TempDir::new().unwrap();
+    let index = "products";
+    let table = "searches";
+    let date = "2024-01-15";
+
+    create_partition(tmp.path(), index, table, date);
+
+    let mut manifest = RollupManifest::new(index);
+    let windows = certified_hourly_windows(date);
+    let total_event_count = windows.iter().map(|window| window.event_count).sum();
+    let mut tier = TierState {
+        dates: HashMap::new(),
+    };
+    tier.dates.insert(
+        date.to_string(),
+        DateState {
+            windows,
+            complete: true,
+            total_event_count,
+        },
+    );
+    manifest.tiers.insert("1hour".to_string(), tier);
+    save_manifest(tmp.path(), index, &manifest);
+
+    let removed = cleanup_old_partitions_at(tmp.path(), 30, retention_gate_now()).unwrap();
+
+    assert_eq!(removed, 1);
+    assert!(!tmp
+        .path()
+        .join(index)
+        .join(table)
+        .join(format!("date={date}"))
+        .exists());
 }
 
 // ─── InsightEvent validation (schema.rs) ──────────────────────────────────────

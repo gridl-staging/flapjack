@@ -57,6 +57,7 @@ pub(super) fn commit_writer_with_panic_guard(
     deleted_count: usize,
     rejected_count: usize,
 ) -> crate::error::Result<u64> {
+    let phase_start = std::time::Instant::now();
     tracing::info!(
         "[WQ {}] committing {} adds, {} deletes, {} rejected",
         tenant_id,
@@ -66,7 +67,13 @@ pub(super) fn commit_writer_with_panic_guard(
     );
     let commit_start = std::time::Instant::now();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| writer.commit())) {
-        Ok(Ok(_opstamp)) => Ok(commit_start.elapsed().as_secs()),
+        Ok(Ok(_opstamp)) => {
+            super::observe_write_queue_phase(
+                super::PHASE_COMMIT_WRITER_WITH_PANIC_GUARD,
+                phase_start,
+            );
+            Ok(commit_start.elapsed().as_secs())
+        }
         Ok(Err(error)) => {
             tracing::error!("[WQ {}] commit error: {}", tenant_id, error);
             Err(error.into())
@@ -85,17 +92,21 @@ pub(super) fn commit_writer_with_panic_guard(
     }
 }
 
-pub(super) fn finalize_committed_write(
+pub(super) fn finalize_committed_batch(
     context: &WriteFinalizationContext<'_>,
-    prepared: &PreparedWriteOperation,
+    prepared_ops: &[PreparedWriteOperation],
     build_secs: u64,
 ) -> crate::error::Result<()> {
+    let phase_start = std::time::Instant::now();
     persist_index_metadata(context.base_path, context.tenant_id, build_secs);
     refresh_search_state(context.index, context.facet_cache, context.tenant_id)?;
     #[cfg(feature = "vector-search")]
-    save_vector_index(context, prepared);
-    update_lww_state(context.lww_map, context.tenant_id, prepared);
+    save_vector_index(context, prepared_ops);
+    for prepared in prepared_ops {
+        update_lww_state(context.lww_map, context.tenant_id, prepared);
+    }
     persist_oplog_commit_state(context.oplog, context.base_path, context.tenant_id);
+    super::observe_write_queue_phase(super::PHASE_FINALIZE_COMMITTED_BATCH, phase_start);
     Ok(())
 }
 
@@ -127,8 +138,14 @@ fn refresh_search_state(
 /// Persist the in-memory VectorIndex to disk and save the embedder fingerprint
 /// for change detection. Skips entirely when no vectors were modified in the batch.
 #[cfg(feature = "vector-search")]
-fn save_vector_index(context: &WriteFinalizationContext<'_>, prepared: &PreparedWriteOperation) {
-    if !prepared.vectors_modified {
+fn save_vector_index(
+    context: &WriteFinalizationContext<'_>,
+    prepared_ops: &[PreparedWriteOperation],
+) {
+    if !prepared_ops
+        .iter()
+        .any(|prepared| prepared.vectors_modified)
+    {
         return;
     }
 
@@ -246,6 +263,53 @@ pub(super) fn mark_task_succeeded(
     });
 }
 
+fn numeric_task_id(tasks: &Arc<dashmap::DashMap<String, TaskInfo>>, task_id: &str) -> String {
+    tasks
+        .get(task_id)
+        .map(|task| task.numeric_id.to_string())
+        .unwrap_or_else(|| task_id.to_string())
+}
+
+fn apply_failed_status(
+    tasks: &Arc<dashmap::DashMap<String, TaskInfo>>,
+    task_id: &str,
+    numeric_id: &str,
+    message: &str,
+) {
+    tasks.alter(task_id, |_, mut task| {
+        task.status = TaskStatus::Failed(message.to_string());
+        task.indexed_documents = 0;
+        task.rejected_documents.clear();
+        task.rejected_count = 0;
+        task
+    });
+    tasks.alter(numeric_id, |_, mut task| {
+        task.status = TaskStatus::Failed(message.to_string());
+        task.indexed_documents = 0;
+        task.rejected_documents.clear();
+        task.rejected_count = 0;
+        task
+    });
+}
+
+/// Mark every task in a failed batch as failed before the write worker exits.
+///
+/// Batched write-queue errors are terminal for the worker task. Updating each
+/// queued task here prevents them from getting stranded in queued/processing
+/// states when a shared batch dependency (settings load, commit, reload, etc.)
+/// aborts the whole flush.
+pub(super) fn mark_tasks_failed(
+    tasks: &Arc<dashmap::DashMap<String, TaskInfo>>,
+    task_ids: &[String],
+    error: &crate::error::FlapjackError,
+) {
+    let message = error.to_string();
+    for task_id in task_ids {
+        let numeric_id = numeric_task_id(tasks, task_id);
+        apply_failed_status(tasks, task_id, &numeric_id, &message);
+    }
+}
+
 /// Force-merge all segments into one and garbage-collect stale files.
 pub(super) fn compact_segments(
     index: &Arc<crate::index::Index>,
@@ -293,11 +357,7 @@ pub(super) fn compact_segments(
         Ok(())
     })();
 
-    let numeric_id = if let Some(task_ref) = tasks.get(task_id) {
-        task_ref.numeric_id.to_string()
-    } else {
-        task_id.to_string()
-    };
+    let numeric_id = numeric_task_id(tasks, task_id);
 
     let status = match &result {
         Ok(()) => TaskStatus::Succeeded,

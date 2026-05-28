@@ -9,6 +9,7 @@
 /// # Returns
 ///
 /// A vector of string object IDs. If the field is missing, parsing fails, or array elements are non-string, returns an empty vector.
+#[cfg(feature = "analytics")]
 fn parse_object_ids(row: &serde_json::Value) -> Vec<String> {
     let Some(raw_object_ids) = row.get("object_ids") else {
         return Vec::new();
@@ -30,9 +31,11 @@ fn parse_object_ids(row: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[cfg(feature = "analytics")]
 pub mod cooccurrence;
 pub mod looking_similar;
 pub mod rules;
+#[cfg(feature = "analytics")]
 pub mod trending;
 
 /// Default window (in days) for trending item/facet computation.

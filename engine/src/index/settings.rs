@@ -1,4 +1,3 @@
-//! Define `IndexSettings` and its serialization, validation, and helper methods for managing search index configuration with Algolia-compatible camelCase JSON.
 use crate::query::plurals::IgnorePluralsValue;
 use crate::query::stopwords::RemoveStopWordsValue;
 use serde::{Deserialize, Serialize, Serializer};
@@ -501,6 +500,25 @@ impl IndexSettings {
     pub fn load<P: AsRef<Path>>(path: P) -> crate::error::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let settings: IndexSettings = serde_json::from_str(&content)?;
+        // Upgrade-path defense: a settings.json file written before the
+        // OWASP audit introduced intake-side SSRF validation may carry an
+        // embedder URL (e.g. http://127.0.0.1:11434/api/embeddings for
+        // Ollama) that is unsafe under the new default-deny posture.
+        // Constructor-time validation was removed as part of the Plan B
+        // SoC split, so the trust boundary now lives at intake AND at
+        // disk-load. The intake gate at `validate_embedders_inner` catches
+        // new writes; this catches pre-existing on-disk state at hydration.
+        //
+        // The SSOT env-var opt-in (`FLAPJACK_AI_ALLOW_LOCAL_URLS`) is honored
+        // via the composite `EmbedderConfig::validate()` that
+        // `validate_embedders` invokes, so operators running a local model
+        // server can opt back in symmetrically with the chat seam.
+        //
+        // Empty / `None` embedders are a no-op here, so the vast majority of
+        // existing tenants and tests are unaffected.
+        settings
+            .validate_embedders()
+            .map_err(crate::error::FlapjackError::Config)?;
         Ok(settings)
     }
 

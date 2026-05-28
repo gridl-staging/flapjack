@@ -158,6 +158,9 @@ impl<'tmp> TestStateBuilder<'tmp> {
             start_time: std::time::Instant::now(),
             conversation_store: crate::conversation_store::ConversationStore::default_shared(),
             embedder_store: Arc::new(crate::embedder_store::EmbedderStore::new()),
+            idempotency_cache: Arc::new(crate::idempotency::IdempotencyCache::new(
+                std::time::Duration::from_secs(300),
+            )),
         }
     }
 
@@ -217,7 +220,7 @@ pub(crate) fn build_test_router_for_data_dir(
         key_store,
         analytics_collector,
         trusted_proxy_matcher,
-        crate::startup::CorsMode::Permissive,
+        crate::startup::CorsMode::LoopbackOnly,
         data_dir,
     )
 }

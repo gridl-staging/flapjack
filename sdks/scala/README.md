@@ -1,6 +1,6 @@
 # Flapjack Search Scala Client
 
-Official Scala client for the [Flapjack Search API](https://github.com/flapjackhq).
+Official Scala client for the [Flapjack Search API](https://github.com/gridl-staging).
 
 Drop-in replacement for `algoliasearch-client-scala`. Algolia-compatible REST API with Flapjack-native host routing.
 
@@ -11,7 +11,7 @@ Supports Scala 2.13 and 3.x.
 ### SBT
 
 ```scala
-libraryDependencies += "com.flapjackhq" %% "flapjacksearch-scala" % "0.1.0"
+libraryDependencies += "com.gridl-staging" %% "flapjacksearch-scala" % "0.1.0"
 ```
 
 ## Quick Start

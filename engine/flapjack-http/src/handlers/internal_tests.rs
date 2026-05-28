@@ -104,6 +104,28 @@ fn make_replication_batch_payload(
     serde_json::Value::Object(payload)
 }
 
+#[tokio::test]
+async fn rotate_admin_key_error_response_hides_storage_details() {
+    let response = rotate_admin_key_error_response(&"keys.json: permission denied");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+
+    assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(json["message"], "Failed to rotate admin key");
+    assert!(
+        !body_text.contains("keys.json"),
+        "raw persistence path must not be exposed in the response body: {body_text}"
+    );
+    assert!(
+        !body_text.contains("permission denied"),
+        "raw I/O details must not be exposed in the response body: {body_text}"
+    );
+}
+
 struct BatchWrapperFlowSpec<'a> {
     manager: &'a IndexManager,
     store_path: &'a Path,
@@ -1270,7 +1292,16 @@ async fn get_ops_invalid_tenant_returns_standard_400_json() {
 #[tokio::test]
 async fn get_ops_success_includes_oldest_retained_seq_metadata() {
     let tmp = TempDir::new().unwrap();
-    let state = TestStateBuilder::new(&tmp).build_shared();
+    let mut app_state = TestStateBuilder::new(&tmp).build();
+    app_state.replication_manager = Some(flapjack_replication::manager::ReplicationManager::new(
+        flapjack_replication::config::NodeConfig {
+            node_id: "test-node-local".to_string(),
+            bind_addr: "127.0.0.1:0".to_string(),
+            peers: vec![],
+        },
+        None,
+    ));
+    let state = Arc::new(app_state);
     state.manager.create_tenant("products").unwrap();
 
     let oplog = state.manager.get_or_create_oplog("products").unwrap();
@@ -1300,14 +1331,46 @@ async fn get_ops_success_includes_oldest_retained_seq_metadata() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json.get("node_current_seqs")
+            .and_then(|value| value.as_object())
+            .is_some_and(|map| map.contains_key("test-node-local")),
+        "GET /internal/ops must include node-local sequence metadata in node_current_seqs"
+    );
     let payload: flapjack_replication::types::GetOpsResponse =
         serde_json::from_slice(&body).unwrap();
     assert_eq!(payload.tenant_id, "products");
     assert_eq!(payload.current_seq, 2);
     assert_eq!(payload.oldest_retained_seq, Some(1));
+    assert_eq!(
+        payload.node_current_seqs.get("test-node-local"),
+        Some(&2),
+        "typed response should carry node-local current seq metadata"
+    );
     assert_eq!(payload.ops.len(), 2);
     assert_eq!(payload.ops[0].seq, 1);
     assert_eq!(payload.ops[1].seq, 2);
+}
+
+/// Rolling deploy safety: missing node_current_seqs in old payloads must still deserialize.
+#[test]
+fn get_ops_response_deserializes_when_node_current_seqs_absent() {
+    let payload = serde_json::json!({
+        "tenant_id": "products",
+        "ops": [],
+        "current_seq": 17,
+        "oldest_retained_seq": 1
+    });
+    let parsed: flapjack_replication::types::GetOpsResponse =
+        serde_json::from_value(payload).unwrap();
+    assert_eq!(parsed.tenant_id, "products");
+    assert_eq!(parsed.current_seq, 17);
+    assert_eq!(parsed.oldest_retained_seq, Some(1));
+    assert!(
+        parsed.node_current_seqs.is_empty(),
+        "missing node_current_seqs must default to empty map for mixed-version peers"
+    );
 }
 
 /// Verify that GET `/internal/ops` sanitizes oplog I/O failures after the handler

@@ -1,0 +1,47 @@
+[A07 RED BASELINE] Session/JWT N/A evidence: auth owners flapjack-http/src/auth/middleware.rs and flapjack-http/src/auth/mod.rs use API-key/HMAC validation (no session cookie store, no JWT verifier).
+   Compiling flapjack-http v1.0.1 (/Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/flapjack-http)
+   Compiling flapjack v1.0.1 (/Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine)
+    Finished `test` profile [optimized + debuginfo] target(s) in 21.54s
+     Running tests/test_security_audit.rs (target/debug/deps/test_security_audit-b09a3feab8b17f9c)
+error: Unrecognized option: 'no-fail-fast'
+error: test failed, to rerun pass `-p flapjack --test test_security_audit`
+[A07 RED BASELINE] CORRECTED command: cargo test -p flapjack --no-fail-fast --test test_security_audit -- a07_
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.63s
+     Running tests/test_security_audit.rs (target/debug/deps/test_security_audit-b09a3feab8b17f9c)
+
+running 3 tests
+test a07_session_fixation_and_jwt_downgrade_are_not_applicable_to_current_auth_surface ... ok
+test a07_repeated_invalid_credentials_keep_canonical_403_and_do_not_consume_valid_key_budget ... FAILED
+test a07_admin_key_rotation_never_allows_old_and_new_admin_keys_simultaneously ... ok
+
+failures:
+
+---- a07_repeated_invalid_credentials_keep_canonical_403_and_do_not_consume_valid_key_budget stdout ----
+
+thread 'a07_repeated_invalid_credentials_keep_canonical_403_and_do_not_consume_valid_key_budget' (66320409) panicked at tests/test_security_audit.rs:398:9:
+assertion `left == right` failed: valid request 0 should still be accepted after repeated invalid attempts
+  left: 404
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a07_repeated_invalid_credentials_keep_canonical_403_and_do_not_consume_valid_key_budget
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p flapjack --test test_security_audit`
+error: 1 target failed:
+    `-p flapjack --test test_security_audit`
+[A07 GREEN CHECK] after test-fixture correction
+   Compiling flapjack v1.0.1 (/Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine)
+    Finished `test` profile [optimized + debuginfo] target(s) in 5.21s
+     Running tests/test_security_audit.rs (target/debug/deps/test_security_audit-b09a3feab8b17f9c)
+
+running 3 tests
+test a07_session_fixation_and_jwt_downgrade_are_not_applicable_to_current_auth_surface ... ok
+test a07_admin_key_rotation_never_allows_old_and_new_admin_keys_simultaneously ... ok
+test a07_repeated_invalid_credentials_keep_canonical_403_and_do_not_consume_valid_key_budget ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.24s
+

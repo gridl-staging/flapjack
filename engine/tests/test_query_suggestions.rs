@@ -116,6 +116,10 @@ async fn config_crud_roundtrip() {
         "list should have ≥1 config"
     );
 
+    // Creating a config kicks off an async build; wait until that run finishes
+    // so update semantics are deterministic for this CRUD contract test.
+    wait_for_build(&base, "my_suggestions").await;
+
     // Update
     let updated = json!({
         "indexName": "my_suggestions",

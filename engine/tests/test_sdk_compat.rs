@@ -3209,7 +3209,7 @@ mod algolia_equivalence {
             return serde_json::from_str(&json).unwrap();
         }
 
-        dotenv::from_path(".secret/.env.secret").ok();
+        dotenvy::from_path(".secret/.env.secret").ok();
 
         let app_id = env::var("ALGOLIA_APP_ID")
             .expect("Fixture missing and ALGOLIA_APP_ID not in .secret/.env.secret");
@@ -3637,7 +3637,7 @@ mod algolia_equivalence {
             return serde_json::from_str(&json).unwrap();
         }
 
-        dotenv::from_path(".secret/.env.secret").ok();
+        dotenvy::from_path(".secret/.env.secret").ok();
 
         let app_id = env::var("ALGOLIA_APP_ID")
             .expect("Fixture missing and ALGOLIA_APP_ID not in .secret/.env.secret");

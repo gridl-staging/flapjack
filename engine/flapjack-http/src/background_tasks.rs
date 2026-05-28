@@ -2,6 +2,10 @@ use crate::handlers::AppState;
 use crate::server_init::InfrastructureState;
 use crate::tenant_dirs::{has_visible_tenant_dirs, visible_tenant_dir_names};
 use std::sync::Arc;
+use std::time::Instant;
+
+#[cfg(test)]
+const HOUR_MS: i64 = 3_600_000;
 
 /// Restore all tenant indexes from S3 snapshots when the data directory is empty.
 ///
@@ -226,6 +230,8 @@ fn spawn_analytics_tasks(infrastructure: &InfrastructureState) {
         infrastructure.analytics_config.retention_days
     );
 
+    spawn_local_rollup_generation_task(infrastructure);
+
     if let Some(cluster) = crate::analytics_cluster::get_global_cluster() {
         let rollup_interval_secs = std::env::var("FLAPJACK_ROLLUP_INTERVAL_SECS")
             .ok()
@@ -243,6 +249,134 @@ fn spawn_analytics_tasks(infrastructure: &InfrastructureState) {
             "[ROLLUP-BROADCAST] Broadcaster started (interval={}s)",
             rollup_interval_secs
         );
+    }
+}
+
+fn spawn_local_rollup_generation_task(infrastructure: &InfrastructureState) {
+    let rollup_interval_secs = std::env::var("FLAPJACK_ROLLUP_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
+    let collector = Arc::clone(&infrastructure.analytics_collector);
+    let analytics_config = infrastructure.analytics_config.clone();
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_secs(rollup_interval_secs));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            run_local_rollup_generation_pass(&analytics_config, &collector);
+        }
+    });
+    tracing::info!(
+        "[analytics] Local rollup generation enabled (interval={}s)",
+        rollup_interval_secs
+    );
+}
+
+fn run_local_rollup_generation_pass(
+    analytics_config: &flapjack::analytics::AnalyticsConfig,
+    collector: &Arc<flapjack::analytics::AnalyticsCollector>,
+) {
+    let indexes = discover_rollup_indexes(analytics_config);
+    if indexes.is_empty() {
+        return;
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let (hour_start_ms, hour_end_ms) = rollup_window_bounds_ms(now_ms);
+
+    for index_name in indexes {
+        let started = Instant::now();
+        match flapjack::analytics::writer::flush_rollup_window_with_event_count(
+            analytics_config,
+            &index_name,
+            "1hour",
+            hour_start_ms,
+            hour_end_ms,
+        ) {
+            Ok((_path, event_count)) => {
+                collector.record_rollup_generation_sample(
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    event_count,
+                    hour_end_ms,
+                );
+            }
+            Err(error) => {
+                tracing::debug!(
+                    "[analytics] rollup generation skipped for index={} window_start_ms={} reason={}",
+                    index_name,
+                    hour_start_ms,
+                    error
+                );
+            }
+        }
+    }
+}
+
+fn rollup_window_bounds_ms(now_ms: i64) -> (i64, i64) {
+    // Keep the HTTP-layer scheduler aligned with the core analytics writer's
+    // single owner for the test-only rollup-window override contract.
+    let window_ms = flapjack::analytics::resolved_hourly_rollup_window_ms();
+    let window_end_ms = now_ms.div_euclid(window_ms) * window_ms;
+    let window_start_ms = window_end_ms - window_ms;
+    (window_start_ms, window_end_ms)
+}
+
+fn discover_rollup_indexes(analytics_config: &flapjack::analytics::AnalyticsConfig) -> Vec<String> {
+    let mut indexes = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&analytics_config.data_dir) else {
+        return indexes;
+    };
+
+    for entry in entries.flatten() {
+        let index_path = entry.path();
+        if !index_path.is_dir() {
+            continue;
+        }
+        if !index_path.join("searches").is_dir() {
+            continue;
+        }
+        if let Some(index_name) = index_path.file_name().and_then(|name| name.to_str()) {
+            indexes.push(index_name.to_string());
+        }
+    }
+    indexes.sort();
+    indexes.dedup();
+    indexes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rollup_window_bounds_ms, HOUR_MS};
+    use crate::test_helpers::with_env_var;
+
+    #[test]
+    fn rollup_window_targets_last_completed_hour() {
+        let now_ms = (10 * HOUR_MS) + 123;
+        let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
+        assert_eq!(start_ms, 9 * HOUR_MS);
+        assert_eq!(end_ms, 10 * HOUR_MS);
+    }
+
+    #[test]
+    fn rollup_window_uses_completed_override_window_when_override_is_valid() {
+        let _guard = with_env_var("FLAPJACK_ROLLUP_WINDOW_OVERRIDE_MS", "60000");
+        let now_ms = (10 * HOUR_MS) + (2 * 60_000) + 12_345;
+        let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
+        assert_eq!(start_ms, (10 * HOUR_MS) + 60_000);
+        assert_eq!(end_ms, (10 * HOUR_MS) + (2 * 60_000));
+    }
+
+    #[test]
+    fn rollup_window_falls_back_to_hour_bounds_when_override_is_invalid() {
+        let now_ms = (10 * HOUR_MS) + 123;
+        for invalid_override in ["not-a-number", "0", "-60000"] {
+            let _guard = with_env_var("FLAPJACK_ROLLUP_WINDOW_OVERRIDE_MS", invalid_override);
+            let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
+            assert_eq!(start_ms, 9 * HOUR_MS);
+            assert_eq!(end_ms, 10 * HOUR_MS);
+        }
     }
 }
 

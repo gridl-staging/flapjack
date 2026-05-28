@@ -1,7 +1,8 @@
 use super::*;
 use crate::analytics::collector::AnalyticsCollector;
 use crate::analytics::schema::{InsightEvent, SearchEvent};
-use crate::analytics::writer::{search_events_to_batch, write_parquet_file};
+use crate::analytics::writer::{flush_rollup_window, search_events_to_batch, write_parquet_file};
+use std::collections::BTreeSet;
 use tempfile::TempDir;
 
 fn test_analytics_config(temp_dir: &TempDir) -> AnalyticsConfig {
@@ -482,6 +483,43 @@ fn seed_known_answer_dataset(temp_dir: &TempDir) -> AnalyticsConfig {
     config
 }
 
+fn seed_hourly_spread_dataset(temp_dir: &TempDir) -> AnalyticsConfig {
+    let config = test_analytics_config(temp_dir);
+    let index = "products";
+    let schema = crate::analytics::schema::search_event_schema();
+
+    let base_date = chrono::NaiveDate::from_ymd_opt(2025, 6, 15).unwrap();
+    let hour_12 = base_date
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    let hour_13 = base_date
+        .and_hms_opt(13, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+
+    // 7 total events split across two UTC hours to verify 1hour rollup ranges
+    // still collapse into day-level output shape.
+    let events = vec![
+        search_event_with_hits(index, "laptop", 10, true, hour_12, "user-a"),
+        search_event_with_hits(index, "laptop", 50, true, hour_12 + 1000, "user-b"),
+        search_event_with_hits(index, "laptop", 60, true, hour_12 + 2000, "user-c"),
+        search_event_with_hits(index, "phone", 100, true, hour_13, "user-a"),
+        search_event_with_hits(index, "phone", 200, true, hour_13 + 1000, "user-b"),
+        search_event_with_hits(index, "xyzzy", 0, false, hour_13 + 2000, "user-a"),
+        search_event_with_hits(index, "zzznothing", 0, false, hour_13 + 3000, "user-d"),
+    ];
+
+    let batch = search_events_to_batch(&events, &schema).unwrap();
+    let partition_dir = config.searches_dir(index).join("date=2025-06-15");
+    std::fs::create_dir_all(&partition_dir).unwrap();
+    write_parquet_file(&partition_dir.join("test_data.parquet"), batch).unwrap();
+
+    config
+}
+
 #[tokio::test]
 async fn known_answer_top_searches() {
     let temp_dir = TempDir::new().unwrap();
@@ -625,4 +663,255 @@ async fn known_answer_empty_index_returns_zero() {
         .unwrap();
 
     assert_eq!(result["count"], 0);
+}
+
+// ── Rollup-vs-raw parity tests (RED baseline for RF-2 Wave 2) ──
+//
+// Each test reuses `seed_known_answer_dataset`, first proves the raw-path known
+// answer through the public `AnalyticsQueryEngine` method, then writes the day
+// rollup via `flush_rollup_window`, removes the raw search Parquet so the query
+// engine can no longer fall back to raw data, and re-queries the same public
+// method — asserting the rollup-served result is identical to the raw result.
+//
+// Removing raw data after rollup generation is the key guard: it forces the
+// query path to read from rollup Parquet to produce any non-empty result,
+// preventing false-green if the query planner routing (Stage 3) is missing.
+//
+// The fixture is seeded on the historical date 2025-06-15, so the wall clock is
+// already well past the day window end — the window is therefore rollup-eligible
+// without any synthetic-clock injection. The "1day" tier string matches
+// `manifest::TIER_PREFERENCE`.
+//
+// These stay RED in Stage 1: `flush_rollup_window` is an `unimplemented!()` seam
+// (RF-2 Stage 2) and panics before the parity assertion can run. The raw-path
+// assertions execute and pass first, locking the contract the rollup path must
+// reproduce.
+
+/// Day window covering the entire 2025-06-15 fixture: `[start, end)` aligned to
+/// UTC midnight boundaries (start = 2025-06-15 00:00:00, end = 2025-06-16 00:00:00).
+fn fixture_day_window_ms() -> (i64, i64) {
+    let window_start_ms = date_to_start_ms("2025-06-15").unwrap();
+    let window_end_ms = date_to_start_ms("2025-06-16").unwrap();
+    (window_start_ms, window_end_ms)
+}
+
+/// Build canonical hourly coverage for the fixture day, then compact to the
+/// 1day tier so parity tests exercise a certified daily rollup.
+fn flush_fixture_day_rollup(config: &AnalyticsConfig, index_name: &str) {
+    let (window_start_ms, window_end_ms) = fixture_day_window_ms();
+    let hour_ms = 3_600_000;
+    for offset in 0..24 {
+        let hour_start = window_start_ms + offset * hour_ms;
+        let hour_end = hour_start + hour_ms;
+        flush_rollup_window(config, index_name, "1hour", hour_start, hour_end)
+            .expect("hourly rollup window flush");
+    }
+    flush_rollup_window(config, index_name, "1day", window_start_ms, window_end_ms)
+        .expect("daily rollup window flush");
+}
+
+/// Build only hourly coverage for the fixture day so the planner must choose the
+/// certified "1hour" tier instead of "1day".
+fn flush_fixture_day_hourly_rollup_only(config: &AnalyticsConfig, index_name: &str) {
+    let (window_start_ms, _) = fixture_day_window_ms();
+    let hour_ms = 3_600_000;
+    for offset in 0..24 {
+        let hour_start = window_start_ms + offset * hour_ms;
+        let hour_end = hour_start + hour_ms;
+        flush_rollup_window(config, index_name, "1hour", hour_start, hour_end)
+            .expect("hourly rollup window flush");
+    }
+}
+
+/// Remove raw search Parquet for an index so re-queries must read from rollups.
+fn remove_raw_searches(config: &AnalyticsConfig, index_name: &str) {
+    let searches_dir = config.searches_dir(index_name);
+    if searches_dir.exists() {
+        std::fs::remove_dir_all(&searches_dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn rollup_matches_raw_top_searches() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config.clone());
+
+    let params = AnalyticsQueryParams {
+        index_name: "products",
+        start_date: "2025-06-15",
+        end_date: "2025-06-15",
+        limit: 10,
+        tags: None,
+    };
+
+    // 1. Raw path must produce the hand-calculated known answer.
+    let raw = engine.top_searches(&params, false, None).await.unwrap();
+    let raw_searches = raw["searches"].as_array().unwrap();
+    assert_eq!(raw_searches[0]["search"], "laptop");
+    assert_eq!(raw_searches[0]["count"], 3);
+    assert_eq!(raw_searches[0]["nbHits"], 40);
+    assert_eq!(raw_searches[1]["search"], "phone");
+    assert_eq!(raw_searches[1]["count"], 2);
+    assert_eq!(raw_searches[1]["nbHits"], 150);
+
+    // 2. Write the rollup, then remove raw search data so the query engine cannot
+    //    fall back to raw Parquet. RED in Stage 1 — the flush panics on the seam.
+    flush_fixture_day_rollup(&config, "products");
+    remove_raw_searches(&config, "products");
+
+    // 3. Re-query: must produce the same result from rollup data alone.
+    let rollup = engine.top_searches(&params, false, None).await.unwrap();
+    let rollup_searches = rollup["searches"].as_array().unwrap();
+    assert_eq!(
+        rollup_searches.len(),
+        raw_searches.len(),
+        "rollup-served top_searches must preserve result length"
+    );
+    // Rows with count=1 are ties, so compare the deterministic head positionally
+    // and compare the tail as an unordered set.
+    assert_eq!(
+        rollup_searches[0], raw_searches[0],
+        "top ranked query must match raw result"
+    );
+    assert_eq!(
+        rollup_searches[1], raw_searches[1],
+        "second ranked query must match raw result"
+    );
+    let extract_row = |row: &serde_json::Value| -> (String, i64, i64) {
+        (
+            row["search"].as_str().unwrap().to_string(),
+            row["count"].as_i64().unwrap(),
+            row["nbHits"].as_i64().unwrap(),
+        )
+    };
+    let raw_tied_tail: BTreeSet<(String, i64, i64)> =
+        raw_searches[2..].iter().map(extract_row).collect();
+    let rollup_tied_tail: BTreeSet<(String, i64, i64)> =
+        rollup_searches[2..].iter().map(extract_row).collect();
+    assert_eq!(
+        rollup_tied_tail, raw_tied_tail,
+        "rollup-served tie rows must match raw result as a set"
+    );
+}
+
+#[tokio::test]
+async fn rollup_matches_raw_search_count() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config.clone());
+
+    // 1. Raw path known answer: 7 total searches, all on 2025-06-15.
+    let raw = engine
+        .search_count("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+    assert_eq!(raw["count"], 7, "total search count");
+    let raw_dates = raw["dates"].as_array().unwrap();
+    assert_eq!(raw_dates.len(), 1, "single day in range");
+    assert_eq!(raw_dates[0]["date"], "2025-06-15");
+    assert_eq!(raw_dates[0]["count"], 7);
+
+    // 2. Write the rollup, then remove raw search data so the query engine cannot
+    //    fall back to raw Parquet. RED in Stage 1 — the flush panics on the seam.
+    flush_fixture_day_rollup(&config, "products");
+    remove_raw_searches(&config, "products");
+
+    // 3. Re-query: must produce the same result from rollup data alone.
+    let rollup = engine
+        .search_count("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+    assert_eq!(
+        rollup["count"], raw["count"],
+        "rollup-served total count must match raw"
+    );
+    assert_eq!(
+        rollup["dates"], raw["dates"],
+        "rollup-served daily breakdown must match raw"
+    );
+}
+
+#[tokio::test]
+async fn rollup_matches_raw_search_count_hourly_tier_daily_dates() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_hourly_spread_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config.clone());
+
+    // Raw path contract: a single day-level date bucket.
+    let raw = engine
+        .search_count("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+    assert_eq!(raw["count"], 7);
+    assert_eq!(
+        raw["dates"],
+        serde_json::json!([{ "date": "2025-06-15", "count": 7 }])
+    );
+
+    // Generate certified hourly rollups only, then force rollup-only reads.
+    flush_fixture_day_hourly_rollup_only(&config, "products");
+    remove_raw_searches(&config, "products");
+
+    // The rollup path must still collapse hourly windows into daily output shape.
+    let rollup = engine
+        .search_count("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+    assert_eq!(rollup["count"], raw["count"]);
+    assert_eq!(
+        rollup["dates"], raw["dates"],
+        "certified 1hour ranges must preserve day-level dates shape"
+    );
+}
+
+#[tokio::test]
+async fn rollup_matches_raw_users_count_hll() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config.clone());
+
+    // 1. Raw path: the fixture has 4 distinct user tokens (user-a, user-b, user-c,
+    //    user-d), so the distinct-user count is exactly 4.
+    let raw = engine
+        .users_count_hll("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+    assert_eq!(raw["count"], 4, "4 distinct users in the fixture");
+
+    // 2. Write the rollup, then remove raw search data so the query engine cannot
+    //    fall back to raw Parquet. RED in Stage 1 — the flush panics on the seam.
+    flush_fixture_day_rollup(&config, "products");
+    remove_raw_searches(&config, "products");
+
+    // 3. Re-query: must produce the same result from rollup data alone.
+    let rollup = engine
+        .users_count_hll("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+    assert_eq!(rollup, raw, "rollup-served HLL payload must match raw");
+}
+
+#[tokio::test]
+async fn raw_fallback_uncertified_range_serves_raw() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = seed_known_answer_dataset(&temp_dir);
+    let engine = AnalyticsQueryEngine::new(config);
+
+    // No rollup manifest or rollup parquet has been generated for this index/date.
+    // The planner must fall back to raw search parquet and preserve the known answer.
+    let result = engine
+        .search_count("products", "2025-06-15", "2025-06-15")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result["count"], 7,
+        "uncertified range must stay on raw path and keep known-answer total"
+    );
+    assert_eq!(
+        result["dates"],
+        serde_json::json!([{ "date": "2025-06-15", "count": 7 }]),
+        "uncertified range must keep known-answer daily breakdown from raw path"
+    );
 }

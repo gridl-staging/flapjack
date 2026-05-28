@@ -1,6 +1,6 @@
 # Flapjack Search Kotlin Client
 
-Official Kotlin Multiplatform client for the [Flapjack Search API](https://github.com/flapjackhq).
+Official Kotlin Multiplatform client for the [Flapjack Search API](https://github.com/gridl-staging).
 
 Drop-in replacement for `algoliasearch-client-kotlin`. Algolia-compatible REST API with Flapjack-native host routing.
 
@@ -12,7 +12,7 @@ Supports JVM, iOS, and macOS targets via Kotlin Multiplatform.
 
 ```kotlin
 dependencies {
-    implementation("com.flapjackhq:flapjack-search-kotlin:0.1.0")
+    implementation("com.gridl-staging:flapjack-search-kotlin:0.1.0")
 }
 ```
 
@@ -20,15 +20,15 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'com.flapjackhq:flapjack-search-kotlin:0.1.0'
+    implementation 'com.gridl-staging:flapjack-search-kotlin:0.1.0'
 }
 ```
 
 ## Quick Start
 
 ```kotlin
-import com.flapjackhq.client.api.SearchClient
-import com.flapjackhq.client.model.search.*
+import com.gridl-staging.client.api.SearchClient
+import com.gridl-staging.client.model.search.*
 
 val client = SearchClient(appId = "YOUR_APP_ID", apiKey = "YOUR_API_KEY")
 
@@ -47,7 +47,7 @@ val response = client.search(
 ## Custom Host Configuration
 
 ```kotlin
-import com.flapjackhq.client.configuration.*
+import com.gridl-staging.client.configuration.*
 
 val client = SearchClient(
     appId = "YOUR_APP_ID",
@@ -62,8 +62,8 @@ val client = SearchClient(
 
 ## Migrating from Algolia
 
-1. Replace dependency: `com.algolia:algoliasearch-client-kotlin` -> `com.flapjackhq:flapjack-search-kotlin`
-2. Update imports: `com.algolia.client.*` -> `com.flapjackhq.client.*`
+1. Replace dependency: `com.algolia:algoliasearch-client-kotlin` -> `com.gridl-staging:flapjack-search-kotlin`
+2. Update imports: `com.algolia.client.*` -> `com.gridl-staging.client.*`
 3. Update agent: `AlgoliaAgent` -> `FlapjackAgent`
 4. Update env vars: `ALGOLIA_*` -> `FLAPJACK_*`
 

@@ -1,3 +1,4 @@
+use super::manifest::RollupManifest;
 use std::path::Path;
 
 const PARTITION_PREFIX: &str = "date=";
@@ -12,7 +13,7 @@ pub fn cleanup_old_partitions(analytics_dir: &Path, retention_days: u32) -> Resu
     cleanup_old_partitions_at(analytics_dir, retention_days, chrono::Utc::now())
 }
 
-fn cleanup_old_partitions_at(
+pub(crate) fn cleanup_old_partitions_at(
     analytics_dir: &Path,
     retention_days: u32,
     now: chrono::DateTime<chrono::Utc>,
@@ -29,9 +30,15 @@ fn cleanup_old_partitions_at(
     let mut removed = 0;
 
     for index_dir in read_root_subdirectories(analytics_dir)? {
+        let manifest_path = index_dir.join("rollups").join("manifest.json");
+        let manifest = if manifest_path.exists() {
+            RollupManifest::load(&manifest_path).ok()
+        } else {
+            None
+        };
         for event_type_dir in read_child_subdirectories(&index_dir) {
             for partition_dir in read_child_subdirectories(&event_type_dir) {
-                if remove_partition_if_expired(&partition_dir, cutoff) {
+                if remove_partition_if_expired(&partition_dir, cutoff, manifest.as_ref()) {
                     removed += 1;
                 }
             }
@@ -73,7 +80,11 @@ fn partition_date_from_name(name: &str) -> Option<chrono::NaiveDate> {
 
 /// Delete a date-partitioned directory if its date falls before the retention cutoff.
 /// Returns true on successful removal; logs a warning and returns false on failure.
-fn remove_partition_if_expired(partition_dir: &Path, cutoff: chrono::NaiveDate) -> bool {
+fn remove_partition_if_expired(
+    partition_dir: &Path,
+    cutoff: chrono::NaiveDate,
+    manifest: Option<&RollupManifest>,
+) -> bool {
     let partition_name = partition_dir
         .file_name()
         .and_then(|name| name.to_str())
@@ -84,6 +95,19 @@ fn remove_partition_if_expired(partition_dir: &Path, cutoff: chrono::NaiveDate) 
     // Retention keeps the cutoff day and newer data; delete only when `partition_date < cutoff`.
     if partition_date >= cutoff {
         return false;
+    }
+
+    if let Some(manifest) = manifest {
+        let date_str = partition_date.format(PARTITION_DATE_FORMAT).to_string();
+        let has_certified_rollup = manifest.has_certified_coverage(&date_str, "1hour")
+            || manifest.has_certified_coverage(&date_str, "1day");
+        if !has_certified_rollup {
+            tracing::info!(
+                "[analytics] Retaining raw partition {}: no certified rollup coverage",
+                partition_dir.display()
+            );
+            return false;
+        }
     }
 
     match std::fs::remove_dir_all(partition_dir) {
@@ -202,7 +226,7 @@ mod tests {
             Some("data.parquet"),
         );
 
-        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1));
+        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1), None);
 
         assert!(removed);
         assert!(!partition.exists());
@@ -219,7 +243,7 @@ mod tests {
             Some("data.parquet"),
         );
 
-        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1));
+        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1), None);
 
         assert!(!removed);
         assert!(partition.exists());
@@ -236,7 +260,7 @@ mod tests {
             Some("data.parquet"),
         );
 
-        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1));
+        let removed = remove_partition_if_expired(&partition, date(2024, 4, 1), None);
 
         assert!(!removed);
         assert!(partition.exists());
@@ -268,9 +292,13 @@ mod tests {
         );
         let cutoff = date(2024, 4, 1);
 
-        assert!(!remove_partition_if_expired(&malformed_text, cutoff));
-        assert!(!remove_partition_if_expired(&malformed_calendar, cutoff));
-        assert!(!remove_partition_if_expired(&non_partition, cutoff));
+        assert!(!remove_partition_if_expired(&malformed_text, cutoff, None));
+        assert!(!remove_partition_if_expired(
+            &malformed_calendar,
+            cutoff,
+            None
+        ));
+        assert!(!remove_partition_if_expired(&non_partition, cutoff, None));
         assert!(malformed_text.exists());
         assert!(malformed_calendar.exists());
         assert!(non_partition.exists());

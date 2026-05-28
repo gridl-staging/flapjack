@@ -80,6 +80,63 @@ fn test_valid_configs_pass_validation() {
     assert!(user_provided.validate().is_ok());
 }
 
+#[test]
+fn a10_openai_config_rejects_non_http_or_malformed_url() {
+    for payload in [
+        "file:///etc/passwd",
+        "http://[::1",
+        "http://127.0.0.1:9",
+        "http://10.0.0.1",
+        "http://192.168.1.1",
+        "http://2130706433",
+        "http://localhost.",
+    ] {
+        let config = EmbedderConfig {
+            source: EmbedderSource::OpenAi,
+            api_key: Some("sk-test".into()),
+            url: Some(payload.to_string()),
+            ..Default::default()
+        };
+        let error = config
+            .validate()
+            .expect_err("unsafe OpenAI-compatible URL must be rejected");
+        let message = format!("{error}");
+        assert!(
+            message.contains("url") || message.contains("URL"),
+            "error should mention URL policy for payload {payload}: {message}"
+        );
+    }
+}
+
+#[test]
+fn a10_rest_config_rejects_non_http_or_malformed_url() {
+    for payload in [
+        "file:///etc/passwd",
+        "http://[::1",
+        "http://127.0.0.1:9",
+        "http://10.0.0.1",
+        "http://192.168.1.1",
+        "http://2130706433",
+        "http://localhost.",
+    ] {
+        let config = EmbedderConfig {
+            source: EmbedderSource::Rest,
+            url: Some(payload.to_string()),
+            request: Some(serde_json::json!({"input": "{{text}}"})),
+            response: Some(serde_json::json!({"embedding": "{{embedding}}"})),
+            ..Default::default()
+        };
+        let error = config
+            .validate()
+            .expect_err("unsafe REST embedder URL must be rejected");
+        let message = format!("{error}");
+        assert!(
+            message.contains("url") || message.contains("URL"),
+            "error should mention URL policy for payload {payload}: {message}"
+        );
+    }
+}
+
 /// Verify that EmbedderConfig serializes to camelCase JSON and deserializes back without data loss.
 #[test]
 fn test_config_serde_roundtrip() {
@@ -663,4 +720,192 @@ fn test_fingerprint_fastembed_model_change_mismatch() {
         !fp.matches_configs(&configs_v2),
         "different model should not match"
     );
+}
+
+// ── SoC-split SSRF policy tests (Stage 1 Plan B) ──
+//
+// These tests pin the post-refactor design:
+//   - validate_required_fields() is policy-free (no env access, no SSRF check)
+//   - validate_url_for_outbound(allow_local) is policy-explicit (caller decides)
+//   - The metadata/link-local class stays blocked even under the opt-in
+//   - IndexSettings::load() rejects pre-existing localhost configs when the
+//     operator has not opted in via FLAPJACK_AI_ALLOW_LOCAL_URLS — closes the
+//     upgrade-path gap from pre-OWASP settings.json files written before the
+//     intake-gate SSRF check existed.
+//
+// Anchoring these as RED-first guards means a future "refactor" that re-merges
+// the concerns (or skips validation at the disk-load boundary) will fail here.
+
+/// Rest config with a loopback URL must pass `validate_required_fields`:
+/// that method is the struct-correctness check, not a network-policy check.
+/// Embedder constructors call this method exclusively so wiremock-coupled
+/// tests can bind 127.0.0.1 without an env-var opt-in dance.
+#[test]
+fn validate_required_fields_accepts_loopback_url() {
+    let config = EmbedderConfig {
+        source: EmbedderSource::Rest,
+        url: Some("http://127.0.0.1:9/embed".into()),
+        request: Some(serde_json::json!({"input": "{{text}}"})),
+        response: Some(serde_json::json!({"embedding": "{{embedding}}"})),
+        dimensions: Some(3),
+        ..Default::default()
+    };
+    config
+        .validate_required_fields()
+        .expect("required-fields check must be policy-free");
+}
+
+/// `validate_url_for_outbound(false)` is the production-default policy:
+/// loopback and RFC1918 private destinations are rejected.
+#[test]
+fn validate_url_for_outbound_rejects_loopback_under_strict_policy() {
+    let config = EmbedderConfig {
+        source: EmbedderSource::Rest,
+        url: Some("http://127.0.0.1:9/embed".into()),
+        request: Some(serde_json::json!({"input": "{{text}}"})),
+        response: Some(serde_json::json!({"embedding": "{{embedding}}"})),
+        dimensions: Some(3),
+        ..Default::default()
+    };
+    let err = config
+        .validate_url_for_outbound(false)
+        .expect_err("strict policy must reject loopback");
+    // Message must identify the URL-policy class so operators can debug.
+    let msg = format!("{err}");
+    assert!(
+        msg.to_ascii_lowercase().contains("private")
+            || msg.to_ascii_lowercase().contains("local")
+            || msg.to_ascii_lowercase().contains("loopback"),
+        "rejection message must identify the policy: got {msg}"
+    );
+}
+
+/// `validate_url_for_outbound(true)` is the operator opt-in for running a
+/// local model server (Ollama / vLLM / llama.cpp): loopback is permitted.
+/// This is the load-bearing assertion that the policy parameter is wired,
+/// not silently ignored.
+#[test]
+fn validate_url_for_outbound_accepts_loopback_under_opt_in_policy() {
+    let config = EmbedderConfig {
+        source: EmbedderSource::Rest,
+        url: Some("http://127.0.0.1:11434/api/embeddings".into()),
+        request: Some(serde_json::json!({"input": "{{text}}"})),
+        response: Some(serde_json::json!({"embedding": "{{embedding}}"})),
+        dimensions: Some(3),
+        ..Default::default()
+    };
+    config
+        .validate_url_for_outbound(true)
+        .expect("opt-in policy must accept loopback embedder URL");
+}
+
+/// The cloud-metadata endpoint (169.254.169.254) and the rest of the
+/// link-local class are NEVER acceptable outbound targets — even under the
+/// opt-in. There is no legitimate AI-provider use for these destinations,
+/// and they are pure SSRF targets. This test guards the policy split so a
+/// future careless refactor cannot collapse "always blocked" into
+/// "blocked-by-default but allowed under opt-in".
+#[test]
+fn validate_url_for_outbound_always_rejects_metadata_endpoint_even_under_opt_in() {
+    let config = EmbedderConfig {
+        source: EmbedderSource::Rest,
+        url: Some("http://169.254.169.254/latest/meta-data/".into()),
+        request: Some(serde_json::json!({"input": "{{text}}"})),
+        response: Some(serde_json::json!({"embedding": "{{embedding}}"})),
+        dimensions: Some(3),
+        ..Default::default()
+    };
+    config
+        .validate_url_for_outbound(true)
+        .expect_err("metadata/link-local class must be rejected even under opt-in");
+}
+
+/// `IndexSettings::load` MUST run the same SSOT URL-safety policy that the
+/// intake gate runs. A pre-OWASP settings.json with a loopback embedder URL
+/// would otherwise load silently at startup with the env var unset, which
+/// would re-open the SSRF surface the OWASP audit closed.
+///
+/// The env var is removed (rather than asserted-unset) so this test stays
+/// deterministic even if a prior test set it. The `#[serial]` annotation on
+/// the same key keeps it from racing the opt-in test below.
+#[test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+fn validate_at_load_rejects_pre_existing_localhost_when_env_unset() {
+    use crate::index::settings::IndexSettings;
+    use crate::security::test_helpers::AllowLocalUrlsGuard;
+    use std::collections::HashMap;
+
+    let _restore = AllowLocalUrlsGuard::clear();
+
+    // Simulate a settings.json file written before the SSRF intake gate
+    // existed: a Rest embedder pointing at loopback.
+    let mut embedders = HashMap::new();
+    embedders.insert(
+        "default".to_string(),
+        serde_json::json!({
+            "source": "rest",
+            "url": "http://127.0.0.1:11434/api/embeddings",
+            "request": {"input": "{{text}}"},
+            "response": {"embedding": "{{embedding}}"},
+            "dimensions": 3
+        }),
+    );
+    let settings = IndexSettings {
+        embedders: Some(embedders),
+        ..Default::default()
+    };
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let path = tmp.path().join("settings.json");
+    let raw = serde_json::to_string_pretty(&settings).expect("serialize");
+    std::fs::write(&path, raw).expect("write");
+
+    let err = IndexSettings::load(&path)
+        .expect_err("load must reject pre-existing loopback embedder under default-deny");
+    let msg = format!("{err}");
+    assert!(
+        msg.to_ascii_lowercase().contains("private")
+            || msg.to_ascii_lowercase().contains("local")
+            || msg.to_ascii_lowercase().contains("loopback")
+            || msg.to_ascii_lowercase().contains("localhost"),
+        "load error must identify URL-policy violation: got {msg}"
+    );
+}
+
+/// Companion to the test above: when the operator has opted in via the env
+/// var, the same on-disk settings.json must load successfully. This pins
+/// that the load-path defense is policy-aware (consults the SSOT helper),
+/// not a hardcoded reject of loopback.
+#[test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+fn validate_at_load_accepts_loopback_when_opt_in_set() {
+    use crate::index::settings::IndexSettings;
+    use crate::security::test_helpers::AllowLocalUrlsGuard;
+    use std::collections::HashMap;
+
+    let _restore = AllowLocalUrlsGuard::set("1");
+
+    let mut embedders = HashMap::new();
+    embedders.insert(
+        "default".to_string(),
+        serde_json::json!({
+            "source": "rest",
+            "url": "http://127.0.0.1:11434/api/embeddings",
+            "request": {"input": "{{text}}"},
+            "response": {"embedding": "{{embedding}}"},
+            "dimensions": 3
+        }),
+    );
+    let settings = IndexSettings {
+        embedders: Some(embedders),
+        ..Default::default()
+    };
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let path = tmp.path().join("settings.json");
+    let raw = serde_json::to_string_pretty(&settings).expect("serialize");
+    std::fs::write(&path, raw).expect("write");
+
+    IndexSettings::load(&path)
+        .expect("load must accept loopback embedder when operator has opted in");
 }

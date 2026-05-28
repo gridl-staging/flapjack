@@ -1,0 +1,3590 @@
+Stage 7 A06 RED baseline
+Captured: 2026-05-25T22:37:51Z
+Repo HEAD: baa903e29255ab51d8fcfcb4cc037c1edb3e2501
+cargo-audit version: cargo-audit-audit 0.22.1
+cargo-deny version: cargo-deny 0.19.7
+NOTE: engine/deny.toml absent at RED capture; expecting cargo deny workspace command to fail until canonical policy is created.
+
+### Command: cd engine && cargo test -p flapjack --test test_security_audit -- a06_ --no-fail-fast
+   Compiling flapjack-http v1.0.1 (/Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/flapjack-http)
+   Compiling flapjack v1.0.1 (/Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine)
+    Finished `test` profile [optimized + debuginfo] target(s) in 29.12s
+     Running tests/test_security_audit.rs (target/debug/deps/test_security_audit-8bd81655fc494f1d)
+error: Unrecognized option: 'no-fail-fast'
+error: test failed, to rerun pass `-p flapjack --test test_security_audit`
+[exit:101]
+
+### Command: cd engine && cargo audit --deny warnings
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1098 security advisories (from /Users/stuart/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (689 crate dependencies)
+Crate:     aws-lc-sys
+Version:   0.37.1
+Title:     Timing Side-Channel in AES-CCM Tag Verification in AWS-LC
+Date:      2026-03-02
+ID:        RUSTSEC-2026-0045
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0045
+Severity:  5.9 (medium)
+Solution:  Upgrade to >=0.38.0
+Dependency tree:
+aws-lc-sys 0.37.1
+└── aws-lc-rs 1.16.0
+    ├── rustls-webpki 0.103.9
+    │   ├── rustls-platform-verifier 0.6.2
+    │   │   └── hyper-rustls 0.27.7
+    │   │       ├── reqwest 0.12.28
+    │   │       │   ├── opentelemetry-otlp 0.28.0
+    │   │       │   │   └── flapjack-http 1.0.1
+    │   │       │   │       ├── flapjack-server 1.0.1
+    │   │       │   │       └── flapjack 1.0.1
+    │   │       │   │           ├── flapjack-server 1.0.1
+    │   │       │   │           ├── flapjack-replication 1.0.1
+    │   │       │   │           │   ├── flapjack-http 1.0.1
+    │   │       │   │           │   └── flapjack 1.0.1
+    │   │       │   │           └── flapjack-http 1.0.1
+    │   │       │   ├── opentelemetry-http 0.28.0
+    │   │       │   │   └── opentelemetry-otlp 0.28.0
+    │   │       │   ├── hf-hub 0.4.3
+    │   │       │   │   └── fastembed 5.11.0
+    │   │       │   │       └── flapjack 1.0.1
+    │   │       │   ├── flapjack-replication 1.0.1
+    │   │       │   ├── flapjack-http 1.0.1
+    │   │       │   └── flapjack 1.0.1
+    │   │       ├── instant-acme 0.8.4
+    │   │       │   └── flapjack-ssl 1.0.1
+    │   │       │       ├── flapjack-http 1.0.1
+    │   │       │       └── flapjack 1.0.1
+    │   │       └── aws-smithy-http-client 1.1.10
+    │   │           └── aws-smithy-runtime 1.10.1
+    │   │               ├── aws-sdk-sts 1.98.0
+    │   │               │   └── aws-config 1.8.14
+    │   │               │       └── flapjack-http 1.0.1
+    │   │               ├── aws-sdk-ssooidc 1.96.0
+    │   │               │   └── aws-config 1.8.14
+    │   │               ├── aws-sdk-sso 1.94.0
+    │   │               │   └── aws-config 1.8.14
+    │   │               ├── aws-sdk-sesv2 1.113.0
+    │   │               │   └── flapjack-http 1.0.1
+    │   │               ├── aws-runtime 1.7.0
+    │   │               │   ├── aws-sdk-sts 1.98.0
+    │   │               │   ├── aws-sdk-ssooidc 1.96.0
+    │   │               │   ├── aws-sdk-sso 1.94.0
+    │   │               │   ├── aws-sdk-sesv2 1.113.0
+    │   │               │   └── aws-config 1.8.14
+    │   │               └── aws-config 1.8.14
+    │   └── rustls 0.23.36
+    │       ├── ureq 2.12.1
+    │       │   └── hf-hub 0.4.3
+    │       ├── tokio-rustls 0.26.4
+    │       │   ├── reqwest 0.12.28
+    │       │   ├── hyper-rustls 0.27.7
+    │       │   └── aws-smithy-http-client 1.1.10
+    │       ├── rustls-platform-verifier 0.6.2
+    │       ├── reqwest 0.12.28
+    │       ├── quinn-proto 0.11.13
+    │       │   └── quinn 0.11.9
+    │       │       └── reqwest 0.12.28
+    │       ├── quinn 0.11.9
+    │       ├── instant-acme 0.8.4
+    │       ├── hyper-rustls 0.27.7
+    │       ├── aws-smithy-http-client 1.1.10
+    │       └── attohttpc 0.28.5
+    │           └── aws-creds 0.37.0
+    │               └── rust-s3 0.35.1
+    │                   └── flapjack 1.0.1
+    └── rustls 0.23.36
+
+Crate:     aws-lc-sys
+Version:   0.37.1
+Title:     AWS-LC X.509 Name Constraints Bypass via Wildcard/Unicode CN
+Date:      2026-03-19
+ID:        RUSTSEC-2026-0044
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0044
+Solution:  Upgrade to >=0.39.0
+
+Crate:     aws-lc-sys
+Version:   0.37.1
+Title:     CRL Distribution Point Scope Check Logic Error in AWS-LC
+Date:      2026-03-19
+ID:        RUSTSEC-2026-0048
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0048
+Severity:  7.4 (high)
+Solution:  Upgrade to >=0.39.0
+
+Crate:     aws-lc-sys
+Version:   0.37.1
+Title:     PKCS7_verify Signature Validation Bypass in AWS-LC
+Date:      2026-03-02
+ID:        RUSTSEC-2026-0047
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0047
+Severity:  7.5 (high)
+Solution:  Upgrade to >=0.38.0
+
+Crate:     aws-lc-sys
+Version:   0.37.1
+Title:     PKCS7_verify Certificate Chain Validation Bypass in AWS-LC
+Date:      2026-03-02
+ID:        RUSTSEC-2026-0046
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0046
+Severity:  7.5 (high)
+Solution:  Upgrade to >=0.38.0
+
+Crate:     bytes
+Version:   1.10.1
+Title:     Integer overflow in `BytesMut::reserve`
+Date:      2026-02-03
+ID:        RUSTSEC-2026-0007
+URL:       https://github.com/advisories/GHSA-434x-w66g-qw3r
+Solution:  Upgrade to >=1.11.1
+Dependency tree:
+bytes 1.10.1
+├── tower-http 0.6.8
+│   └── reqwest 0.12.28
+│       ├── opentelemetry-otlp 0.28.0
+│       │   └── flapjack-http 1.0.1
+│       │       ├── flapjack-server 1.0.1
+│       │       └── flapjack 1.0.1
+│       │           ├── flapjack-server 1.0.1
+│       │           ├── flapjack-replication 1.0.1
+│       │           │   ├── flapjack-http 1.0.1
+│       │           │   └── flapjack 1.0.1
+│       │           └── flapjack-http 1.0.1
+│       ├── opentelemetry-http 0.28.0
+│       │   └── opentelemetry-otlp 0.28.0
+│       ├── hf-hub 0.4.3
+│       │   └── fastembed 5.11.0
+│       │       └── flapjack 1.0.1
+│       ├── flapjack-replication 1.0.1
+│       ├── flapjack-http 1.0.1
+│       └── flapjack 1.0.1
+├── tower-http 0.5.2
+│   ├── flapjack-http 1.0.1
+│   └── flapjack 1.0.1
+├── tonic 0.12.3
+│   ├── opentelemetry-proto 0.28.0
+│   │   └── opentelemetry-otlp 0.28.0
+│   └── opentelemetry-otlp 0.28.0
+├── tokio-util 0.7.18
+│   ├── tower 0.4.13
+│   │   ├── tonic 0.12.3
+│   │   ├── flapjack-http 1.0.1
+│   │   └── flapjack 1.0.1
+│   ├── reqwest 0.12.28
+│   ├── h2 0.4.13
+│   │   ├── tonic 0.12.3
+│   │   ├── hyper 1.8.0
+│   │   │   ├── wiremock 0.6.5
+│   │   │   │   ├── flapjack-http 1.0.1
+│   │   │   │   └── flapjack 1.0.1
+│   │   │   ├── tonic 0.12.3
+│   │   │   ├── reqwest 0.12.28
+│   │   │   ├── instant-acme 0.8.4
+│   │   │   │   └── flapjack-ssl 1.0.1
+│   │   │   │       ├── flapjack-http 1.0.1
+│   │   │   │       └── flapjack 1.0.1
+│   │   │   ├── hyper-util 0.1.17
+│   │   │   │   ├── wiremock 0.6.5
+│   │   │   │   ├── tonic 0.12.3
+│   │   │   │   ├── reqwest 0.12.28
+│   │   │   │   ├── instant-acme 0.8.4
+│   │   │   │   ├── hyper-timeout 0.5.2
+│   │   │   │   │   └── tonic 0.12.3
+│   │   │   │   ├── hyper-rustls 0.27.7
+│   │   │   │   │   ├── reqwest 0.12.28
+│   │   │   │   │   ├── instant-acme 0.8.4
+│   │   │   │   │   └── aws-smithy-http-client 1.1.10
+│   │   │   │   │       └── aws-smithy-runtime 1.10.1
+│   │   │   │   │           ├── aws-sdk-sts 1.98.0
+│   │   │   │   │           │   └── aws-config 1.8.14
+│   │   │   │   │           │       └── flapjack-http 1.0.1
+│   │   │   │   │           ├── aws-sdk-ssooidc 1.96.0
+│   │   │   │   │           │   └── aws-config 1.8.14
+│   │   │   │   │           ├── aws-sdk-sso 1.94.0
+│   │   │   │   │           │   └── aws-config 1.8.14
+│   │   │   │   │           ├── aws-sdk-sesv2 1.113.0
+│   │   │   │   │           │   └── flapjack-http 1.0.1
+│   │   │   │   │           ├── aws-runtime 1.7.0
+│   │   │   │   │           │   ├── aws-sdk-sts 1.98.0
+│   │   │   │   │           │   ├── aws-sdk-ssooidc 1.96.0
+│   │   │   │   │           │   ├── aws-sdk-sso 1.94.0
+│   │   │   │   │           │   ├── aws-sdk-sesv2 1.113.0
+│   │   │   │   │           │   └── aws-config 1.8.14
+│   │   │   │   │           └── aws-config 1.8.14
+│   │   │   │   ├── axum 0.7.9
+│   │   │   │   │   ├── utoipa-swagger-ui 8.1.0
+│   │   │   │   │   │   └── flapjack-http 1.0.1
+│   │   │   │   │   ├── tonic 0.12.3
+│   │   │   │   │   ├── flapjack-http 1.0.1
+│   │   │   │   │   └── flapjack 1.0.1
+│   │   │   │   └── aws-smithy-http-client 1.1.10
+│   │   │   ├── hyper-timeout 0.5.2
+│   │   │   ├── hyper-rustls 0.27.7
+│   │   │   ├── axum 0.7.9
+│   │   │   └── aws-smithy-http-client 1.1.10
+│   │   └── aws-smithy-http-client 1.1.10
+│   ├── h2 0.3.27
+│   │   ├── hyper 0.14.32
+│   │   │   ├── rust-s3 0.35.1
+│   │   │   │   └── flapjack 1.0.1
+│   │   │   ├── hyper-rustls 0.24.2
+│   │   │   │   ├── rust-s3 0.35.1
+│   │   │   │   └── aws-smithy-http-client 1.1.10
+│   │   │   └── aws-smithy-http-client 1.1.10
+│   │   └── aws-smithy-http-client 1.1.10
+│   └── aws-smithy-types 1.4.4
+│       ├── aws-types 1.3.12
+│       │   ├── aws-sdk-sts 1.98.0
+│       │   ├── aws-sdk-ssooidc 1.96.0
+│       │   ├── aws-sdk-sso 1.94.0
+│       │   ├── aws-sdk-sesv2 1.113.0
+│       │   ├── aws-runtime 1.7.0
+│       │   └── aws-config 1.8.14
+│       ├── aws-smithy-runtime-api 1.11.4
+│       │   ├── aws-types 1.3.12
+│       │   ├── aws-smithy-runtime 1.10.1
+│       │   ├── aws-smithy-observability 0.2.5
+│       │   │   ├── aws-smithy-runtime 1.10.1
+│       │   │   ├── aws-sdk-sts 1.98.0
+│       │   │   ├── aws-sdk-ssooidc 1.96.0
+│       │   │   ├── aws-sdk-sso 1.94.0
+│       │   │   └── aws-sdk-sesv2 1.113.0
+│       │   ├── aws-smithy-http-client 1.1.10
+│       │   ├── aws-smithy-http 0.63.4
+│       │   │   ├── aws-smithy-runtime 1.10.1
+│       │   │   ├── aws-sigv4 1.4.0
+│       │   │   │   └── aws-runtime 1.7.0
+│       │   │   ├── aws-sdk-sts 1.98.0
+│       │   │   ├── aws-sdk-ssooidc 1.96.0
+│       │   │   ├── aws-sdk-sso 1.94.0
+│       │   │   ├── aws-sdk-sesv2 1.113.0
+│       │   │   ├── aws-runtime 1.7.0
+│       │   │   └── aws-config 1.8.14
+│       │   ├── aws-sigv4 1.4.0
+│       │   ├── aws-sdk-sts 1.98.0
+│       │   ├── aws-sdk-ssooidc 1.96.0
+│       │   ├── aws-sdk-sso 1.94.0
+│       │   ├── aws-sdk-sesv2 1.113.0
+│       │   ├── aws-runtime 1.7.0
+│       │   ├── aws-credential-types 1.2.12
+│       │   │   ├── aws-types 1.3.12
+│       │   │   ├── aws-sigv4 1.4.0
+│       │   │   ├── aws-sdk-sts 1.98.0
+│       │   │   ├── aws-sdk-ssooidc 1.96.0
+│       │   │   ├── aws-sdk-sso 1.94.0
+│       │   │   ├── aws-sdk-sesv2 1.113.0
+│       │   │   ├── aws-runtime 1.7.0
+│       │   │   └── aws-config 1.8.14
+│       │   └── aws-config 1.8.14
+│       ├── aws-smithy-runtime 1.10.1
+│       ├── aws-smithy-query 0.60.14
+│       │   └── aws-sdk-sts 1.98.0
+│       ├── aws-smithy-json 0.62.4
+│       │   ├── aws-sdk-sts 1.98.0
+│       │   ├── aws-sdk-ssooidc 1.96.0
+│       │   ├── aws-sdk-sso 1.94.0
+│       │   ├── aws-sdk-sesv2 1.113.0
+│       │   └── aws-config 1.8.14
+│       ├── aws-smithy-http-client 1.1.10
+│       ├── aws-smithy-http 0.63.4
+│       ├── aws-sigv4 1.4.0
+│       ├── aws-sdk-sts 1.98.0
+│       ├── aws-sdk-ssooidc 1.96.0
+│       ├── aws-sdk-sso 1.94.0
+│       ├── aws-sdk-sesv2 1.113.0
+│       ├── aws-runtime 1.7.0
+│       ├── aws-credential-types 1.2.12
+│       └── aws-config 1.8.14
+├── tokio 1.48.0
+│   ├── wiremock 0.6.5
+│   ├── tower 0.5.2
+│   │   ├── tower-http 0.6.8
+│   │   ├── reqwest 0.12.28
+│   │   ├── axum 0.7.9
+│   │   └── aws-smithy-http-client 1.1.10
+│   ├── tower 0.4.13
+│   ├── tonic 0.12.3
+│   ├── tokio-util 0.7.18
+│   ├── tokio-test 0.4.5
+│   │   └── flapjack-http 1.0.1
+│   ├── tokio-stream 0.1.18
+│   │   ├── tonic 0.12.3
+│   │   ├── tokio-test 0.4.5
+│   │   ├── rust-s3 0.35.1
+│   │   ├── opentelemetry_sdk 0.28.0
+│   │   │   ├── tracing-opentelemetry 0.29.0
+│   │   │   │   └── flapjack-http 1.0.1
+│   │   │   ├── opentelemetry-proto 0.28.0
+│   │   │   ├── opentelemetry-otlp 0.28.0
+│   │   │   └── flapjack-http 1.0.1
+│   │   └── flapjack-http 1.0.1
+│   ├── tokio-rustls 0.26.4
+│   │   ├── reqwest 0.12.28
+│   │   ├── hyper-rustls 0.27.7
+│   │   └── aws-smithy-http-client 1.1.10
+│   ├── tokio-rustls 0.24.1
+│   │   ├── rust-s3 0.35.1
+│   │   └── hyper-rustls 0.24.2
+│   ├── rust-s3 0.35.1
+│   ├── reqwest 0.12.28
+│   ├── quinn 0.11.9
+│   │   └── reqwest 0.12.28
+│   ├── parquet 53.4.1
+│   │   ├── flapjack 1.0.1
+│   │   ├── datafusion-common 44.0.0
+│   │   │   ├── datafusion-sql 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   │       └── flapjack 1.0.1
+│   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   ├── datafusion-functions-table 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   ├── datafusion-catalog 44.0.0
+│   │   │   │   │   ├── datafusion-functions-table 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   ├── datafusion-physical-expr-common 44.0.0
+│   │   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │   │   ├── datafusion-optimizer 44.0.0
+│   │   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   ├── datafusion-functions-window-common 44.0.0
+│   │   │   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   │   │   └── datafusion-expr 44.0.0
+│   │   │   │   │       ├── datafusion-sql 44.0.0
+│   │   │   │   │       ├── datafusion-physical-plan 44.0.0
+│   │   │   │   │       ├── datafusion-physical-expr 44.0.0
+│   │   │   │   │       ├── datafusion-optimizer 44.0.0
+│   │   │   │   │       ├── datafusion-functions-window 44.0.0
+│   │   │   │   │       ├── datafusion-functions-table 44.0.0
+│   │   │   │   │       ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   │       ├── datafusion-functions 44.0.0
+│   │   │   │   │       │   └── datafusion 44.0.0
+│   │   │   │   │       ├── datafusion-execution 44.0.0
+│   │   │   │   │       │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   │       │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │   │       │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   │       │   ├── datafusion-functions 44.0.0
+│   │   │   │   │       │   ├── datafusion-catalog 44.0.0
+│   │   │   │   │       │   └── datafusion 44.0.0
+│   │   │   │   │       ├── datafusion-catalog 44.0.0
+│   │   │   │   │       └── datafusion 44.0.0
+│   │   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   │   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   │   └── datafusion-expr 44.0.0
+│   │   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   ├── datafusion-expr 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   ├── datafusion-optimizer 44.0.0
+│   │   │   ├── datafusion-functions-window-common 44.0.0
+│   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   ├── datafusion-functions-table 44.0.0
+│   │   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   ├── datafusion-functions 44.0.0
+│   │   │   ├── datafusion-expr-common 44.0.0
+│   │   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │   ├── datafusion-physical-expr-common 44.0.0
+│   │   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   │   │   ├── datafusion-functions 44.0.0
+│   │   │   │   └── datafusion-expr 44.0.0
+│   │   │   ├── datafusion-expr 44.0.0
+│   │   │   ├── datafusion-execution 44.0.0
+│   │   │   ├── datafusion-catalog 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   └── datafusion 44.0.0
+│   ├── opentelemetry_sdk 0.28.0
+│   ├── opentelemetry-otlp 0.28.0
+│   ├── object_store 0.11.2
+│   │   ├── parquet 53.4.1
+│   │   ├── datafusion-execution 44.0.0
+│   │   ├── datafusion-common 44.0.0
+│   │   └── datafusion 44.0.0
+│   ├── instant-acme 0.8.4
+│   ├── hyper-util 0.1.17
+│   ├── hyper-timeout 0.5.2
+│   ├── hyper-rustls 0.27.7
+│   ├── hyper-rustls 0.24.2
+│   ├── hyper 1.8.0
+│   ├── hyper 0.14.32
+│   ├── h2 0.4.13
+│   ├── h2 0.3.27
+│   ├── flapjack-ssl 1.0.1
+│   ├── flapjack-server 1.0.1
+│   ├── flapjack-replication 1.0.1
+│   ├── flapjack-http 1.0.1
+│   ├── flapjack 1.0.1
+│   ├── deadpool 0.12.3
+│   │   └── wiremock 0.6.5
+│   ├── datafusion-physical-plan 44.0.0
+│   ├── datafusion-common-runtime 44.0.0
+│   │   ├── datafusion-physical-plan 44.0.0
+│   │   └── datafusion 44.0.0
+│   ├── datafusion-common 44.0.0
+│   ├── datafusion 44.0.0
+│   ├── axum 0.7.9
+│   ├── aws-smithy-types 1.4.4
+│   ├── aws-smithy-runtime-api 1.11.4
+│   ├── aws-smithy-runtime 1.10.1
+│   ├── aws-smithy-http-client 1.1.10
+│   ├── aws-smithy-async 1.2.12
+│   │   ├── aws-types 1.3.12
+│   │   ├── aws-smithy-runtime-api 1.11.4
+│   │   ├── aws-smithy-runtime 1.10.1
+│   │   ├── aws-smithy-http-client 1.1.10
+│   │   ├── aws-sdk-sts 1.98.0
+│   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   ├── aws-sdk-sso 1.94.0
+│   │   ├── aws-sdk-sesv2 1.113.0
+│   │   ├── aws-runtime 1.7.0
+│   │   ├── aws-credential-types 1.2.12
+│   │   └── aws-config 1.8.14
+│   └── aws-config 1.8.14
+├── rust-s3 0.35.1
+├── reqwest 0.12.28
+├── quinn-proto 0.11.13
+│   └── quinn 0.11.9
+├── quinn 0.11.9
+├── prost 0.13.5
+│   ├── tonic 0.12.3
+│   ├── opentelemetry-proto 0.28.0
+│   └── opentelemetry-otlp 0.28.0
+├── parquet 53.4.1
+├── opentelemetry-http 0.28.0
+├── object_store 0.11.2
+├── instant-acme 0.8.4
+├── hyper-util 0.1.17
+├── hyper 1.8.0
+├── hyper 0.14.32
+├── http-body-util 0.1.3
+│   ├── wiremock 0.6.5
+│   ├── tower-http 0.5.2
+│   ├── tonic 0.12.3
+│   ├── reqwest 0.12.28
+│   ├── instant-acme 0.8.4
+│   ├── flapjack 1.0.1
+│   ├── axum-core 0.4.5
+│   │   └── axum 0.7.9
+│   ├── axum 0.7.9
+│   ├── aws-smithy-types 1.4.4
+│   ├── aws-smithy-runtime 1.10.1
+│   └── aws-smithy-http 0.63.4
+├── http-body 1.0.1
+│   ├── tower-http 0.6.8
+│   ├── tower-http 0.5.2
+│   ├── tonic 0.12.3
+│   ├── reqwest 0.12.28
+│   ├── instant-acme 0.8.4
+│   ├── hyper-util 0.1.17
+│   ├── hyper 1.8.0
+│   ├── http-body-util 0.1.3
+│   ├── axum-core 0.4.5
+│   ├── axum 0.7.9
+│   ├── aws-smithy-types 1.4.4
+│   ├── aws-smithy-runtime 1.10.1
+│   ├── aws-smithy-http 0.63.4
+│   └── aws-runtime 1.7.0
+├── http-body 0.4.6
+│   ├── hyper 0.14.32
+│   ├── aws-smithy-types 1.4.4
+│   ├── aws-smithy-runtime 1.10.1
+│   └── aws-smithy-http-client 1.1.10
+├── http 1.3.1
+│   ├── wiremock 0.6.5
+│   ├── ureq-proto 0.5.3
+│   │   └── ureq 3.2.0
+│   │       ├── ort-sys 2.0.0-rc.11
+│   │       │   └── ort 2.0.0-rc.11
+│   │       │       └── fastembed 5.11.0
+│   │       └── ort 2.0.0-rc.11
+│   ├── tower-http 0.6.8
+│   ├── tower-http 0.5.2
+│   ├── tonic 0.12.3
+│   ├── reqwest 0.12.28
+│   ├── opentelemetry-otlp 0.28.0
+│   ├── opentelemetry-http 0.28.0
+│   ├── instant-acme 0.8.4
+│   ├── hyper-util 0.1.17
+│   ├── hyper-rustls 0.27.7
+│   ├── hyper 1.8.0
+│   ├── http-body-util 0.1.3
+│   ├── http-body 1.0.1
+│   ├── hf-hub 0.4.3
+│   ├── h2 0.4.13
+│   ├── flapjack 1.0.1
+│   ├── axum-core 0.4.5
+│   ├── axum 0.7.9
+│   ├── aws-smithy-types 1.4.4
+│   ├── aws-smithy-runtime-api 1.11.4
+│   ├── aws-smithy-runtime 1.10.1
+│   ├── aws-smithy-http-client 1.1.10
+│   ├── aws-smithy-http 0.63.4
+│   ├── aws-sigv4 1.4.0
+│   ├── aws-sdk-sts 1.98.0
+│   ├── aws-sdk-ssooidc 1.96.0
+│   ├── aws-sdk-sso 1.94.0
+│   ├── aws-sdk-sesv2 1.113.0
+│   ├── aws-runtime 1.7.0
+│   ├── aws-config 1.8.14
+│   └── attohttpc 0.28.5
+│       └── aws-creds 0.37.0
+│           └── rust-s3 0.35.1
+├── http 0.2.12
+│   ├── rust-s3 0.35.1
+│   ├── hyper-rustls 0.24.2
+│   ├── hyper 0.14.32
+│   ├── http-body 0.4.6
+│   ├── h2 0.3.27
+│   ├── aws-smithy-types 1.4.4
+│   ├── aws-smithy-runtime-api 1.11.4
+│   ├── aws-smithy-runtime 1.10.1
+│   ├── aws-smithy-http-client 1.1.10
+│   ├── aws-sigv4 1.4.0
+│   ├── aws-sdk-sts 1.98.0
+│   ├── aws-sdk-ssooidc 1.96.0
+│   ├── aws-sdk-sso 1.94.0
+│   └── aws-sdk-sesv2 1.113.0
+├── h2 0.4.13
+├── h2 0.3.27
+├── datafusion 44.0.0
+├── combine 4.6.7
+│   └── jni 0.21.1
+│       └── rustls-platform-verifier 0.6.2
+│           └── hyper-rustls 0.27.7
+├── bytes-utils 0.1.4
+│   ├── aws-smithy-types 1.4.4
+│   ├── aws-smithy-http 0.63.4
+│   └── aws-runtime 1.7.0
+├── axum-core 0.4.5
+├── axum 0.7.9
+├── aws-smithy-types 1.4.4
+├── aws-smithy-runtime-api 1.11.4
+├── aws-smithy-runtime 1.10.1
+├── aws-smithy-http 0.63.4
+├── aws-sigv4 1.4.0
+├── aws-sdk-ssooidc 1.96.0
+├── aws-sdk-sso 1.94.0
+├── aws-sdk-sesv2 1.113.0
+├── aws-runtime 1.7.0
+├── aws-config 1.8.14
+└── arrow-buffer 53.4.1
+    ├── parquet 53.4.1
+    ├── datafusion-physical-plan 44.0.0
+    ├── datafusion-physical-expr 44.0.0
+    ├── datafusion-functions 44.0.0
+    ├── datafusion-common 44.0.0
+    ├── arrow-string 53.4.1
+    │   └── arrow 53.4.1
+    │       ├── flapjack 1.0.1
+    │       ├── datafusion-sql 44.0.0
+    │       ├── datafusion-physical-plan 44.0.0
+    │       ├── datafusion-physical-optimizer 44.0.0
+    │       ├── datafusion-physical-expr-common 44.0.0
+    │       ├── datafusion-physical-expr 44.0.0
+    │       ├── datafusion-optimizer 44.0.0
+    │       ├── datafusion-functions-table 44.0.0
+    │       ├── datafusion-functions-aggregate-common 44.0.0
+    │       ├── datafusion-functions-aggregate 44.0.0
+    │       ├── datafusion-functions 44.0.0
+    │       ├── datafusion-expr-common 44.0.0
+    │       ├── datafusion-expr 44.0.0
+    │       ├── datafusion-execution 44.0.0
+    │       ├── datafusion-common 44.0.0
+    │       └── datafusion 44.0.0
+    ├── arrow-select 53.4.1
+    │   ├── parquet 53.4.1
+    │   ├── arrow-string 53.4.1
+    │   ├── arrow-ord 53.4.1
+    │   │   ├── datafusion-physical-plan 44.0.0
+    │   │   └── arrow 53.4.1
+    │   ├── arrow-cast 53.4.1
+    │   │   ├── parquet 53.4.1
+    │   │   ├── arrow-json 53.4.1
+    │   │   │   └── arrow 53.4.1
+    │   │   ├── arrow-ipc 53.4.1
+    │   │   │   ├── parquet 53.4.1
+    │   │   │   ├── datafusion 44.0.0
+    │   │   │   └── arrow 53.4.1
+    │   │   ├── arrow-csv 53.4.1
+    │   │   │   └── arrow 53.4.1
+    │   │   └── arrow 53.4.1
+    │   └── arrow 53.4.1
+    ├── arrow-row 53.4.1
+    │   └── arrow 53.4.1
+    ├── arrow-ord 53.4.1
+    ├── arrow-json 53.4.1
+    ├── arrow-ipc 53.4.1
+    ├── arrow-data 53.4.1
+    │   ├── parquet 53.4.1
+    │   ├── arrow-string 53.4.1
+    │   ├── arrow-select 53.4.1
+    │   ├── arrow-row 53.4.1
+    │   ├── arrow-ord 53.4.1
+    │   ├── arrow-json 53.4.1
+    │   ├── arrow-ipc 53.4.1
+    │   ├── arrow-csv 53.4.1
+    │   ├── arrow-cast 53.4.1
+    │   ├── arrow-array 53.4.1
+    │   │   ├── parquet 53.4.1
+    │   │   ├── datafusion-sql 44.0.0
+    │   │   ├── datafusion-physical-plan 44.0.0
+    │   │   ├── datafusion-physical-expr 44.0.0
+    │   │   ├── datafusion-common 44.0.0
+    │   │   ├── datafusion 44.0.0
+    │   │   ├── arrow-string 53.4.1
+    │   │   ├── arrow-select 53.4.1
+    │   │   ├── arrow-row 53.4.1
+    │   │   ├── arrow-ord 53.4.1
+    │   │   ├── arrow-json 53.4.1
+    │   │   ├── arrow-ipc 53.4.1
+    │   │   ├── arrow-csv 53.4.1
+    │   │   ├── arrow-cast 53.4.1
+    │   │   ├── arrow-arith 53.4.1
+    │   │   │   └── arrow 53.4.1
+    │   │   └── arrow 53.4.1
+    │   ├── arrow-arith 53.4.1
+    │   └── arrow 53.4.1
+    ├── arrow-csv 53.4.1
+    ├── arrow-cast 53.4.1
+    ├── arrow-array 53.4.1
+    ├── arrow-arith 53.4.1
+    └── arrow 53.4.1
+
+Crate:     lz4_flex
+Version:   0.11.5
+Title:     Decompressing invalid data can leak information from uninitialized memory or reused output buffer
+Date:      2026-03-17
+ID:        RUSTSEC-2026-0041
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0041
+Severity:  8.2 (high)
+Solution:  Upgrade to >=0.11.6, <0.12.0 OR >=0.12.1
+Dependency tree:
+lz4_flex 0.11.5
+├── tantivy 0.25.0
+│   └── flapjack 1.0.1
+│       ├── flapjack-server 1.0.1
+│       ├── flapjack-replication 1.0.1
+│       │   ├── flapjack-http 1.0.1
+│       │   │   ├── flapjack-server 1.0.1
+│       │   │   └── flapjack 1.0.1
+│       │   └── flapjack 1.0.1
+│       └── flapjack-http 1.0.1
+├── parquet 53.4.1
+│   ├── flapjack 1.0.1
+│   ├── datafusion-common 44.0.0
+│   │   ├── datafusion-sql 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   │       └── flapjack 1.0.1
+│   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   ├── datafusion-functions-table 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   ├── datafusion-catalog 44.0.0
+│   │   │   │   ├── datafusion-functions-table 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   ├── datafusion-physical-expr-common 44.0.0
+│   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │   ├── datafusion-optimizer 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   ├── datafusion-functions-window-common 44.0.0
+│   │   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   │   └── datafusion-expr 44.0.0
+│   │   │   │       ├── datafusion-sql 44.0.0
+│   │   │   │       ├── datafusion-physical-plan 44.0.0
+│   │   │   │       ├── datafusion-physical-expr 44.0.0
+│   │   │   │       ├── datafusion-optimizer 44.0.0
+│   │   │   │       ├── datafusion-functions-window 44.0.0
+│   │   │   │       ├── datafusion-functions-table 44.0.0
+│   │   │   │       ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │       ├── datafusion-functions 44.0.0
+│   │   │   │       │   └── datafusion 44.0.0
+│   │   │   │       ├── datafusion-execution 44.0.0
+│   │   │   │       │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │       │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │       │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │       │   ├── datafusion-functions 44.0.0
+│   │   │   │       │   ├── datafusion-catalog 44.0.0
+│   │   │   │       │   └── datafusion 44.0.0
+│   │   │   │       ├── datafusion-catalog 44.0.0
+│   │   │   │       └── datafusion 44.0.0
+│   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   └── datafusion-expr 44.0.0
+│   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   ├── datafusion-expr 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   ├── datafusion-physical-expr 44.0.0
+│   │   ├── datafusion-optimizer 44.0.0
+│   │   ├── datafusion-functions-window-common 44.0.0
+│   │   ├── datafusion-functions-window 44.0.0
+│   │   ├── datafusion-functions-table 44.0.0
+│   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   ├── datafusion-functions 44.0.0
+│   │   ├── datafusion-expr-common 44.0.0
+│   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   ├── datafusion-physical-expr-common 44.0.0
+│   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   │   ├── datafusion-functions 44.0.0
+│   │   │   └── datafusion-expr 44.0.0
+│   │   ├── datafusion-expr 44.0.0
+│   │   ├── datafusion-execution 44.0.0
+│   │   ├── datafusion-catalog 44.0.0
+│   │   └── datafusion 44.0.0
+│   └── datafusion 44.0.0
+└── arrow-ipc 53.4.1
+    ├── parquet 53.4.1
+    ├── datafusion 44.0.0
+    └── arrow 53.4.1
+        ├── flapjack 1.0.1
+        ├── datafusion-sql 44.0.0
+        ├── datafusion-physical-plan 44.0.0
+        ├── datafusion-physical-optimizer 44.0.0
+        ├── datafusion-physical-expr-common 44.0.0
+        ├── datafusion-physical-expr 44.0.0
+        ├── datafusion-optimizer 44.0.0
+        ├── datafusion-functions-table 44.0.0
+        ├── datafusion-functions-aggregate-common 44.0.0
+        ├── datafusion-functions-aggregate 44.0.0
+        ├── datafusion-functions 44.0.0
+        ├── datafusion-expr-common 44.0.0
+        ├── datafusion-expr 44.0.0
+        ├── datafusion-execution 44.0.0
+        ├── datafusion-common 44.0.0
+        └── datafusion 44.0.0
+
+Crate:     maxminddb
+Version:   0.24.0
+Title:     `Reader::open_mmap` unsoundly marks unsafe memmap operation as safe
+Date:      2025-11-28
+ID:        RUSTSEC-2025-0132
+URL:       https://rustsec.org/advisories/RUSTSEC-2025-0132
+Solution:  Upgrade to >=0.27.0
+Dependency tree:
+maxminddb 0.24.0
+└── flapjack-http 1.0.1
+    ├── flapjack-server 1.0.1
+    └── flapjack 1.0.1
+        ├── flapjack-server 1.0.1
+        ├── flapjack-replication 1.0.1
+        │   ├── flapjack-http 1.0.1
+        │   └── flapjack 1.0.1
+        └── flapjack-http 1.0.1
+
+Crate:     quinn-proto
+Version:   0.11.13
+Title:     Denial of service in Quinn endpoints
+Date:      2026-03-09
+ID:        RUSTSEC-2026-0037
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0037
+Severity:  8.7 (high)
+Solution:  Upgrade to >=0.11.14
+Dependency tree:
+quinn-proto 0.11.13
+└── quinn 0.11.9
+    └── reqwest 0.12.28
+        ├── opentelemetry-otlp 0.28.0
+        │   └── flapjack-http 1.0.1
+        │       ├── flapjack-server 1.0.1
+        │       └── flapjack 1.0.1
+        │           ├── flapjack-server 1.0.1
+        │           ├── flapjack-replication 1.0.1
+        │           │   ├── flapjack-http 1.0.1
+        │           │   └── flapjack 1.0.1
+        │           └── flapjack-http 1.0.1
+        ├── opentelemetry-http 0.28.0
+        │   └── opentelemetry-otlp 0.28.0
+        ├── hf-hub 0.4.3
+        │   └── fastembed 5.11.0
+        │       └── flapjack 1.0.1
+        ├── flapjack-replication 1.0.1
+        ├── flapjack-http 1.0.1
+        └── flapjack 1.0.1
+
+Crate:     rustls-webpki
+Version:   0.101.7
+Title:     Reachable panic in certificate revocation list parsing
+Date:      2026-04-22
+ID:        RUSTSEC-2026-0104
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0104
+Solution:  Upgrade to >=0.103.13, <0.104.0-alpha.1 OR >=0.104.0-alpha.7
+Dependency tree:
+rustls-webpki 0.101.7
+└── rustls 0.21.12
+    ├── tokio-rustls 0.24.1
+    │   ├── rust-s3 0.35.1
+    │   │   └── flapjack 1.0.1
+    │   │       ├── flapjack-server 1.0.1
+    │   │       ├── flapjack-replication 1.0.1
+    │   │       │   ├── flapjack-http 1.0.1
+    │   │       │   │   ├── flapjack-server 1.0.1
+    │   │       │   │   └── flapjack 1.0.1
+    │   │       │   └── flapjack 1.0.1
+    │   │       └── flapjack-http 1.0.1
+    │   └── hyper-rustls 0.24.2
+    │       ├── rust-s3 0.35.1
+    │       └── aws-smithy-http-client 1.1.10
+    │           └── aws-smithy-runtime 1.10.1
+    │               ├── aws-sdk-sts 1.98.0
+    │               │   └── aws-config 1.8.14
+    │               │       └── flapjack-http 1.0.1
+    │               ├── aws-sdk-ssooidc 1.96.0
+    │               │   └── aws-config 1.8.14
+    │               ├── aws-sdk-sso 1.94.0
+    │               │   └── aws-config 1.8.14
+    │               ├── aws-sdk-sesv2 1.113.0
+    │               │   └── flapjack-http 1.0.1
+    │               ├── aws-runtime 1.7.0
+    │               │   ├── aws-sdk-sts 1.98.0
+    │               │   ├── aws-sdk-ssooidc 1.96.0
+    │               │   ├── aws-sdk-sso 1.94.0
+    │               │   ├── aws-sdk-sesv2 1.113.0
+    │               │   └── aws-config 1.8.14
+    │               └── aws-config 1.8.14
+    ├── rust-s3 0.35.1
+    ├── hyper-rustls 0.24.2
+    └── aws-smithy-http-client 1.1.10
+
+Crate:     rustls-webpki
+Version:   0.101.7
+Title:     Name constraints for URI names were incorrectly accepted
+Date:      2026-04-14
+ID:        RUSTSEC-2026-0098
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0098
+Solution:  Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6
+
+Crate:     rustls-webpki
+Version:   0.101.7
+Title:     Name constraints were accepted for certificates asserting a wildcard name
+Date:      2026-04-14
+ID:        RUSTSEC-2026-0099
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0099
+Solution:  Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6
+
+Crate:     rustls-webpki
+Version:   0.103.9
+Title:     Reachable panic in certificate revocation list parsing
+Date:      2026-04-22
+ID:        RUSTSEC-2026-0104
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0104
+Solution:  Upgrade to >=0.103.13, <0.104.0-alpha.1 OR >=0.104.0-alpha.7
+Dependency tree:
+rustls-webpki 0.103.9
+├── rustls-platform-verifier 0.6.2
+│   └── hyper-rustls 0.27.7
+│       ├── reqwest 0.12.28
+│       │   ├── opentelemetry-otlp 0.28.0
+│       │   │   └── flapjack-http 1.0.1
+│       │   │       ├── flapjack-server 1.0.1
+│       │   │       └── flapjack 1.0.1
+│       │   │           ├── flapjack-server 1.0.1
+│       │   │           ├── flapjack-replication 1.0.1
+│       │   │           │   ├── flapjack-http 1.0.1
+│       │   │           │   └── flapjack 1.0.1
+│       │   │           └── flapjack-http 1.0.1
+│       │   ├── opentelemetry-http 0.28.0
+│       │   │   └── opentelemetry-otlp 0.28.0
+│       │   ├── hf-hub 0.4.3
+│       │   │   └── fastembed 5.11.0
+│       │   │       └── flapjack 1.0.1
+│       │   ├── flapjack-replication 1.0.1
+│       │   ├── flapjack-http 1.0.1
+│       │   └── flapjack 1.0.1
+│       ├── instant-acme 0.8.4
+│       │   └── flapjack-ssl 1.0.1
+│       │       ├── flapjack-http 1.0.1
+│       │       └── flapjack 1.0.1
+│       └── aws-smithy-http-client 1.1.10
+│           └── aws-smithy-runtime 1.10.1
+│               ├── aws-sdk-sts 1.98.0
+│               │   └── aws-config 1.8.14
+│               │       └── flapjack-http 1.0.1
+│               ├── aws-sdk-ssooidc 1.96.0
+│               │   └── aws-config 1.8.14
+│               ├── aws-sdk-sso 1.94.0
+│               │   └── aws-config 1.8.14
+│               ├── aws-sdk-sesv2 1.113.0
+│               │   └── flapjack-http 1.0.1
+│               ├── aws-runtime 1.7.0
+│               │   ├── aws-sdk-sts 1.98.0
+│               │   ├── aws-sdk-ssooidc 1.96.0
+│               │   ├── aws-sdk-sso 1.94.0
+│               │   ├── aws-sdk-sesv2 1.113.0
+│               │   └── aws-config 1.8.14
+│               └── aws-config 1.8.14
+└── rustls 0.23.36
+    ├── ureq 2.12.1
+    │   └── hf-hub 0.4.3
+    ├── tokio-rustls 0.26.4
+    │   ├── reqwest 0.12.28
+    │   ├── hyper-rustls 0.27.7
+    │   └── aws-smithy-http-client 1.1.10
+    ├── rustls-platform-verifier 0.6.2
+    ├── reqwest 0.12.28
+    ├── quinn-proto 0.11.13
+    │   └── quinn 0.11.9
+    │       └── reqwest 0.12.28
+    ├── quinn 0.11.9
+    ├── instant-acme 0.8.4
+    ├── hyper-rustls 0.27.7
+    ├── aws-smithy-http-client 1.1.10
+    └── attohttpc 0.28.5
+        └── aws-creds 0.37.0
+            └── rust-s3 0.35.1
+                └── flapjack 1.0.1
+
+Crate:     rustls-webpki
+Version:   0.103.9
+Title:     Name constraints for URI names were incorrectly accepted
+Date:      2026-04-14
+ID:        RUSTSEC-2026-0098
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0098
+Solution:  Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6
+
+Crate:     rustls-webpki
+Version:   0.103.9
+Title:     Name constraints were accepted for certificates asserting a wildcard name
+Date:      2026-04-14
+ID:        RUSTSEC-2026-0099
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0099
+Solution:  Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6
+
+Crate:     rustls-webpki
+Version:   0.103.9
+Title:     CRLs not considered authoritative by Distribution Point due to faulty matching logic
+Date:      2026-03-20
+ID:        RUSTSEC-2026-0049
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0049
+Solution:  Upgrade to >=0.103.10
+
+Crate:     tar
+Version:   0.4.44
+Title:     tar-rs incorrectly ignores PAX size headers if header size is nonzero
+Date:      2026-03-19
+ID:        RUSTSEC-2026-0068
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0068
+Severity:  5.1 (medium)
+Solution:  Upgrade to >=0.4.45
+Dependency tree:
+tar 0.4.44
+└── flapjack 1.0.1
+    ├── flapjack-server 1.0.1
+    ├── flapjack-replication 1.0.1
+    │   ├── flapjack-http 1.0.1
+    │   │   ├── flapjack-server 1.0.1
+    │   │   └── flapjack 1.0.1
+    │   └── flapjack 1.0.1
+    └── flapjack-http 1.0.1
+
+Crate:     tar
+Version:   0.4.44
+Title:     `unpack_in` can chmod arbitrary directories by following symlinks
+Date:      2026-03-19
+ID:        RUSTSEC-2026-0067
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0067
+Severity:  5.1 (medium)
+Solution:  Upgrade to >=0.4.45
+
+Crate:     time
+Version:   0.3.44
+Title:     Denial of Service via Stack Exhaustion
+Date:      2026-02-05
+ID:        RUSTSEC-2026-0009
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0009
+Severity:  6.8 (medium)
+Solution:  Upgrade to >=0.3.47
+Dependency tree:
+time 0.3.44
+├── yasna 0.5.2
+│   ├── rcgen 0.14.7
+│   │   └── instant-acme 0.8.4
+│   │       └── flapjack-ssl 1.0.1
+│   │           ├── flapjack-http 1.0.1
+│   │           │   ├── flapjack-server 1.0.1
+│   │           │   └── flapjack 1.0.1
+│   │           │       ├── flapjack-server 1.0.1
+│   │           │       ├── flapjack-replication 1.0.1
+│   │           │       │   ├── flapjack-http 1.0.1
+│   │           │       │   └── flapjack 1.0.1
+│   │           │       └── flapjack-http 1.0.1
+│   │           └── flapjack 1.0.1
+│   └── rcgen 0.13.2
+│       └── flapjack-ssl 1.0.1
+├── x509-parser 0.18.1
+│   └── rcgen 0.14.7
+├── x509-parser 0.16.0
+│   └── flapjack-ssl 1.0.1
+├── tantivy-common 0.10.0
+│   ├── tantivy-stacker 0.6.0
+│   │   ├── tantivy-columnar 0.6.0
+│   │   │   └── tantivy 0.25.0
+│   │   │       └── flapjack 1.0.1
+│   │   └── tantivy 0.25.0
+│   ├── tantivy-sstable 0.6.0
+│   │   └── tantivy-columnar 0.6.0
+│   ├── tantivy-columnar 0.6.0
+│   └── tantivy 0.25.0
+├── tantivy 0.25.0
+├── rust-s3 0.35.1
+│   └── flapjack 1.0.1
+├── rcgen 0.14.7
+├── rcgen 0.13.2
+├── aws-smithy-types 1.4.4
+│   ├── aws-types 1.3.12
+│   │   ├── aws-sdk-sts 1.98.0
+│   │   │   └── aws-config 1.8.14
+│   │   │       └── flapjack-http 1.0.1
+│   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   │   └── aws-config 1.8.14
+│   │   ├── aws-sdk-sso 1.94.0
+│   │   │   └── aws-config 1.8.14
+│   │   ├── aws-sdk-sesv2 1.113.0
+│   │   │   └── flapjack-http 1.0.1
+│   │   ├── aws-runtime 1.7.0
+│   │   │   ├── aws-sdk-sts 1.98.0
+│   │   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   │   ├── aws-sdk-sso 1.94.0
+│   │   │   ├── aws-sdk-sesv2 1.113.0
+│   │   │   └── aws-config 1.8.14
+│   │   └── aws-config 1.8.14
+│   ├── aws-smithy-runtime-api 1.11.4
+│   │   ├── aws-types 1.3.12
+│   │   ├── aws-smithy-runtime 1.10.1
+│   │   │   ├── aws-sdk-sts 1.98.0
+│   │   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   │   ├── aws-sdk-sso 1.94.0
+│   │   │   ├── aws-sdk-sesv2 1.113.0
+│   │   │   ├── aws-runtime 1.7.0
+│   │   │   └── aws-config 1.8.14
+│   │   ├── aws-smithy-observability 0.2.5
+│   │   │   ├── aws-smithy-runtime 1.10.1
+│   │   │   ├── aws-sdk-sts 1.98.0
+│   │   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   │   ├── aws-sdk-sso 1.94.0
+│   │   │   └── aws-sdk-sesv2 1.113.0
+│   │   ├── aws-smithy-http-client 1.1.10
+│   │   │   └── aws-smithy-runtime 1.10.1
+│   │   ├── aws-smithy-http 0.63.4
+│   │   │   ├── aws-smithy-runtime 1.10.1
+│   │   │   ├── aws-sigv4 1.4.0
+│   │   │   │   └── aws-runtime 1.7.0
+│   │   │   ├── aws-sdk-sts 1.98.0
+│   │   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   │   ├── aws-sdk-sso 1.94.0
+│   │   │   ├── aws-sdk-sesv2 1.113.0
+│   │   │   ├── aws-runtime 1.7.0
+│   │   │   └── aws-config 1.8.14
+│   │   ├── aws-sigv4 1.4.0
+│   │   ├── aws-sdk-sts 1.98.0
+│   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   ├── aws-sdk-sso 1.94.0
+│   │   ├── aws-sdk-sesv2 1.113.0
+│   │   ├── aws-runtime 1.7.0
+│   │   ├── aws-credential-types 1.2.12
+│   │   │   ├── aws-types 1.3.12
+│   │   │   ├── aws-sigv4 1.4.0
+│   │   │   ├── aws-sdk-sts 1.98.0
+│   │   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   │   ├── aws-sdk-sso 1.94.0
+│   │   │   ├── aws-sdk-sesv2 1.113.0
+│   │   │   ├── aws-runtime 1.7.0
+│   │   │   └── aws-config 1.8.14
+│   │   └── aws-config 1.8.14
+│   ├── aws-smithy-runtime 1.10.1
+│   ├── aws-smithy-query 0.60.14
+│   │   └── aws-sdk-sts 1.98.0
+│   ├── aws-smithy-json 0.62.4
+│   │   ├── aws-sdk-sts 1.98.0
+│   │   ├── aws-sdk-ssooidc 1.96.0
+│   │   ├── aws-sdk-sso 1.94.0
+│   │   ├── aws-sdk-sesv2 1.113.0
+│   │   └── aws-config 1.8.14
+│   ├── aws-smithy-http-client 1.1.10
+│   ├── aws-smithy-http 0.63.4
+│   ├── aws-sigv4 1.4.0
+│   ├── aws-sdk-sts 1.98.0
+│   ├── aws-sdk-ssooidc 1.96.0
+│   ├── aws-sdk-sso 1.94.0
+│   ├── aws-sdk-sesv2 1.113.0
+│   ├── aws-runtime 1.7.0
+│   ├── aws-credential-types 1.2.12
+│   └── aws-config 1.8.14
+├── aws-sigv4 1.4.0
+├── aws-creds 0.37.0
+│   └── rust-s3 0.35.1
+├── aws-config 1.8.14
+├── asn1-rs 0.7.1
+│   ├── x509-parser 0.18.1
+│   ├── oid-registry 0.8.1
+│   │   └── x509-parser 0.18.1
+│   └── der-parser 10.0.0
+│       └── x509-parser 0.18.1
+└── asn1-rs 0.6.2
+    ├── x509-parser 0.16.0
+    ├── oid-registry 0.7.1
+    │   └── x509-parser 0.16.0
+    └── der-parser 9.0.0
+        └── x509-parser 0.16.0
+
+Crate:     dotenv
+Version:   0.15.0
+Warning:   unmaintained
+Title:     dotenv is Unmaintained
+Date:      2021-12-24
+ID:        RUSTSEC-2021-0141
+URL:       https://rustsec.org/advisories/RUSTSEC-2021-0141
+Dependency tree:
+dotenv 0.15.0
+└── flapjack 1.0.1
+    ├── flapjack-server 1.0.1
+    ├── flapjack-replication 1.0.1
+    │   ├── flapjack-http 1.0.1
+    │   │   ├── flapjack-server 1.0.1
+    │   │   └── flapjack 1.0.1
+    │   └── flapjack 1.0.1
+    └── flapjack-http 1.0.1
+
+Crate:     number_prefix
+Version:   0.4.0
+Warning:   unmaintained
+Title:     number_prefix crate is unmaintained
+Date:      2025-11-17
+ID:        RUSTSEC-2025-0119
+URL:       https://rustsec.org/advisories/RUSTSEC-2025-0119
+Dependency tree:
+number_prefix 0.4.0
+└── indicatif 0.17.11
+    └── hf-hub 0.4.3
+        └── fastembed 5.11.0
+            └── flapjack 1.0.1
+                ├── flapjack-server 1.0.1
+                ├── flapjack-replication 1.0.1
+                │   ├── flapjack-http 1.0.1
+                │   │   ├── flapjack-server 1.0.1
+                │   │   └── flapjack 1.0.1
+                │   └── flapjack 1.0.1
+                └── flapjack-http 1.0.1
+
+Crate:     paste
+Version:   1.0.15
+Warning:   unmaintained
+Title:     paste - no longer maintained
+Date:      2024-10-07
+ID:        RUSTSEC-2024-0436
+URL:       https://rustsec.org/advisories/RUSTSEC-2024-0436
+Dependency tree:
+paste 1.0.15
+├── tokenizers 0.22.2
+│   └── fastembed 5.11.0
+│       └── flapjack 1.0.1
+│           ├── flapjack-server 1.0.1
+│           ├── flapjack-replication 1.0.1
+│           │   ├── flapjack-http 1.0.1
+│           │   │   ├── flapjack-server 1.0.1
+│           │   │   └── flapjack 1.0.1
+│           │   └── flapjack 1.0.1
+│           └── flapjack-http 1.0.1
+├── tikv-jemalloc-ctl 0.6.1
+│   └── flapjack 1.0.1
+├── parquet 53.4.1
+│   ├── flapjack 1.0.1
+│   ├── datafusion-common 44.0.0
+│   │   ├── datafusion-sql 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   │       └── flapjack 1.0.1
+│   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   ├── datafusion-functions-table 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   ├── datafusion-catalog 44.0.0
+│   │   │   │   ├── datafusion-functions-table 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   ├── datafusion-physical-expr-common 44.0.0
+│   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │   ├── datafusion-optimizer 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   │   └── datafusion 44.0.0
+│   │   │   │   └── datafusion 44.0.0
+│   │   │   ├── datafusion-functions-window-common 44.0.0
+│   │   │   │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   │   └── datafusion-expr 44.0.0
+│   │   │   │       ├── datafusion-sql 44.0.0
+│   │   │   │       ├── datafusion-physical-plan 44.0.0
+│   │   │   │       ├── datafusion-physical-expr 44.0.0
+│   │   │   │       ├── datafusion-optimizer 44.0.0
+│   │   │   │       ├── datafusion-functions-window 44.0.0
+│   │   │   │       ├── datafusion-functions-table 44.0.0
+│   │   │   │       ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │       ├── datafusion-functions 44.0.0
+│   │   │   │       │   └── datafusion 44.0.0
+│   │   │   │       ├── datafusion-execution 44.0.0
+│   │   │   │       │   ├── datafusion-physical-plan 44.0.0
+│   │   │   │       │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   │       │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │       │   ├── datafusion-functions 44.0.0
+│   │   │   │       │   ├── datafusion-catalog 44.0.0
+│   │   │   │       │   └── datafusion 44.0.0
+│   │   │   │       ├── datafusion-catalog 44.0.0
+│   │   │   │       └── datafusion 44.0.0
+│   │   │   ├── datafusion-functions-window 44.0.0
+│   │   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   │   └── datafusion-expr 44.0.0
+│   │   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   │   ├── datafusion-expr 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   ├── datafusion-physical-expr 44.0.0
+│   │   ├── datafusion-optimizer 44.0.0
+│   │   ├── datafusion-functions-window-common 44.0.0
+│   │   ├── datafusion-functions-window 44.0.0
+│   │   ├── datafusion-functions-table 44.0.0
+│   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   ├── datafusion-functions-aggregate 44.0.0
+│   │   ├── datafusion-functions 44.0.0
+│   │   ├── datafusion-expr-common 44.0.0
+│   │   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   ├── datafusion-physical-expr-common 44.0.0
+│   │   │   ├── datafusion-physical-expr 44.0.0
+│   │   │   ├── datafusion-functions-aggregate-common 44.0.0
+│   │   │   ├── datafusion-functions 44.0.0
+│   │   │   └── datafusion-expr 44.0.0
+│   │   ├── datafusion-expr 44.0.0
+│   │   ├── datafusion-execution 44.0.0
+│   │   ├── datafusion-catalog 44.0.0
+│   │   └── datafusion 44.0.0
+│   └── datafusion 44.0.0
+├── macro_rules_attribute 0.2.2
+│   └── tokenizers 0.22.2
+├── datafusion-physical-expr 44.0.0
+├── datafusion-functions-window 44.0.0
+├── datafusion-functions-table 44.0.0
+├── datafusion-functions-aggregate 44.0.0
+├── datafusion-expr 44.0.0
+└── datafusion-common 44.0.0
+
+Crate:     rustls-pemfile
+Version:   1.0.4
+Warning:   unmaintained
+Title:     rustls-pemfile is unmaintained
+Date:      2025-11-28
+ID:        RUSTSEC-2025-0134
+URL:       https://rustsec.org/advisories/RUSTSEC-2025-0134
+Dependency tree:
+rustls-pemfile 1.0.4
+└── rustls-native-certs 0.6.3
+    └── rust-s3 0.35.1
+        └── flapjack 1.0.1
+            ├── flapjack-server 1.0.1
+            ├── flapjack-replication 1.0.1
+            │   ├── flapjack-http 1.0.1
+            │   │   ├── flapjack-server 1.0.1
+            │   │   └── flapjack 1.0.1
+            │   └── flapjack 1.0.1
+            └── flapjack-http 1.0.1
+
+Crate:     lru
+Version:   0.12.5
+Warning:   unsound
+Title:     `IterMut` violates Stacked Borrows by invalidating internal pointer
+Date:      2026-01-07
+ID:        RUSTSEC-2026-0002
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0002
+Dependency tree:
+lru 0.12.5
+├── tantivy 0.25.0
+│   └── flapjack 1.0.1
+│       ├── flapjack-server 1.0.1
+│       ├── flapjack-replication 1.0.1
+│       │   ├── flapjack-http 1.0.1
+│       │   │   ├── flapjack-server 1.0.1
+│       │   │   └── flapjack 1.0.1
+│       │   └── flapjack 1.0.1
+│       └── flapjack-http 1.0.1
+└── flapjack-http 1.0.1
+
+Crate:     oneshot
+Version:   0.1.11
+Warning:   unsound
+Title:     Potential use-after-free in `oneshot` when used asynchronously
+Date:      2026-01-25
+ID:        RUSTSEC-2026-0005
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0005
+Dependency tree:
+oneshot 0.1.11
+└── tantivy 0.25.0
+    └── flapjack 1.0.1
+        ├── flapjack-server 1.0.1
+        ├── flapjack-replication 1.0.1
+        │   ├── flapjack-http 1.0.1
+        │   │   ├── flapjack-server 1.0.1
+        │   │   └── flapjack 1.0.1
+        │   └── flapjack 1.0.1
+        └── flapjack-http 1.0.1
+
+Crate:     rand
+Version:   0.8.5
+Warning:   unsound
+Title:     Rand is unsound with a custom logger using `rand::rng()`
+Date:      2026-04-09
+ID:        RUSTSEC-2026-0097
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0097
+Dependency tree:
+rand 0.8.5
+├── tower 0.4.13
+│   ├── tonic 0.12.3
+│   │   ├── opentelemetry-proto 0.28.0
+│   │   │   └── opentelemetry-otlp 0.28.0
+│   │   │       └── flapjack-http 1.0.1
+│   │   │           ├── flapjack-server 1.0.1
+│   │   │           └── flapjack 1.0.1
+│   │   │               ├── flapjack-server 1.0.1
+│   │   │               ├── flapjack-replication 1.0.1
+│   │   │               │   ├── flapjack-http 1.0.1
+│   │   │               │   └── flapjack 1.0.1
+│   │   │               └── flapjack-http 1.0.1
+│   │   └── opentelemetry-otlp 0.28.0
+│   ├── flapjack-http 1.0.1
+│   └── flapjack 1.0.1
+├── rand_distr 0.4.3
+│   └── tantivy-stacker 0.6.0
+│       ├── tantivy-columnar 0.6.0
+│       │   └── tantivy 0.25.0
+│       │       └── flapjack 1.0.1
+│       └── tantivy 0.25.0
+├── opentelemetry_sdk 0.28.0
+│   ├── tracing-opentelemetry 0.29.0
+│   │   └── flapjack-http 1.0.1
+│   ├── opentelemetry-proto 0.28.0
+│   ├── opentelemetry-otlp 0.28.0
+│   └── flapjack-http 1.0.1
+├── flapjack-http 1.0.1
+├── flapjack 1.0.1
+├── datafusion-functions 44.0.0
+│   └── datafusion 44.0.0
+│       └── flapjack 1.0.1
+├── datafusion-execution 44.0.0
+│   ├── datafusion-physical-plan 44.0.0
+│   │   ├── datafusion-physical-optimizer 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   ├── datafusion-functions-table 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   ├── datafusion-catalog 44.0.0
+│   │   │   ├── datafusion-functions-table 44.0.0
+│   │   │   └── datafusion 44.0.0
+│   │   └── datafusion 44.0.0
+│   ├── datafusion-physical-optimizer 44.0.0
+│   ├── datafusion-functions-aggregate 44.0.0
+│   │   └── datafusion 44.0.0
+│   ├── datafusion-functions 44.0.0
+│   ├── datafusion-catalog 44.0.0
+│   └── datafusion 44.0.0
+└── datafusion 44.0.0
+
+Crate:     rand
+Version:   0.9.2
+Warning:   unsound
+Title:     Rand is unsound with a custom logger using `rand::rng()`
+Date:      2026-04-09
+ID:        RUSTSEC-2026-0097
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0097
+Dependency tree:
+rand 0.9.2
+├── tokenizers 0.22.2
+│   └── fastembed 5.11.0
+│       └── flapjack 1.0.1
+│           ├── flapjack-server 1.0.1
+│           ├── flapjack-replication 1.0.1
+│           │   ├── flapjack-http 1.0.1
+│           │   │   ├── flapjack-server 1.0.1
+│           │   │   └── flapjack 1.0.1
+│           │   └── flapjack 1.0.1
+│           └── flapjack-http 1.0.1
+├── quinn-proto 0.11.13
+│   └── quinn 0.11.9
+│       └── reqwest 0.12.28
+│           ├── opentelemetry-otlp 0.28.0
+│           │   └── flapjack-http 1.0.1
+│           ├── opentelemetry-http 0.28.0
+│           │   └── opentelemetry-otlp 0.28.0
+│           ├── hf-hub 0.4.3
+│           │   └── fastembed 5.11.0
+│           ├── flapjack-replication 1.0.1
+│           ├── flapjack-http 1.0.1
+│           └── flapjack 1.0.1
+└── hf-hub 0.4.3
+
+Crate:     lz4_flex
+Version:   0.11.5
+Warning:   yanked
+
+error: 19 vulnerabilities found!
+error: 9 denied warnings found!
+[exit:1]
+
+### Command: cd engine && cargo deny check advisories
+2026-05-25 22:38:28 [WARN] unable to find a config path, falling back to default config
+error[vulnerability]: AWS-LC X.509 Name Constraints Bypass via Wildcard/Unicode CN
+   ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:45:1
+   │
+45 │ aws-lc-sys 0.37.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+   │
+   ├ ID: RUSTSEC-2026-0044
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0044
+   ├ A logic error in CN (Common Name) validation allows certificates with
+     wildcard or raw UTF-8 Unicode CN values to bypass name constraints
+     enforcement. The `cn2dnsid` function does not recognize these CN patterns
+     as valid DNS identifiers, causing `NAME_CONSTRAINTS_check_CN` to skip
+     validation. However, `X509_check_host` accepts these CN values when no
+     dNSName SAN is present, allowing certificates to bypass name constraints
+     while still being used for hostname verification.
+     
+     Customers of AWS services do not need to take action. Applications using
+     `aws-lc-sys` should upgrade to the most recent release of `aws-lc-sys`.
+     
+     ## Workarounds
+     
+     Applications that set `X509_CHECK_FLAG_NEVER_CHECK_SUBJECT` to disable CN
+     fallback are not affected. Applications that only encounter certificates
+     with dNSName SANs (standard for public WebPKI) are also not affected.
+     
+     Otherwise, there is no workaround and applications using `aws-lc-sys` should
+     upgrade to the most recent releases of `aws-lc-sys`.
+   ├ Solution: Upgrade to >=0.39.0 (try `cargo update -p aws-lc-sys`)
+   ├ aws-lc-sys v0.37.1
+     └── aws-lc-rs v1.16.0
+         ├── rustls v0.23.36
+         │   ├── attohttpc v0.28.5
+         │   │   └── aws-creds v0.37.0
+         │   │       └── rust-s3 v0.35.1
+         │   │           └── flapjack v1.0.1
+         │   │               ├── flapjack-http v1.0.1
+         │   │               │   └── (dev) flapjack v1.0.1 (*)
+         │   │               └── flapjack-replication v1.0.1
+         │   │                   ├── (dev) flapjack v1.0.1 (*)
+         │   │                   └── flapjack-http v1.0.1 (*)
+         │   ├── aws-smithy-http-client v1.1.10
+         │   │   └── aws-smithy-runtime v1.10.1
+         │   │       ├── aws-config v1.8.14
+         │   │       │   └── flapjack-http v1.0.1 (*)
+         │   │       ├── aws-runtime v1.7.0
+         │   │       │   ├── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-sesv2 v1.113.0
+         │   │       │   │   └── flapjack-http v1.0.1 (*)
+         │   │       │   ├── aws-sdk-sso v1.94.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-ssooidc v1.96.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   └── aws-sdk-sts v1.98.0
+         │   │       │       └── aws-config v1.8.14 (*)
+         │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+         │   │       ├── aws-sdk-sso v1.94.0 (*)
+         │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+         │   │       └── aws-sdk-sts v1.98.0 (*)
+         │   ├── hyper-rustls v0.27.7
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── instant-acme v0.8.4
+         │   │   │   └── flapjack-ssl v1.0.1
+         │   │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │   │       └── flapjack-http v1.0.1 (*)
+         │   │   └── reqwest v0.12.28
+         │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │       ├── flapjack-http v1.0.1 (*)
+         │   │       └── flapjack-replication v1.0.1 (*)
+         │   ├── instant-acme v0.8.4 (*)
+         │   ├── reqwest v0.12.28 (*)
+         │   ├── rustls-platform-verifier v0.6.2
+         │   │   └── hyper-rustls v0.27.7 (*)
+         │   ├── tokio-rustls v0.26.4
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── hyper-rustls v0.27.7 (*)
+         │   │   └── reqwest v0.12.28 (*)
+         │   └── ureq v2.12.1
+         │       └── hf-hub v0.4.3
+         │           └── fastembed v5.11.0
+         │               └── flapjack v1.0.1 (*)
+         └── rustls-webpki v0.103.9
+             ├── rustls v0.23.36 (*)
+             └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: Timing Side-Channel in AES-CCM Tag Verification in AWS-LC
+   ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:45:1
+   │
+45 │ aws-lc-sys 0.37.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+   │
+   ├ ID: RUSTSEC-2026-0045
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0045
+   ├ Observable timing discrepancy in AES-CCM decryption in AWS-LC allows an
+     unauthenticated user to potentially determine authentication tag validity
+     via timing analysis.
+     
+     The impacted implementations are through the EVP CIPHER API:
+     `EVP_aes_128_ccm`, `EVP_aes_192_ccm`, and `EVP_aes_256_ccm`.
+     
+     Customers of AWS services do not need to take action. `aws-lc-sys` contains
+     code from AWS-LC. Applications using `aws-lc-sys` should upgrade to the most
+     recent release of `aws-lc-sys`.
+     
+     ## Workarounds
+     
+     In the special cases of using AES-CCM with (M=4, L=2), (M=8, L=2), or
+     (M=16, L=2), applications can workaround this issue by using AES-CCM through
+     the EVP AEAD API using implementations `EVP_aead_aes_128_ccm_bluetooth`,
+     `EVP_aead_aes_128_ccm_bluetooth_8`, and `EVP_aead_aes_128_ccm_matter`
+     respectively.
+     
+     Otherwise, there is no workaround and applications using `aws-lc-sys` should
+     upgrade to the most recent release.
+   ├ Announcement: https://aws.amazon.com/security/security-bulletins/2026-005-AWS
+   ├ Solution: Upgrade to >=0.38.0 (try `cargo update -p aws-lc-sys`)
+   ├ aws-lc-sys v0.37.1
+     └── aws-lc-rs v1.16.0
+         ├── rustls v0.23.36
+         │   ├── attohttpc v0.28.5
+         │   │   └── aws-creds v0.37.0
+         │   │       └── rust-s3 v0.35.1
+         │   │           └── flapjack v1.0.1
+         │   │               ├── flapjack-http v1.0.1
+         │   │               │   └── (dev) flapjack v1.0.1 (*)
+         │   │               └── flapjack-replication v1.0.1
+         │   │                   ├── (dev) flapjack v1.0.1 (*)
+         │   │                   └── flapjack-http v1.0.1 (*)
+         │   ├── aws-smithy-http-client v1.1.10
+         │   │   └── aws-smithy-runtime v1.10.1
+         │   │       ├── aws-config v1.8.14
+         │   │       │   └── flapjack-http v1.0.1 (*)
+         │   │       ├── aws-runtime v1.7.0
+         │   │       │   ├── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-sesv2 v1.113.0
+         │   │       │   │   └── flapjack-http v1.0.1 (*)
+         │   │       │   ├── aws-sdk-sso v1.94.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-ssooidc v1.96.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   └── aws-sdk-sts v1.98.0
+         │   │       │       └── aws-config v1.8.14 (*)
+         │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+         │   │       ├── aws-sdk-sso v1.94.0 (*)
+         │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+         │   │       └── aws-sdk-sts v1.98.0 (*)
+         │   ├── hyper-rustls v0.27.7
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── instant-acme v0.8.4
+         │   │   │   └── flapjack-ssl v1.0.1
+         │   │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │   │       └── flapjack-http v1.0.1 (*)
+         │   │   └── reqwest v0.12.28
+         │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │       ├── flapjack-http v1.0.1 (*)
+         │   │       └── flapjack-replication v1.0.1 (*)
+         │   ├── instant-acme v0.8.4 (*)
+         │   ├── reqwest v0.12.28 (*)
+         │   ├── rustls-platform-verifier v0.6.2
+         │   │   └── hyper-rustls v0.27.7 (*)
+         │   ├── tokio-rustls v0.26.4
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── hyper-rustls v0.27.7 (*)
+         │   │   └── reqwest v0.12.28 (*)
+         │   └── ureq v2.12.1
+         │       └── hf-hub v0.4.3
+         │           └── fastembed v5.11.0
+         │               └── flapjack v1.0.1 (*)
+         └── rustls-webpki v0.103.9
+             ├── rustls v0.23.36 (*)
+             └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: PKCS7_verify Certificate Chain Validation Bypass in AWS-LC
+   ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:45:1
+   │
+45 │ aws-lc-sys 0.37.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+   │
+   ├ ID: RUSTSEC-2026-0046
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0046
+   ├ Improper certificate validation in `PKCS7_verify()` in AWS-LC allows an
+     unauthenticated user to bypass certificate chain verification when processing
+     PKCS7 objects with multiple signers, except the final signer.
+     
+     Customers of AWS services do not need to take action. `aws-lc-sys` contains
+     code from AWS-LC. Applications using `aws-lc-sys` should upgrade to the most
+     recent release of `aws-lc-sys`.
+     
+     There is no workaround; applications using `aws-lc-sys` should upgrade to the 
+     most recent release of aws-lc-sys.
+   ├ Announcement: https://aws.amazon.com/security/security-bulletins/2026-005-AWS
+   ├ Solution: Upgrade to >=0.38.0 (try `cargo update -p aws-lc-sys`)
+   ├ aws-lc-sys v0.37.1
+     └── aws-lc-rs v1.16.0
+         ├── rustls v0.23.36
+         │   ├── attohttpc v0.28.5
+         │   │   └── aws-creds v0.37.0
+         │   │       └── rust-s3 v0.35.1
+         │   │           └── flapjack v1.0.1
+         │   │               ├── flapjack-http v1.0.1
+         │   │               │   └── (dev) flapjack v1.0.1 (*)
+         │   │               └── flapjack-replication v1.0.1
+         │   │                   ├── (dev) flapjack v1.0.1 (*)
+         │   │                   └── flapjack-http v1.0.1 (*)
+         │   ├── aws-smithy-http-client v1.1.10
+         │   │   └── aws-smithy-runtime v1.10.1
+         │   │       ├── aws-config v1.8.14
+         │   │       │   └── flapjack-http v1.0.1 (*)
+         │   │       ├── aws-runtime v1.7.0
+         │   │       │   ├── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-sesv2 v1.113.0
+         │   │       │   │   └── flapjack-http v1.0.1 (*)
+         │   │       │   ├── aws-sdk-sso v1.94.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-ssooidc v1.96.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   └── aws-sdk-sts v1.98.0
+         │   │       │       └── aws-config v1.8.14 (*)
+         │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+         │   │       ├── aws-sdk-sso v1.94.0 (*)
+         │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+         │   │       └── aws-sdk-sts v1.98.0 (*)
+         │   ├── hyper-rustls v0.27.7
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── instant-acme v0.8.4
+         │   │   │   └── flapjack-ssl v1.0.1
+         │   │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │   │       └── flapjack-http v1.0.1 (*)
+         │   │   └── reqwest v0.12.28
+         │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │       ├── flapjack-http v1.0.1 (*)
+         │   │       └── flapjack-replication v1.0.1 (*)
+         │   ├── instant-acme v0.8.4 (*)
+         │   ├── reqwest v0.12.28 (*)
+         │   ├── rustls-platform-verifier v0.6.2
+         │   │   └── hyper-rustls v0.27.7 (*)
+         │   ├── tokio-rustls v0.26.4
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── hyper-rustls v0.27.7 (*)
+         │   │   └── reqwest v0.12.28 (*)
+         │   └── ureq v2.12.1
+         │       └── hf-hub v0.4.3
+         │           └── fastembed v5.11.0
+         │               └── flapjack v1.0.1 (*)
+         └── rustls-webpki v0.103.9
+             ├── rustls v0.23.36 (*)
+             └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: PKCS7_verify Signature Validation Bypass in AWS-LC
+   ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:45:1
+   │
+45 │ aws-lc-sys 0.37.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+   │
+   ├ ID: RUSTSEC-2026-0047
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0047
+   ├ Improper signature validation in `PKCS7_verify()` in AWS-LC allows an
+     unauthenticated user to bypass signature verification when processing PKCS7
+     objects with Authenticated Attributes.
+     
+     Customers of AWS services do not need to take action. `aws-lc-sys` contains
+     code from AWS-LC. Applications using `aws-lc-sys` should upgrade to the most
+     recent release of `aws-lc-sys`.
+     
+     There is no workaround; applications using `aws-lc-sys` should upgrade to the 
+     most recent release of `aws-lc-sys`.
+   ├ Announcement: https://aws.amazon.com/security/security-bulletins/2026-005-AWS
+   ├ Solution: Upgrade to >=0.38.0 (try `cargo update -p aws-lc-sys`)
+   ├ aws-lc-sys v0.37.1
+     └── aws-lc-rs v1.16.0
+         ├── rustls v0.23.36
+         │   ├── attohttpc v0.28.5
+         │   │   └── aws-creds v0.37.0
+         │   │       └── rust-s3 v0.35.1
+         │   │           └── flapjack v1.0.1
+         │   │               ├── flapjack-http v1.0.1
+         │   │               │   └── (dev) flapjack v1.0.1 (*)
+         │   │               └── flapjack-replication v1.0.1
+         │   │                   ├── (dev) flapjack v1.0.1 (*)
+         │   │                   └── flapjack-http v1.0.1 (*)
+         │   ├── aws-smithy-http-client v1.1.10
+         │   │   └── aws-smithy-runtime v1.10.1
+         │   │       ├── aws-config v1.8.14
+         │   │       │   └── flapjack-http v1.0.1 (*)
+         │   │       ├── aws-runtime v1.7.0
+         │   │       │   ├── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-sesv2 v1.113.0
+         │   │       │   │   └── flapjack-http v1.0.1 (*)
+         │   │       │   ├── aws-sdk-sso v1.94.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-ssooidc v1.96.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   └── aws-sdk-sts v1.98.0
+         │   │       │       └── aws-config v1.8.14 (*)
+         │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+         │   │       ├── aws-sdk-sso v1.94.0 (*)
+         │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+         │   │       └── aws-sdk-sts v1.98.0 (*)
+         │   ├── hyper-rustls v0.27.7
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── instant-acme v0.8.4
+         │   │   │   └── flapjack-ssl v1.0.1
+         │   │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │   │       └── flapjack-http v1.0.1 (*)
+         │   │   └── reqwest v0.12.28
+         │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │       ├── flapjack-http v1.0.1 (*)
+         │   │       └── flapjack-replication v1.0.1 (*)
+         │   ├── instant-acme v0.8.4 (*)
+         │   ├── reqwest v0.12.28 (*)
+         │   ├── rustls-platform-verifier v0.6.2
+         │   │   └── hyper-rustls v0.27.7 (*)
+         │   ├── tokio-rustls v0.26.4
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── hyper-rustls v0.27.7 (*)
+         │   │   └── reqwest v0.12.28 (*)
+         │   └── ureq v2.12.1
+         │       └── hf-hub v0.4.3
+         │           └── fastembed v5.11.0
+         │               └── flapjack v1.0.1 (*)
+         └── rustls-webpki v0.103.9
+             ├── rustls v0.23.36 (*)
+             └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: CRL Distribution Point Scope Check Logic Error in AWS-LC
+   ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:45:1
+   │
+45 │ aws-lc-sys 0.37.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+   │
+   ├ ID: RUSTSEC-2026-0048
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0048
+   ├ A logic error in CRL distribution point matching in AWS-LC allows a revoked
+     certificate to bypass revocation checks during certificate validation, when
+     the application enables CRL checking and uses partitioned CRLs with Issuing
+     Distribution Point (IDP) extensions.
+     
+     Customers of AWS services do not need to take action. `aws-lc-sys` contains
+     code from AWS-LC. Applications using `aws-lc-sys` should upgrade to the most
+     recent release of `aws-lc-sys`.
+     
+     ## Workarounds
+     
+     Applications can workaround this issue if they do not enable CRL checking
+     (`X509_V_FLAG_CRL_CHECK`). Applications using complete (non-partitioned)
+     CRLs without IDP extensions are also not affected.
+     
+     Otherwise, there is no workaround and applications using `aws-lc-sys` should
+     upgrade to the most recent releases of `aws-lc-sys`.
+   ├ Announcement: https://aws.amazon.com/security/security-bulletins/2026-010-AWS
+   ├ Solution: Upgrade to >=0.39.0 (try `cargo update -p aws-lc-sys`)
+   ├ aws-lc-sys v0.37.1
+     └── aws-lc-rs v1.16.0
+         ├── rustls v0.23.36
+         │   ├── attohttpc v0.28.5
+         │   │   └── aws-creds v0.37.0
+         │   │       └── rust-s3 v0.35.1
+         │   │           └── flapjack v1.0.1
+         │   │               ├── flapjack-http v1.0.1
+         │   │               │   └── (dev) flapjack v1.0.1 (*)
+         │   │               └── flapjack-replication v1.0.1
+         │   │                   ├── (dev) flapjack v1.0.1 (*)
+         │   │                   └── flapjack-http v1.0.1 (*)
+         │   ├── aws-smithy-http-client v1.1.10
+         │   │   └── aws-smithy-runtime v1.10.1
+         │   │       ├── aws-config v1.8.14
+         │   │       │   └── flapjack-http v1.0.1 (*)
+         │   │       ├── aws-runtime v1.7.0
+         │   │       │   ├── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-sesv2 v1.113.0
+         │   │       │   │   └── flapjack-http v1.0.1 (*)
+         │   │       │   ├── aws-sdk-sso v1.94.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   ├── aws-sdk-ssooidc v1.96.0
+         │   │       │   │   └── aws-config v1.8.14 (*)
+         │   │       │   └── aws-sdk-sts v1.98.0
+         │   │       │       └── aws-config v1.8.14 (*)
+         │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+         │   │       ├── aws-sdk-sso v1.94.0 (*)
+         │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+         │   │       └── aws-sdk-sts v1.98.0 (*)
+         │   ├── hyper-rustls v0.27.7
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── instant-acme v0.8.4
+         │   │   │   └── flapjack-ssl v1.0.1
+         │   │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │   │       └── flapjack-http v1.0.1 (*)
+         │   │   └── reqwest v0.12.28
+         │   │       ├── (dev) flapjack v1.0.1 (*)
+         │   │       ├── flapjack-http v1.0.1 (*)
+         │   │       └── flapjack-replication v1.0.1 (*)
+         │   ├── instant-acme v0.8.4 (*)
+         │   ├── reqwest v0.12.28 (*)
+         │   ├── rustls-platform-verifier v0.6.2
+         │   │   └── hyper-rustls v0.27.7 (*)
+         │   ├── tokio-rustls v0.26.4
+         │   │   ├── aws-smithy-http-client v1.1.10 (*)
+         │   │   ├── hyper-rustls v0.27.7 (*)
+         │   │   └── reqwest v0.12.28 (*)
+         │   └── ureq v2.12.1
+         │       └── hf-hub v0.4.3
+         │           └── fastembed v5.11.0
+         │               └── flapjack v1.0.1 (*)
+         └── rustls-webpki v0.103.9
+             ├── rustls v0.23.36 (*)
+             └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: Integer overflow in `BytesMut::reserve`
+   ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:84:1
+   │
+84 │ bytes 1.10.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+   │
+   ├ ID: RUSTSEC-2026-0007
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0007
+   ├ In the unique reclaim path of `BytesMut::reserve`, the condition
+     ```rs
+     if v_capacity >= new_cap + offset
+     ```
+     uses an unchecked addition. When `new_cap + offset` overflows `usize` in release builds, this condition may incorrectly pass, causing `self.cap` to be set to a value that exceeds the actual allocated capacity. Subsequent APIs such as `spare_capacity_mut()` then trust this corrupted `cap` value and may create out-of-bounds slices, leading to UB.
+     
+     This behavior is observable in release builds (integer overflow wraps), whereas debug builds panic due to overflow checks.
+     
+     ## PoC
+     
+     ```rs
+     use bytes::*;
+     
+     fn main() {
+         let mut a = BytesMut::from(&b"hello world"[..]);
+         let mut b = a.split_off(5);
+     
+         // Ensure b becomes the unique owner of the backing storage
+         drop(a);
+     
+         // Trigger overflow in new_cap + offset inside reserve
+         b.reserve(usize::MAX - 6);
+     
+         // This call relies on the corrupted cap and may cause UB & HBO
+         b.put_u8(b'h');
+     }
+     ```
+     
+     # Workarounds
+     
+     Users of `BytesMut::reserve` are only affected if integer overflow checks are configured to wrap. When integer overflow is configured to panic, this issue does not apply.
+   ├ Announcement: https://github.com/advisories/GHSA-434x-w66g-qw3r
+   ├ Solution: Upgrade to >=1.11.1 (try `cargo update -p bytes`)
+   ├ bytes v1.10.1
+     ├── arrow-buffer v53.4.1
+     │   ├── arrow v53.4.1
+     │   │   ├── datafusion v44.0.0
+     │   │   │   └── flapjack v1.0.1
+     │   │   │       ├── flapjack-http v1.0.1
+     │   │   │       │   └── (dev) flapjack v1.0.1 (*)
+     │   │   │       └── flapjack-replication v1.0.1
+     │   │   │           ├── (dev) flapjack v1.0.1 (*)
+     │   │   │           └── flapjack-http v1.0.1 (*)
+     │   │   ├── datafusion-common v44.0.0
+     │   │   │   ├── datafusion v44.0.0 (*)
+     │   │   │   ├── datafusion-catalog v44.0.0
+     │   │   │   │   ├── datafusion v44.0.0 (*)
+     │   │   │   │   └── datafusion-functions-table v44.0.0
+     │   │   │   │       └── datafusion v44.0.0 (*)
+     │   │   │   ├── datafusion-execution v44.0.0
+     │   │   │   │   ├── datafusion v44.0.0 (*)
+     │   │   │   │   ├── datafusion-catalog v44.0.0 (*)
+     │   │   │   │   ├── datafusion-functions v44.0.0
+     │   │   │   │   │   └── datafusion v44.0.0 (*)
+     │   │   │   │   ├── datafusion-functions-aggregate v44.0.0
+     │   │   │   │   │   └── datafusion v44.0.0 (*)
+     │   │   │   │   ├── datafusion-physical-optimizer v44.0.0
+     │   │   │   │   │   └── datafusion v44.0.0 (*)
+     │   │   │   │   └── datafusion-physical-plan v44.0.0
+     │   │   │   │       ├── datafusion v44.0.0 (*)
+     │   │   │   │       ├── datafusion-catalog v44.0.0 (*)
+     │   │   │   │       ├── datafusion-functions-table v44.0.0 (*)
+     │   │   │   │       └── datafusion-physical-optimizer v44.0.0 (*)
+     │   │   │   ├── datafusion-expr v44.0.0
+     │   │   │   │   ├── datafusion v44.0.0 (*)
+     │   │   │   │   ├── datafusion-catalog v44.0.0 (*)
+     │   │   │   │   ├── datafusion-execution v44.0.0 (*)
+     │   │   │   │   ├── datafusion-functions v44.0.0 (*)
+     │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+     │   │   │   │   ├── datafusion-functions-table v44.0.0 (*)
+     │   │   │   │   ├── datafusion-functions-window v44.0.0
+     │   │   │   │   │   └── datafusion v44.0.0 (*)
+     │   │   │   │   ├── datafusion-optimizer v44.0.0
+     │   │   │   │   │   └── datafusion v44.0.0 (*)
+     │   │   │   │   ├── datafusion-physical-expr v44.0.0
+     │   │   │   │   │   ├── datafusion v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-optimizer v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+     │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+     │   │   │   │   ├── datafusion-physical-plan v44.0.0 (*)
+     │   │   │   │   └── datafusion-sql v44.0.0
+     │   │   │   │       └── datafusion v44.0.0 (*)
+     │   │   │   ├── datafusion-expr-common v44.0.0
+     │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+     │   │   │   │   ├── datafusion-functions v44.0.0 (*)
+     │   │   │   │   ├── datafusion-functions-aggregate-common v44.0.0
+     │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+     │   │   │   │   │   └── datafusion-physical-expr v44.0.0 (*)
+     │   │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+     │   │   │   │   ├── datafusion-physical-expr-common v44.0.0
+     │   │   │   │   │   ├── datafusion v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-functions-window-common v44.0.0
+     │   │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+     │   │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+     │   │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+     │   │   │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+     │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+     │   │   │   │   └── datafusion-physical-optimizer v44.0.0 (*)
+     │   │   │   ├── datafusion-functions v44.0.0 (*)
+     │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+     │   │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+     │   │   │   ├── datafusion-functions-table v44.0.0 (*)
+     │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+     │   │   │   ├── datafusion-functions-window-common v44.0.0 (*)
+     │   │   │   ├── datafusion-optimizer v44.0.0 (*)
+     │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+     │   │   │   ├── datafusion-physical-expr-common v44.0.0 (*)
+     │   │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+     │   │   │   ├── datafusion-physical-plan v44.0.0 (*)
+     │   │   │   └── datafusion-sql v44.0.0 (*)
+     │   │   ├── datafusion-execution v44.0.0 (*)
+     │   │   ├── datafusion-expr v44.0.0 (*)
+     │   │   ├── datafusion-expr-common v44.0.0 (*)
+     │   │   ├── datafusion-functions v44.0.0 (*)
+     │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+     │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+     │   │   ├── datafusion-functions-table v44.0.0 (*)
+     │   │   ├── datafusion-optimizer v44.0.0 (*)
+     │   │   ├── datafusion-physical-expr v44.0.0 (*)
+     │   │   ├── datafusion-physical-expr-common v44.0.0 (*)
+     │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+     │   │   ├── datafusion-physical-plan v44.0.0 (*)
+     │   │   ├── datafusion-sql v44.0.0 (*)
+     │   │   └── flapjack v1.0.1 (*)
+     │   ├── arrow-arith v53.4.1
+     │   │   └── arrow v53.4.1 (*)
+     │   ├── arrow-array v53.4.1
+     │   │   ├── arrow v53.4.1 (*)
+     │   │   ├── arrow-arith v53.4.1 (*)
+     │   │   ├── arrow-cast v53.4.1
+     │   │   │   ├── arrow v53.4.1 (*)
+     │   │   │   ├── arrow-csv v53.4.1
+     │   │   │   │   └── arrow v53.4.1 (*)
+     │   │   │   ├── arrow-ipc v53.4.1
+     │   │   │   │   ├── arrow v53.4.1 (*)
+     │   │   │   │   ├── datafusion v44.0.0 (*)
+     │   │   │   │   └── parquet v53.4.1
+     │   │   │   │       ├── datafusion v44.0.0 (*)
+     │   │   │   │       ├── datafusion-common v44.0.0 (*)
+     │   │   │   │       └── flapjack v1.0.1 (*)
+     │   │   │   ├── arrow-json v53.4.1
+     │   │   │   │   └── arrow v53.4.1 (*)
+     │   │   │   └── parquet v53.4.1 (*)
+     │   │   ├── arrow-csv v53.4.1 (*)
+     │   │   ├── arrow-ipc v53.4.1 (*)
+     │   │   ├── arrow-json v53.4.1 (*)
+     │   │   ├── arrow-ord v53.4.1
+     │   │   │   ├── arrow v53.4.1 (*)
+     │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+     │   │   ├── arrow-row v53.4.1
+     │   │   │   └── arrow v53.4.1 (*)
+     │   │   ├── arrow-select v53.4.1
+     │   │   │   ├── arrow v53.4.1 (*)
+     │   │   │   ├── arrow-cast v53.4.1 (*)
+     │   │   │   ├── arrow-ord v53.4.1 (*)
+     │   │   │   ├── arrow-string v53.4.1
+     │   │   │   │   └── arrow v53.4.1 (*)
+     │   │   │   └── parquet v53.4.1 (*)
+     │   │   ├── arrow-string v53.4.1 (*)
+     │   │   ├── datafusion v44.0.0 (*)
+     │   │   ├── datafusion-common v44.0.0 (*)
+     │   │   ├── datafusion-physical-expr v44.0.0 (*)
+     │   │   ├── datafusion-physical-plan v44.0.0 (*)
+     │   │   ├── datafusion-sql v44.0.0 (*)
+     │   │   └── parquet v53.4.1 (*)
+     │   ├── arrow-cast v53.4.1 (*)
+     │   ├── arrow-csv v53.4.1 (*)
+     │   ├── arrow-data v53.4.1
+     │   │   ├── arrow v53.4.1 (*)
+     │   │   ├── arrow-arith v53.4.1 (*)
+     │   │   ├── arrow-array v53.4.1 (*)
+     │   │   ├── arrow-cast v53.4.1 (*)
+     │   │   ├── arrow-csv v53.4.1 (*)
+     │   │   ├── arrow-ipc v53.4.1 (*)
+     │   │   ├── arrow-json v53.4.1 (*)
+     │   │   ├── arrow-ord v53.4.1 (*)
+     │   │   ├── arrow-row v53.4.1 (*)
+     │   │   ├── arrow-select v53.4.1 (*)
+     │   │   ├── arrow-string v53.4.1 (*)
+     │   │   └── parquet v53.4.1 (*)
+     │   ├── arrow-ipc v53.4.1 (*)
+     │   ├── arrow-json v53.4.1 (*)
+     │   ├── arrow-ord v53.4.1 (*)
+     │   ├── arrow-row v53.4.1 (*)
+     │   ├── arrow-select v53.4.1 (*)
+     │   ├── arrow-string v53.4.1 (*)
+     │   ├── datafusion-common v44.0.0 (*)
+     │   ├── datafusion-functions v44.0.0 (*)
+     │   ├── datafusion-physical-expr v44.0.0 (*)
+     │   ├── datafusion-physical-plan v44.0.0 (*)
+     │   └── parquet v53.4.1 (*)
+     ├── aws-config v1.8.14
+     │   └── flapjack-http v1.0.1 (*)
+     ├── aws-runtime v1.7.0
+     │   ├── aws-config v1.8.14 (*)
+     │   ├── aws-sdk-sesv2 v1.113.0
+     │   │   └── flapjack-http v1.0.1 (*)
+     │   ├── aws-sdk-sso v1.94.0
+     │   │   └── aws-config v1.8.14 (*)
+     │   ├── aws-sdk-ssooidc v1.96.0
+     │   │   └── aws-config v1.8.14 (*)
+     │   └── aws-sdk-sts v1.98.0
+     │       └── aws-config v1.8.14 (*)
+     ├── aws-sdk-sesv2 v1.113.0 (*)
+     ├── aws-sdk-sso v1.94.0 (*)
+     ├── aws-sdk-ssooidc v1.96.0 (*)
+     ├── aws-sigv4 v1.4.0
+     │   └── aws-runtime v1.7.0 (*)
+     ├── aws-smithy-http v0.63.4
+     │   ├── aws-config v1.8.14 (*)
+     │   ├── aws-runtime v1.7.0 (*)
+     │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   ├── aws-sdk-sso v1.94.0 (*)
+     │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   ├── aws-sdk-sts v1.98.0 (*)
+     │   ├── aws-sigv4 v1.4.0 (*)
+     │   └── aws-smithy-runtime v1.10.1
+     │       ├── aws-config v1.8.14 (*)
+     │       ├── aws-runtime v1.7.0 (*)
+     │       ├── aws-sdk-sesv2 v1.113.0 (*)
+     │       ├── aws-sdk-sso v1.94.0 (*)
+     │       ├── aws-sdk-ssooidc v1.96.0 (*)
+     │       └── aws-sdk-sts v1.98.0 (*)
+     ├── aws-smithy-runtime v1.10.1 (*)
+     ├── aws-smithy-runtime-api v1.11.4
+     │   ├── aws-config v1.8.14 (*)
+     │   ├── aws-credential-types v1.2.12
+     │   │   ├── aws-config v1.8.14 (*)
+     │   │   ├── aws-runtime v1.7.0 (*)
+     │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   │   ├── aws-sdk-sso v1.94.0 (*)
+     │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   │   ├── aws-sdk-sts v1.98.0 (*)
+     │   │   ├── aws-sigv4 v1.4.0 (*)
+     │   │   └── aws-types v1.3.12
+     │   │       ├── aws-config v1.8.14 (*)
+     │   │       ├── aws-runtime v1.7.0 (*)
+     │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   │       ├── aws-sdk-sso v1.94.0 (*)
+     │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   │       └── aws-sdk-sts v1.98.0 (*)
+     │   ├── aws-runtime v1.7.0 (*)
+     │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   ├── aws-sdk-sso v1.94.0 (*)
+     │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   ├── aws-sdk-sts v1.98.0 (*)
+     │   ├── aws-sigv4 v1.4.0 (*)
+     │   ├── aws-smithy-http v0.63.4 (*)
+     │   ├── aws-smithy-http-client v1.1.10
+     │   │   └── aws-smithy-runtime v1.10.1 (*)
+     │   ├── aws-smithy-observability v0.2.5
+     │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   │   ├── aws-sdk-sso v1.94.0 (*)
+     │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   │   ├── aws-sdk-sts v1.98.0 (*)
+     │   │   └── aws-smithy-runtime v1.10.1 (*)
+     │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   └── aws-types v1.3.12 (*)
+     ├── aws-smithy-types v1.4.4
+     │   ├── aws-config v1.8.14 (*)
+     │   ├── aws-credential-types v1.2.12 (*)
+     │   ├── aws-runtime v1.7.0 (*)
+     │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   ├── aws-sdk-sso v1.94.0 (*)
+     │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   ├── aws-sdk-sts v1.98.0 (*)
+     │   ├── aws-sigv4 v1.4.0 (*)
+     │   ├── aws-smithy-http v0.63.4 (*)
+     │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   ├── aws-smithy-json v0.62.4
+     │   │   ├── aws-config v1.8.14 (*)
+     │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   │   ├── aws-sdk-sso v1.94.0 (*)
+     │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   │   └── aws-sdk-sts v1.98.0 (*)
+     │   ├── aws-smithy-query v0.60.14
+     │   │   └── aws-sdk-sts v1.98.0 (*)
+     │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   ├── aws-smithy-runtime-api v1.11.4 (*)
+     │   └── aws-types v1.3.12 (*)
+     ├── axum v0.7.9
+     │   ├── flapjack v1.0.1 (*)
+     │   ├── flapjack-http v1.0.1 (*)
+     │   └── utoipa-swagger-ui v8.1.0
+     │       └── flapjack-http v1.0.1 (*)
+     ├── axum-core v0.4.5
+     │   └── axum v0.7.9 (*)
+     ├── bytes-utils v0.1.4
+     │   ├── aws-runtime v1.7.0 (*)
+     │   ├── aws-smithy-http v0.63.4 (*)
+     │   └── aws-smithy-types v1.4.4 (*)
+     ├── combine v4.6.7
+     │   └── jni v0.21.1
+     │       └── rustls-platform-verifier v0.6.2
+     │           └── hyper-rustls v0.27.7
+     │               ├── aws-smithy-http-client v1.1.10 (*)
+     │               ├── instant-acme v0.8.4
+     │               │   └── flapjack-ssl v1.0.1
+     │               │       ├── (dev) flapjack v1.0.1 (*)
+     │               │       └── flapjack-http v1.0.1 (*)
+     │               └── reqwest v0.12.28
+     │                   ├── (dev) flapjack v1.0.1 (*)
+     │                   ├── flapjack-http v1.0.1 (*)
+     │                   └── flapjack-replication v1.0.1 (*)
+     ├── datafusion v44.0.0 (*)
+     ├── h2 v0.3.27
+     │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   └── hyper v0.14.32
+     │       ├── aws-smithy-http-client v1.1.10 (*)
+     │       ├── hyper-rustls v0.24.2
+     │       │   ├── aws-smithy-http-client v1.1.10 (*)
+     │       │   └── rust-s3 v0.35.1
+     │       │       └── flapjack v1.0.1 (*)
+     │       └── rust-s3 v0.35.1 (*)
+     ├── h2 v0.4.13
+     │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   └── hyper v1.8.0
+     │       ├── aws-smithy-http-client v1.1.10 (*)
+     │       ├── axum v0.7.9 (*)
+     │       ├── hyper-rustls v0.27.7 (*)
+     │       ├── hyper-util v0.1.17
+     │       │   ├── aws-smithy-http-client v1.1.10 (*)
+     │       │   ├── axum v0.7.9 (*)
+     │       │   ├── hyper-rustls v0.27.7 (*)
+     │       │   ├── instant-acme v0.8.4 (*)
+     │       │   ├── reqwest v0.12.28 (*)
+     │       │   └── wiremock v0.6.5
+     │       │       ├── (dev) flapjack v1.0.1 (*)
+     │       │       └── (dev) flapjack-http v1.0.1 (*)
+     │       ├── instant-acme v0.8.4 (*)
+     │       ├── reqwest v0.12.28 (*)
+     │       └── wiremock v0.6.5 (*)
+     ├── http v0.2.12
+     │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   ├── aws-sdk-sso v1.94.0 (*)
+     │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   ├── aws-sdk-sts v1.98.0 (*)
+     │   ├── aws-sigv4 v1.4.0 (*)
+     │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   ├── aws-smithy-runtime-api v1.11.4 (*)
+     │   ├── aws-smithy-types v1.4.4 (*)
+     │   ├── h2 v0.3.27 (*)
+     │   ├── http-body v0.4.6
+     │   │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   │   ├── aws-smithy-types v1.4.4 (*)
+     │   │   └── hyper v0.14.32 (*)
+     │   ├── hyper v0.14.32 (*)
+     │   ├── hyper-rustls v0.24.2 (*)
+     │   └── rust-s3 v0.35.1 (*)
+     ├── http v1.3.1
+     │   ├── attohttpc v0.28.5
+     │   │   └── aws-creds v0.37.0
+     │   │       └── rust-s3 v0.35.1 (*)
+     │   ├── aws-config v1.8.14 (*)
+     │   ├── aws-runtime v1.7.0 (*)
+     │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   ├── aws-sdk-sso v1.94.0 (*)
+     │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   ├── aws-sdk-sts v1.98.0 (*)
+     │   ├── aws-sigv4 v1.4.0 (*)
+     │   ├── aws-smithy-http v0.63.4 (*)
+     │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   ├── aws-smithy-runtime-api v1.11.4 (*)
+     │   ├── aws-smithy-types v1.4.4 (*)
+     │   ├── axum v0.7.9 (*)
+     │   ├── axum-core v0.4.5 (*)
+     │   ├── flapjack v1.0.1 (*)
+     │   ├── h2 v0.4.13 (*)
+     │   ├── hf-hub v0.4.3
+     │   │   └── fastembed v5.11.0
+     │   │       └── flapjack v1.0.1 (*)
+     │   ├── http-body v1.0.1
+     │   │   ├── aws-runtime v1.7.0 (*)
+     │   │   ├── aws-smithy-http v0.63.4 (*)
+     │   │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   │   ├── aws-smithy-types v1.4.4 (*)
+     │   │   ├── axum v0.7.9 (*)
+     │   │   ├── axum-core v0.4.5 (*)
+     │   │   ├── http-body-util v0.1.3
+     │   │   │   ├── aws-smithy-http v0.63.4 (*)
+     │   │   │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   │   │   ├── aws-smithy-types v1.4.4 (*)
+     │   │   │   ├── axum v0.7.9 (*)
+     │   │   │   ├── axum-core v0.4.5 (*)
+     │   │   │   ├── (dev) flapjack v1.0.1 (*)
+     │   │   │   ├── instant-acme v0.8.4 (*)
+     │   │   │   ├── reqwest v0.12.28 (*)
+     │   │   │   ├── tower-http v0.5.2
+     │   │   │   │   ├── flapjack v1.0.1 (*)
+     │   │   │   │   └── flapjack-http v1.0.1 (*)
+     │   │   │   └── wiremock v0.6.5 (*)
+     │   │   ├── hyper v1.8.0 (*)
+     │   │   ├── hyper-util v0.1.17 (*)
+     │   │   ├── instant-acme v0.8.4 (*)
+     │   │   ├── reqwest v0.12.28 (*)
+     │   │   ├── tower-http v0.5.2 (*)
+     │   │   └── tower-http v0.6.8
+     │   │       └── reqwest v0.12.28 (*)
+     │   ├── http-body-util v0.1.3 (*)
+     │   ├── hyper v1.8.0 (*)
+     │   ├── hyper-rustls v0.27.7 (*)
+     │   ├── hyper-util v0.1.17 (*)
+     │   ├── instant-acme v0.8.4 (*)
+     │   ├── reqwest v0.12.28 (*)
+     │   ├── tower-http v0.5.2 (*)
+     │   ├── tower-http v0.6.8 (*)
+     │   ├── ureq-proto v0.5.3
+     │   │   └── ureq v3.2.0
+     │   │       └── (build) ort-sys v2.0.0-rc.11
+     │   │           └── ort v2.0.0-rc.11
+     │   │               └── fastembed v5.11.0 (*)
+     │   └── wiremock v0.6.5 (*)
+     ├── http-body v0.4.6 (*)
+     ├── http-body v1.0.1 (*)
+     ├── http-body-util v0.1.3 (*)
+     ├── hyper v0.14.32 (*)
+     ├── hyper v1.8.0 (*)
+     ├── hyper-util v0.1.17 (*)
+     ├── instant-acme v0.8.4 (*)
+     ├── object_store v0.11.2
+     │   ├── datafusion v44.0.0 (*)
+     │   ├── datafusion-common v44.0.0 (*)
+     │   ├── datafusion-execution v44.0.0 (*)
+     │   └── parquet v53.4.1 (*)
+     ├── parquet v53.4.1 (*)
+     ├── reqwest v0.12.28 (*)
+     ├── rust-s3 v0.35.1 (*)
+     ├── tokio v1.48.0
+     │   ├── aws-config v1.8.14 (*)
+     │   ├── aws-smithy-async v1.2.12
+     │   │   ├── aws-config v1.8.14 (*)
+     │   │   ├── aws-credential-types v1.2.12 (*)
+     │   │   ├── aws-runtime v1.7.0 (*)
+     │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+     │   │   ├── aws-sdk-sso v1.94.0 (*)
+     │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+     │   │   ├── aws-sdk-sts v1.98.0 (*)
+     │   │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   │   ├── aws-smithy-runtime-api v1.11.4 (*)
+     │   │   └── aws-types v1.3.12 (*)
+     │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   ├── aws-smithy-runtime v1.10.1 (*)
+     │   ├── aws-smithy-runtime-api v1.11.4 (*)
+     │   ├── aws-smithy-types v1.4.4 (*)
+     │   ├── axum v0.7.9 (*)
+     │   ├── datafusion v44.0.0 (*)
+     │   ├── datafusion-common v44.0.0 (*)
+     │   ├── datafusion-common-runtime v44.0.0
+     │   │   ├── datafusion v44.0.0 (*)
+     │   │   └── datafusion-physical-plan v44.0.0 (*)
+     │   ├── datafusion-physical-plan v44.0.0 (*)
+     │   ├── deadpool v0.12.3
+     │   │   └── wiremock v0.6.5 (*)
+     │   ├── (dev) flapjack v1.0.1 (*)
+     │   ├── flapjack-http v1.0.1 (*)
+     │   ├── flapjack-replication v1.0.1 (*)
+     │   ├── (dev) flapjack-ssl v1.0.1 (*)
+     │   ├── h2 v0.3.27 (*)
+     │   ├── h2 v0.4.13 (*)
+     │   ├── hyper v0.14.32 (*)
+     │   ├── hyper v1.8.0 (*)
+     │   ├── hyper-rustls v0.24.2 (*)
+     │   ├── hyper-rustls v0.27.7 (*)
+     │   ├── hyper-util v0.1.17 (*)
+     │   ├── instant-acme v0.8.4 (*)
+     │   ├── object_store v0.11.2 (*)
+     │   ├── parquet v53.4.1 (*)
+     │   ├── reqwest v0.12.28 (*)
+     │   ├── rust-s3 v0.35.1 (*)
+     │   ├── tokio-rustls v0.24.1
+     │   │   ├── hyper-rustls v0.24.2 (*)
+     │   │   └── rust-s3 v0.35.1 (*)
+     │   ├── tokio-rustls v0.26.4
+     │   │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   │   ├── hyper-rustls v0.27.7 (*)
+     │   │   └── reqwest v0.12.28 (*)
+     │   ├── tokio-stream v0.1.18
+     │   │   ├── flapjack-http v1.0.1 (*)
+     │   │   ├── rust-s3 v0.35.1 (*)
+     │   │   └── tokio-test v0.4.5
+     │   │       └── (dev) flapjack-http v1.0.1 (*)
+     │   ├── tokio-test v0.4.5 (*)
+     │   ├── tokio-util v0.7.18
+     │   │   ├── aws-smithy-types v1.4.4 (*)
+     │   │   ├── h2 v0.3.27 (*)
+     │   │   └── h2 v0.4.13 (*)
+     │   ├── tower v0.5.2
+     │   │   ├── aws-smithy-http-client v1.1.10 (*)
+     │   │   ├── axum v0.7.9 (*)
+     │   │   ├── reqwest v0.12.28 (*)
+     │   │   └── tower-http v0.6.8 (*)
+     │   └── wiremock v0.6.5 (*)
+     ├── tokio-util v0.7.18 (*)
+     ├── tower-http v0.5.2 (*)
+     └── tower-http v0.6.8 (*)
+
+error[unmaintained]: dotenv is Unmaintained
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:179:1
+    │
+179 │ dotenv 0.15.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unmaintained advisory detected
+    │
+    ├ ID: RUSTSEC-2021-0141
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2021-0141
+    ├ dotenv by description is meant to be used in development or testing only.
+      
+      Using this in production may or may not be advisable.
+      
+      ## Alternatives
+      
+      The below may or may not be feasible alternative(s):
+      - [dotenvy](https://crates.io/crates/dotenvy)
+    ├ Announcement: https://github.com/dotenv-rs/dotenv/issues/74
+    ├ Solution: No safe upgrade is available!
+    ├ dotenv v0.15.0
+      └── (dev) flapjack v1.0.1
+          ├── flapjack-http v1.0.1
+          │   └── (dev) flapjack v1.0.1 (*)
+          └── flapjack-replication v1.0.1
+              ├── (dev) flapjack v1.0.1 (*)
+              └── flapjack-http v1.0.1 (*)
+
+error[unsound]: `IterMut` violates Stacked Borrows by invalidating internal pointer
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:302:1
+    │
+302 │ lru 0.12.5 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unsound advisory detected
+    │
+    ├ ID: RUSTSEC-2026-0002
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0002
+    ├ Affected versions of this crate contain a soundness issue in the `IterMut`
+      iterator implementation. The `IterMut::next` and `IterMut::next_back`
+      methods temporarily create an exclusive reference to the key when
+      dereferencing the internal node pointer.
+      
+      This invalidates the shared pointer held by the internal `HashMap`,
+      violating Stacked Borrows rules.
+    ├ Announcement: https://github.com/jeromefroe/lru-rs/pull/224
+    ├ Solution: Upgrade to >=0.16.3 (try `cargo update -p lru`)
+    ├ lru v0.12.5
+      ├── flapjack-http v1.0.1
+      │   └── (dev) flapjack v1.0.1
+      │       ├── flapjack-http v1.0.1 (*)
+      │       └── flapjack-replication v1.0.1
+      │           ├── (dev) flapjack v1.0.1 (*)
+      │           └── flapjack-http v1.0.1 (*)
+      └── tantivy v0.25.0
+          └── flapjack v1.0.1 (*)
+
+error[vulnerability]: Decompressing invalid data can leak information from uninitialized memory or reused output buffer
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:303:1
+    │
+303 │ lz4_flex 0.11.5 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0041
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0041
+    ├ Decompressing invalid LZ4 data with the block API can leak data from uninitialized memory,
+      or leak content from previous decompression operations when reusing an output buffer.
+      
+      The LZ4 block format defines a "match copy operation" which duplicates previously written
+      data or data from a user-supplied dict. The position of that data is defined by an _offset_.
+      `lz4_flex` did not properly validate _offset_ values, causing it to copy data from outside
+      the initialized portion of the output buffer.
+      
+      Two scenarios are affected:
+      
+      - Decompressing with the `unsafe` implementation (`safe-decode` feature flag disabled, which
+        is the default): can leak content of uninitialized memory as part of the decompressed result.
+      - Decompressing into a reused, user-supplied output buffer (also affects `safe-decode`): can
+        leak the previous contents of the output buffer as part of the decompressed result.
+      
+      Only the block-based APIs are affected. All frame APIs are unaffected.
+      
+      The flaw was corrected in versions 0.11.6 and 0.12.1 by properly validating offset values
+      during decompression.
+      
+      If upgrading is not possible, the issue can be mitigated by zeroing the output buffer before
+      each call to the affected functions and enabling the `safe-decode` feature flag.
+    ├ Solution: Upgrade to >=0.11.6, <0.12.0 OR >=0.12.1 (try `cargo update -p lz4_flex`)
+    ├ lz4_flex v0.11.5
+      ├── arrow-ipc v53.4.1
+      │   ├── arrow v53.4.1
+      │   │   ├── datafusion v44.0.0
+      │   │   │   └── flapjack v1.0.1
+      │   │   │       ├── flapjack-http v1.0.1
+      │   │   │       │   └── (dev) flapjack v1.0.1 (*)
+      │   │   │       └── flapjack-replication v1.0.1
+      │   │   │           ├── (dev) flapjack v1.0.1 (*)
+      │   │   │           └── flapjack-http v1.0.1 (*)
+      │   │   ├── datafusion-common v44.0.0
+      │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   ├── datafusion-catalog v44.0.0
+      │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   └── datafusion-functions-table v44.0.0
+      │   │   │   │       └── datafusion v44.0.0 (*)
+      │   │   │   ├── datafusion-execution v44.0.0
+      │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-catalog v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-aggregate v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-optimizer v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   └── datafusion-physical-plan v44.0.0
+      │   │   │   │       ├── datafusion v44.0.0 (*)
+      │   │   │   │       ├── datafusion-catalog v44.0.0 (*)
+      │   │   │   │       ├── datafusion-functions-table v44.0.0 (*)
+      │   │   │   │       └── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-expr v44.0.0
+      │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-catalog v44.0.0 (*)
+      │   │   │   │   ├── datafusion-execution v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-table v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-window v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-optimizer v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-expr v44.0.0
+      │   │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-optimizer v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   │   └── datafusion-sql v44.0.0
+      │   │   │   │       └── datafusion v44.0.0 (*)
+      │   │   │   ├── datafusion-expr-common v44.0.0
+      │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-aggregate-common v44.0.0
+      │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   │   │   └── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-expr-common v44.0.0
+      │   │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-window-common v44.0.0
+      │   │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   │   └── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-table v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-window-common v44.0.0 (*)
+      │   │   │   ├── datafusion-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-expr-common v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   └── datafusion-sql v44.0.0 (*)
+      │   │   ├── datafusion-execution v44.0.0 (*)
+      │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   ├── datafusion-expr-common v44.0.0 (*)
+      │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+      │   │   ├── datafusion-functions-table v44.0.0 (*)
+      │   │   ├── datafusion-optimizer v44.0.0 (*)
+      │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   ├── datafusion-physical-expr-common v44.0.0 (*)
+      │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   ├── datafusion-physical-plan v44.0.0 (*)
+      │   │   ├── datafusion-sql v44.0.0 (*)
+      │   │   └── flapjack v1.0.1 (*)
+      │   ├── datafusion v44.0.0 (*)
+      │   └── parquet v53.4.1
+      │       ├── datafusion v44.0.0 (*)
+      │       ├── datafusion-common v44.0.0 (*)
+      │       └── flapjack v1.0.1 (*)
+      ├── parquet v53.4.1 (*)
+      └── tantivy v0.25.0
+          └── flapjack v1.0.1 (*)
+
+error[vulnerability]: `Reader::open_mmap` unsoundly marks unsafe memmap operation as safe
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:310:1
+    │
+310 │ maxminddb 0.24.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2025-0132
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2025-0132
+    ├ maxminddb prior to version 0.27 declared `Reader::open_mmap` as safe 
+      despite wrapping an inherently unsafe memmap2 operation with no
+      extra step done to guarantee safety. This could have led to undefined
+      behaviour if the file were to be modified on disk while the memory map
+      was still active.
+    ├ Announcement: https://github.com/oschwald/maxminddb-rust/issues/86
+    ├ Solution: Upgrade to >=0.27.0 (try `cargo update -p maxminddb`)
+    ├ maxminddb v0.24.0
+      └── flapjack-http v1.0.1
+          └── (dev) flapjack v1.0.1
+              ├── flapjack-http v1.0.1 (*)
+              └── flapjack-replication v1.0.1
+                  ├── (dev) flapjack v1.0.1 (*)
+                  └── flapjack-http v1.0.1 (*)
+
+error[unmaintained]: number_prefix crate is unmaintained
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:339:1
+    │
+339 │ number_prefix 0.4.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unmaintained advisory detected
+    │
+    ├ ID: RUSTSEC-2025-0119
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2025-0119
+    ├ The `number_prefix` crate is no longer actively maintained.  If you rely on this crate, consider switching to a recommended alternative.
+      
+      ## Recommended alternatives
+      
+      - [`unit-prefix`](https://crates.io/crates/unit-prefix)
+    ├ Announcement: https://github.com/ogham/rust-number-prefix/pull/8
+    ├ Solution: No safe upgrade is available!
+    ├ number_prefix v0.4.0
+      └── indicatif v0.17.11
+          └── hf-hub v0.4.3
+              └── fastembed v5.11.0
+                  └── flapjack v1.0.1
+                      ├── flapjack-http v1.0.1
+                      │   └── (dev) flapjack v1.0.1 (*)
+                      └── flapjack-replication v1.0.1
+                          ├── (dev) flapjack v1.0.1 (*)
+                          └── flapjack-http v1.0.1 (*)
+
+error[unmaintained]: paste - no longer maintained
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:365:1
+    │
+365 │ paste 1.0.15 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unmaintained advisory detected
+    │
+    ├ ID: RUSTSEC-2024-0436
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0436
+    ├ The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) 
+      that this project is not longer maintained as well as archived the repository
+      
+      ## Possible Alternative(s)
+      
+      - [`pastey`]: a fork of paste and is aimed to be a drop-in replacement with additional features for paste crate
+      - [`with_builtin_macros`]: crate providing a [superset of `paste`'s functionality including general `macro_rules!` eager expansions](https://docs.rs/with_builtin_macros/0.1.0/with_builtin_macros/macro.with_eager_expansions.html)  and `concat!`/`concat_idents!` macros
+      
+      [`pastey`]: https://crates.io/crates/pastey
+      [`with_builtin_macros`]: https://crates.io/crates/with_builtin_macros
+    ├ Announcement: https://github.com/dtolnay/paste
+    ├ Solution: No safe upgrade is available!
+    ├ paste v1.0.15
+      ├── datafusion-common v44.0.0
+      │   ├── datafusion v44.0.0
+      │   │   └── flapjack v1.0.1
+      │   │       ├── flapjack-http v1.0.1
+      │   │       │   └── (dev) flapjack v1.0.1 (*)
+      │   │       └── flapjack-replication v1.0.1
+      │   │           ├── (dev) flapjack v1.0.1 (*)
+      │   │           └── flapjack-http v1.0.1 (*)
+      │   ├── datafusion-catalog v44.0.0
+      │   │   ├── datafusion v44.0.0 (*)
+      │   │   └── datafusion-functions-table v44.0.0
+      │   │       └── datafusion v44.0.0 (*)
+      │   ├── datafusion-execution v44.0.0
+      │   │   ├── datafusion v44.0.0 (*)
+      │   │   ├── datafusion-catalog v44.0.0 (*)
+      │   │   ├── datafusion-functions v44.0.0
+      │   │   │   └── datafusion v44.0.0 (*)
+      │   │   ├── datafusion-functions-aggregate v44.0.0
+      │   │   │   └── datafusion v44.0.0 (*)
+      │   │   ├── datafusion-physical-optimizer v44.0.0
+      │   │   │   └── datafusion v44.0.0 (*)
+      │   │   └── datafusion-physical-plan v44.0.0
+      │   │       ├── datafusion v44.0.0 (*)
+      │   │       ├── datafusion-catalog v44.0.0 (*)
+      │   │       ├── datafusion-functions-table v44.0.0 (*)
+      │   │       └── datafusion-physical-optimizer v44.0.0 (*)
+      │   ├── datafusion-expr v44.0.0
+      │   │   ├── datafusion v44.0.0 (*)
+      │   │   ├── datafusion-catalog v44.0.0 (*)
+      │   │   ├── datafusion-execution v44.0.0 (*)
+      │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   ├── datafusion-functions-table v44.0.0 (*)
+      │   │   ├── datafusion-functions-window v44.0.0
+      │   │   │   └── datafusion v44.0.0 (*)
+      │   │   ├── datafusion-optimizer v44.0.0
+      │   │   │   └── datafusion v44.0.0 (*)
+      │   │   ├── datafusion-physical-expr v44.0.0
+      │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   ├── datafusion-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   ├── datafusion-physical-plan v44.0.0 (*)
+      │   │   └── datafusion-sql v44.0.0
+      │   │       └── datafusion v44.0.0 (*)
+      │   ├── datafusion-expr-common v44.0.0
+      │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   ├── datafusion-functions-aggregate-common v44.0.0
+      │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   └── datafusion-physical-expr v44.0.0 (*)
+      │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   ├── datafusion-physical-expr-common v44.0.0
+      │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-window-common v44.0.0
+      │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   └── datafusion-physical-optimizer v44.0.0 (*)
+      │   ├── datafusion-functions v44.0.0 (*)
+      │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+      │   ├── datafusion-functions-table v44.0.0 (*)
+      │   ├── datafusion-functions-window v44.0.0 (*)
+      │   ├── datafusion-functions-window-common v44.0.0 (*)
+      │   ├── datafusion-optimizer v44.0.0 (*)
+      │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   ├── datafusion-physical-expr-common v44.0.0 (*)
+      │   ├── datafusion-physical-optimizer v44.0.0 (*)
+      │   ├── datafusion-physical-plan v44.0.0 (*)
+      │   └── datafusion-sql v44.0.0 (*)
+      ├── datafusion-expr v44.0.0 (*)
+      ├── datafusion-functions-aggregate v44.0.0 (*)
+      ├── datafusion-functions-table v44.0.0 (*)
+      ├── datafusion-functions-window v44.0.0 (*)
+      ├── datafusion-physical-expr v44.0.0 (*)
+      ├── macro_rules_attribute v0.2.2
+      │   └── tokenizers v0.22.2
+      │       └── fastembed v5.11.0
+      │           └── flapjack v1.0.1 (*)
+      ├── parquet v53.4.1
+      │   ├── datafusion v44.0.0 (*)
+      │   ├── datafusion-common v44.0.0 (*)
+      │   └── flapjack v1.0.1 (*)
+      ├── tikv-jemalloc-ctl v0.6.1
+      │   └── flapjack v1.0.1 (*)
+      └── tokenizers v0.22.2 (*)
+
+error[unsound]: Rand is unsound with a custom logger using `rand::rng()`
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:396:1
+    │
+396 │ rand 0.8.5 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unsound advisory detected
+    │
+    ├ ID: RUSTSEC-2026-0097
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0097
+    ├ It has been reported (by @lopopolo) that the `rand` library is [unsound](https://rust-lang.github.io/unsafe-code-guidelines/glossary.html#soundness-of-code--of-a-library) (i.e. that safe code using the public API can cause Undefined Behaviour) when all the following conditions are met:
+      
+      - The `log` and `thread_rng` features are enabled
+      - A [custom logger](https://docs.rs/log/latest/log/#implementing-a-logger) is defined
+      - The custom logger accesses `rand::rng()` (previously `rand::thread_rng()`) and calls any `TryRng` (previously `RngCore`) methods on `ThreadRng`
+      - The `ThreadRng` (attempts to) reseed while called from the custom logger (this happens every 64 kB of generated data)
+      - Trace-level logging is enabled or warn-level logging is enabled and the random source (the `getrandom` crate) is unable to provide a new seed
+      
+      `TryRng` (previously `RngCore`) methods for `ThreadRng` use `unsafe` code to cast `*mut BlockRng<ReseedingCore>` to `&mut BlockRng<ReseedingCore>`. When all the above conditions are met this results in an aliased mutable reference, violating the Stacked Borrows rules. Miri is able to detect this violation in sample code. Since construction of [aliased mutable references is Undefined Behaviour](https://doc.rust-lang.org/stable/nomicon/references.html), the behaviour of optimized builds is hard to predict.
+    ├ Announcement: https://github.com/rust-random/rand/pull/1763
+    ├ Solution: Upgrade to >=0.10.1 OR <0.10.0, >=0.9.3 OR <0.9.0, >=0.8.6 (try `cargo update -p rand`)
+    ├ rand v0.8.5
+      ├── datafusion v44.0.0
+      │   └── flapjack v1.0.1
+      │       ├── flapjack-http v1.0.1
+      │       │   └── (dev) flapjack v1.0.1 (*)
+      │       └── flapjack-replication v1.0.1
+      │           ├── (dev) flapjack v1.0.1 (*)
+      │           └── flapjack-http v1.0.1 (*)
+      ├── datafusion-execution v44.0.0
+      │   ├── datafusion v44.0.0 (*)
+      │   ├── datafusion-catalog v44.0.0
+      │   │   ├── datafusion v44.0.0 (*)
+      │   │   └── datafusion-functions-table v44.0.0
+      │   │       └── datafusion v44.0.0 (*)
+      │   ├── datafusion-functions v44.0.0
+      │   │   └── datafusion v44.0.0 (*)
+      │   ├── datafusion-functions-aggregate v44.0.0
+      │   │   └── datafusion v44.0.0 (*)
+      │   ├── datafusion-physical-optimizer v44.0.0
+      │   │   └── datafusion v44.0.0 (*)
+      │   └── datafusion-physical-plan v44.0.0
+      │       ├── datafusion v44.0.0 (*)
+      │       ├── datafusion-catalog v44.0.0 (*)
+      │       ├── datafusion-functions-table v44.0.0 (*)
+      │       └── datafusion-physical-optimizer v44.0.0 (*)
+      ├── datafusion-functions v44.0.0 (*)
+      ├── flapjack v1.0.1 (*)
+      ├── flapjack-http v1.0.1 (*)
+      └── rand_distr v0.4.3
+          └── tantivy-stacker v0.6.0
+              ├── tantivy v0.25.0
+              │   └── flapjack v1.0.1 (*)
+              └── tantivy-columnar v0.6.0
+                  └── tantivy v0.25.0 (*)
+
+error[unmaintained]: rustls-pemfile is unmaintained
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:433:1
+    │
+433 │ rustls-pemfile 1.0.4 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unmaintained advisory detected
+    │
+    ├ ID: RUSTSEC-2025-0134
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2025-0134
+    ├ The rustls-pemfile crate is no longer maintained. The repository has been archived since August
+      2025, and users are encouraged to depend directly on the underlying PEM parsing code included
+      in rustls-pki-types since 1.9.0. The latest version of rustls-pemfile is in fact a thin wrapper
+      around the same code used in rustls-pki-types, so migrating should be straightforward.
+      
+      The new API is represented by the [`PemObject`][PemObject] trait, which provides methods for
+      reading a single or multiple PEM objects from a file or byte slice.
+      
+      [PemObject]: https://docs.rs/rustls-pki-types/latest/rustls_pki_types/pem/trait.PemObject.html
+    ├ Announcement: https://github.com/rustls/pemfile/issues/61
+    ├ Solution: No safe upgrade is available!
+    ├ rustls-pemfile v1.0.4
+      └── rustls-native-certs v0.6.3
+          └── rust-s3 v0.35.1
+              └── flapjack v1.0.1
+                  ├── flapjack-http v1.0.1
+                  │   └── (dev) flapjack v1.0.1 (*)
+                  └── flapjack-replication v1.0.1
+                      ├── (dev) flapjack v1.0.1 (*)
+                      └── flapjack-http v1.0.1 (*)
+
+error[vulnerability]: Name constraints for URI names were incorrectly accepted
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:437:1
+    │
+437 │ rustls-webpki 0.101.7 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0098
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0098
+    ├ Name constraints for URI names were ignored and therefore accepted.
+      
+      Note this library does not provide an API for asserting URI names, and URI name constraints are otherwise not implemented.  URI name constraints are now rejected unconditionally.
+      
+      Since name constraints are restrictions on otherwise properly-issued certificates, this bug is reachable only after signature verification and requires misissuance to exploit.
+      
+      This vulnerability is identified as [GHSA-965h-392x-2mh5](https://github.com/rustls/webpki/security/advisories/GHSA-965h-392x-2mh5). Thank you to @1seal for the report.
+    ├ Solution: Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6 (try `cargo update -p rustls-webpki`)
+    ├ rustls-webpki v0.101.7
+      └── rustls v0.21.12
+          ├── aws-smithy-http-client v1.1.10
+          │   └── aws-smithy-runtime v1.10.1
+          │       ├── aws-config v1.8.14
+          │       │   └── flapjack-http v1.0.1
+          │       │       └── (dev) flapjack v1.0.1
+          │       │           ├── flapjack-http v1.0.1 (*)
+          │       │           └── flapjack-replication v1.0.1
+          │       │               ├── (dev) flapjack v1.0.1 (*)
+          │       │               └── flapjack-http v1.0.1 (*)
+          │       ├── aws-runtime v1.7.0
+          │       │   ├── aws-config v1.8.14 (*)
+          │       │   ├── aws-sdk-sesv2 v1.113.0
+          │       │   │   └── flapjack-http v1.0.1 (*)
+          │       │   ├── aws-sdk-sso v1.94.0
+          │       │   │   └── aws-config v1.8.14 (*)
+          │       │   ├── aws-sdk-ssooidc v1.96.0
+          │       │   │   └── aws-config v1.8.14 (*)
+          │       │   └── aws-sdk-sts v1.98.0
+          │       │       └── aws-config v1.8.14 (*)
+          │       ├── aws-sdk-sesv2 v1.113.0 (*)
+          │       ├── aws-sdk-sso v1.94.0 (*)
+          │       ├── aws-sdk-ssooidc v1.96.0 (*)
+          │       └── aws-sdk-sts v1.98.0 (*)
+          ├── hyper-rustls v0.24.2
+          │   ├── aws-smithy-http-client v1.1.10 (*)
+          │   └── rust-s3 v0.35.1
+          │       └── flapjack v1.0.1 (*)
+          ├── rust-s3 v0.35.1 (*)
+          └── tokio-rustls v0.24.1
+              ├── hyper-rustls v0.24.2 (*)
+              └── rust-s3 v0.35.1 (*)
+
+error[vulnerability]: Name constraints were accepted for certificates asserting a wildcard name
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:437:1
+    │
+437 │ rustls-webpki 0.101.7 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0099
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0099
+    ├ Permitted subtree name constraints for DNS names were accepted for certificates asserting a wildcard name.
+      
+      This was incorrect because, given a name constraint of `accept.example.com`, `*.example.com` could feasibly allow a name of `reject.example.com` which is outside the constraint.
+      This is very similar to [CVE-2025-61727](https://go.dev/issue/76442).
+      
+      Since name constraints are restrictions on otherwise properly-issued certificates, this bug is reachable only after signature verification and requires misissuance to exploit.
+      
+      This vulnerability is identified as [GHSA-xgp8-3hg3-c2mh](https://github.com/rustls/webpki/security/advisories/GHSA-xgp8-3hg3-c2mh). Thank you to @1seal for the report.
+    ├ Solution: Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6 (try `cargo update -p rustls-webpki`)
+    ├ rustls-webpki v0.101.7
+      └── rustls v0.21.12
+          ├── aws-smithy-http-client v1.1.10
+          │   └── aws-smithy-runtime v1.10.1
+          │       ├── aws-config v1.8.14
+          │       │   └── flapjack-http v1.0.1
+          │       │       └── (dev) flapjack v1.0.1
+          │       │           ├── flapjack-http v1.0.1 (*)
+          │       │           └── flapjack-replication v1.0.1
+          │       │               ├── (dev) flapjack v1.0.1 (*)
+          │       │               └── flapjack-http v1.0.1 (*)
+          │       ├── aws-runtime v1.7.0
+          │       │   ├── aws-config v1.8.14 (*)
+          │       │   ├── aws-sdk-sesv2 v1.113.0
+          │       │   │   └── flapjack-http v1.0.1 (*)
+          │       │   ├── aws-sdk-sso v1.94.0
+          │       │   │   └── aws-config v1.8.14 (*)
+          │       │   ├── aws-sdk-ssooidc v1.96.0
+          │       │   │   └── aws-config v1.8.14 (*)
+          │       │   └── aws-sdk-sts v1.98.0
+          │       │       └── aws-config v1.8.14 (*)
+          │       ├── aws-sdk-sesv2 v1.113.0 (*)
+          │       ├── aws-sdk-sso v1.94.0 (*)
+          │       ├── aws-sdk-ssooidc v1.96.0 (*)
+          │       └── aws-sdk-sts v1.98.0 (*)
+          ├── hyper-rustls v0.24.2
+          │   ├── aws-smithy-http-client v1.1.10 (*)
+          │   └── rust-s3 v0.35.1
+          │       └── flapjack v1.0.1 (*)
+          ├── rust-s3 v0.35.1 (*)
+          └── tokio-rustls v0.24.1
+              ├── hyper-rustls v0.24.2 (*)
+              └── rust-s3 v0.35.1 (*)
+
+error[vulnerability]: Reachable panic in certificate revocation list parsing
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:437:1
+    │
+437 │ rustls-webpki 0.101.7 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0104
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0104
+    ├ A panic was reachable when parsing certificate revocation lists via [`BorrowedCertRevocationList::from_der`]
+      or [`OwnedCertRevocationList::from_der`].  This was the result of mishandling a syntactically valid empty
+      `BIT STRING` appearing in the `onlySomeReasons` element of a `IssuingDistributionPoint` CRL extension.
+      
+      This panic is reachable prior to a CRL's signature being verified.
+      
+      Applications that do not use CRLs are not affected.
+      
+      Thank you to @tynus3 for the report.
+    ├ Solution: Upgrade to >=0.103.13, <0.104.0-alpha.1 OR >=0.104.0-alpha.7 (try `cargo update -p rustls-webpki`)
+    ├ rustls-webpki v0.101.7
+      └── rustls v0.21.12
+          ├── aws-smithy-http-client v1.1.10
+          │   └── aws-smithy-runtime v1.10.1
+          │       ├── aws-config v1.8.14
+          │       │   └── flapjack-http v1.0.1
+          │       │       └── (dev) flapjack v1.0.1
+          │       │           ├── flapjack-http v1.0.1 (*)
+          │       │           └── flapjack-replication v1.0.1
+          │       │               ├── (dev) flapjack v1.0.1 (*)
+          │       │               └── flapjack-http v1.0.1 (*)
+          │       ├── aws-runtime v1.7.0
+          │       │   ├── aws-config v1.8.14 (*)
+          │       │   ├── aws-sdk-sesv2 v1.113.0
+          │       │   │   └── flapjack-http v1.0.1 (*)
+          │       │   ├── aws-sdk-sso v1.94.0
+          │       │   │   └── aws-config v1.8.14 (*)
+          │       │   ├── aws-sdk-ssooidc v1.96.0
+          │       │   │   └── aws-config v1.8.14 (*)
+          │       │   └── aws-sdk-sts v1.98.0
+          │       │       └── aws-config v1.8.14 (*)
+          │       ├── aws-sdk-sesv2 v1.113.0 (*)
+          │       ├── aws-sdk-sso v1.94.0 (*)
+          │       ├── aws-sdk-ssooidc v1.96.0 (*)
+          │       └── aws-sdk-sts v1.98.0 (*)
+          ├── hyper-rustls v0.24.2
+          │   ├── aws-smithy-http-client v1.1.10 (*)
+          │   └── rust-s3 v0.35.1
+          │       └── flapjack v1.0.1 (*)
+          ├── rust-s3 v0.35.1 (*)
+          └── tokio-rustls v0.24.1
+              ├── hyper-rustls v0.24.2 (*)
+              └── rust-s3 v0.35.1 (*)
+
+error[vulnerability]: CRLs not considered authoritative by Distribution Point due to faulty matching logic
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:438:1
+    │
+438 │ rustls-webpki 0.103.9 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0049
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0049
+    ├ If a certificate had more than one `distributionPoint`, then only the first `distributionPoint` would be considered against each CRL's `IssuingDistributionPoint` `distributionPoint`, and then the certificate's subsequent `distributionPoint`s would be ignored.
+      
+      The impact was that correctly provided CRLs would not be consulted to check revocation. With `UnknownStatusPolicy::Deny` (the default) this would lead to incorrect but safe `Error::UnknownRevocationStatus`. With `UnknownStatusPolicy::Allow` this would lead to inappropriate acceptance of revoked certificates.
+      
+      This vulnerability is thought to be of limited impact. This is because both the certificate and CRL are signed -- an attacker would need to compromise a trusted issuing authority to trigger this bug.  An attacker with such capabilities could likely bypass revocation checking through other more impactful means (such as publishing a valid, empty CRL.)
+      
+      More likely, this bug would be latent in normal use, and an attacker could leverage faulty revocation checking to continue using a revoked credential.
+      
+      This vulnerability is identified as [GHSA-pwjx-qhcg-rvj4](https://github.com/rustls/webpki/security/advisories/GHSA-pwjx-qhcg-rvj4). Thank you to @1seal for the report.
+    ├ Solution: Upgrade to >=0.103.10 (try `cargo update -p rustls-webpki`)
+    ├ rustls-webpki v0.103.9
+      ├── rustls v0.23.36
+      │   ├── attohttpc v0.28.5
+      │   │   └── aws-creds v0.37.0
+      │   │       └── rust-s3 v0.35.1
+      │   │           └── flapjack v1.0.1
+      │   │               ├── flapjack-http v1.0.1
+      │   │               │   └── (dev) flapjack v1.0.1 (*)
+      │   │               └── flapjack-replication v1.0.1
+      │   │                   ├── (dev) flapjack v1.0.1 (*)
+      │   │                   └── flapjack-http v1.0.1 (*)
+      │   ├── aws-smithy-http-client v1.1.10
+      │   │   └── aws-smithy-runtime v1.10.1
+      │   │       ├── aws-config v1.8.14
+      │   │       │   └── flapjack-http v1.0.1 (*)
+      │   │       ├── aws-runtime v1.7.0
+      │   │       │   ├── aws-config v1.8.14 (*)
+      │   │       │   ├── aws-sdk-sesv2 v1.113.0
+      │   │       │   │   └── flapjack-http v1.0.1 (*)
+      │   │       │   ├── aws-sdk-sso v1.94.0
+      │   │       │   │   └── aws-config v1.8.14 (*)
+      │   │       │   ├── aws-sdk-ssooidc v1.96.0
+      │   │       │   │   └── aws-config v1.8.14 (*)
+      │   │       │   └── aws-sdk-sts v1.98.0
+      │   │       │       └── aws-config v1.8.14 (*)
+      │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │       ├── aws-sdk-sso v1.94.0 (*)
+      │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │       └── aws-sdk-sts v1.98.0 (*)
+      │   ├── hyper-rustls v0.27.7
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── instant-acme v0.8.4
+      │   │   │   └── flapjack-ssl v1.0.1
+      │   │   │       ├── (dev) flapjack v1.0.1 (*)
+      │   │   │       └── flapjack-http v1.0.1 (*)
+      │   │   └── reqwest v0.12.28
+      │   │       ├── (dev) flapjack v1.0.1 (*)
+      │   │       ├── flapjack-http v1.0.1 (*)
+      │   │       └── flapjack-replication v1.0.1 (*)
+      │   ├── instant-acme v0.8.4 (*)
+      │   ├── reqwest v0.12.28 (*)
+      │   ├── rustls-platform-verifier v0.6.2
+      │   │   └── hyper-rustls v0.27.7 (*)
+      │   ├── tokio-rustls v0.26.4
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── hyper-rustls v0.27.7 (*)
+      │   │   └── reqwest v0.12.28 (*)
+      │   └── ureq v2.12.1
+      │       └── hf-hub v0.4.3
+      │           └── fastembed v5.11.0
+      │               └── flapjack v1.0.1 (*)
+      └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: Name constraints for URI names were incorrectly accepted
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:438:1
+    │
+438 │ rustls-webpki 0.103.9 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0098
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0098
+    ├ Name constraints for URI names were ignored and therefore accepted.
+      
+      Note this library does not provide an API for asserting URI names, and URI name constraints are otherwise not implemented.  URI name constraints are now rejected unconditionally.
+      
+      Since name constraints are restrictions on otherwise properly-issued certificates, this bug is reachable only after signature verification and requires misissuance to exploit.
+      
+      This vulnerability is identified as [GHSA-965h-392x-2mh5](https://github.com/rustls/webpki/security/advisories/GHSA-965h-392x-2mh5). Thank you to @1seal for the report.
+    ├ Solution: Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6 (try `cargo update -p rustls-webpki`)
+    ├ rustls-webpki v0.103.9
+      ├── rustls v0.23.36
+      │   ├── attohttpc v0.28.5
+      │   │   └── aws-creds v0.37.0
+      │   │       └── rust-s3 v0.35.1
+      │   │           └── flapjack v1.0.1
+      │   │               ├── flapjack-http v1.0.1
+      │   │               │   └── (dev) flapjack v1.0.1 (*)
+      │   │               └── flapjack-replication v1.0.1
+      │   │                   ├── (dev) flapjack v1.0.1 (*)
+      │   │                   └── flapjack-http v1.0.1 (*)
+      │   ├── aws-smithy-http-client v1.1.10
+      │   │   └── aws-smithy-runtime v1.10.1
+      │   │       ├── aws-config v1.8.14
+      │   │       │   └── flapjack-http v1.0.1 (*)
+      │   │       ├── aws-runtime v1.7.0
+      │   │       │   ├── aws-config v1.8.14 (*)
+      │   │       │   ├── aws-sdk-sesv2 v1.113.0
+      │   │       │   │   └── flapjack-http v1.0.1 (*)
+      │   │       │   ├── aws-sdk-sso v1.94.0
+      │   │       │   │   └── aws-config v1.8.14 (*)
+      │   │       │   ├── aws-sdk-ssooidc v1.96.0
+      │   │       │   │   └── aws-config v1.8.14 (*)
+      │   │       │   └── aws-sdk-sts v1.98.0
+      │   │       │       └── aws-config v1.8.14 (*)
+      │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │       ├── aws-sdk-sso v1.94.0 (*)
+      │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │       └── aws-sdk-sts v1.98.0 (*)
+      │   ├── hyper-rustls v0.27.7
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── instant-acme v0.8.4
+      │   │   │   └── flapjack-ssl v1.0.1
+      │   │   │       ├── (dev) flapjack v1.0.1 (*)
+      │   │   │       └── flapjack-http v1.0.1 (*)
+      │   │   └── reqwest v0.12.28
+      │   │       ├── (dev) flapjack v1.0.1 (*)
+      │   │       ├── flapjack-http v1.0.1 (*)
+      │   │       └── flapjack-replication v1.0.1 (*)
+      │   ├── instant-acme v0.8.4 (*)
+      │   ├── reqwest v0.12.28 (*)
+      │   ├── rustls-platform-verifier v0.6.2
+      │   │   └── hyper-rustls v0.27.7 (*)
+      │   ├── tokio-rustls v0.26.4
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── hyper-rustls v0.27.7 (*)
+      │   │   └── reqwest v0.12.28 (*)
+      │   └── ureq v2.12.1
+      │       └── hf-hub v0.4.3
+      │           └── fastembed v5.11.0
+      │               └── flapjack v1.0.1 (*)
+      └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: Name constraints were accepted for certificates asserting a wildcard name
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:438:1
+    │
+438 │ rustls-webpki 0.103.9 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0099
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0099
+    ├ Permitted subtree name constraints for DNS names were accepted for certificates asserting a wildcard name.
+      
+      This was incorrect because, given a name constraint of `accept.example.com`, `*.example.com` could feasibly allow a name of `reject.example.com` which is outside the constraint.
+      This is very similar to [CVE-2025-61727](https://go.dev/issue/76442).
+      
+      Since name constraints are restrictions on otherwise properly-issued certificates, this bug is reachable only after signature verification and requires misissuance to exploit.
+      
+      This vulnerability is identified as [GHSA-xgp8-3hg3-c2mh](https://github.com/rustls/webpki/security/advisories/GHSA-xgp8-3hg3-c2mh). Thank you to @1seal for the report.
+    ├ Solution: Upgrade to >=0.103.12, <0.104.0-alpha.1 OR >=0.104.0-alpha.6 (try `cargo update -p rustls-webpki`)
+    ├ rustls-webpki v0.103.9
+      ├── rustls v0.23.36
+      │   ├── attohttpc v0.28.5
+      │   │   └── aws-creds v0.37.0
+      │   │       └── rust-s3 v0.35.1
+      │   │           └── flapjack v1.0.1
+      │   │               ├── flapjack-http v1.0.1
+      │   │               │   └── (dev) flapjack v1.0.1 (*)
+      │   │               └── flapjack-replication v1.0.1
+      │   │                   ├── (dev) flapjack v1.0.1 (*)
+      │   │                   └── flapjack-http v1.0.1 (*)
+      │   ├── aws-smithy-http-client v1.1.10
+      │   │   └── aws-smithy-runtime v1.10.1
+      │   │       ├── aws-config v1.8.14
+      │   │       │   └── flapjack-http v1.0.1 (*)
+      │   │       ├── aws-runtime v1.7.0
+      │   │       │   ├── aws-config v1.8.14 (*)
+      │   │       │   ├── aws-sdk-sesv2 v1.113.0
+      │   │       │   │   └── flapjack-http v1.0.1 (*)
+      │   │       │   ├── aws-sdk-sso v1.94.0
+      │   │       │   │   └── aws-config v1.8.14 (*)
+      │   │       │   ├── aws-sdk-ssooidc v1.96.0
+      │   │       │   │   └── aws-config v1.8.14 (*)
+      │   │       │   └── aws-sdk-sts v1.98.0
+      │   │       │       └── aws-config v1.8.14 (*)
+      │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │       ├── aws-sdk-sso v1.94.0 (*)
+      │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │       └── aws-sdk-sts v1.98.0 (*)
+      │   ├── hyper-rustls v0.27.7
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── instant-acme v0.8.4
+      │   │   │   └── flapjack-ssl v1.0.1
+      │   │   │       ├── (dev) flapjack v1.0.1 (*)
+      │   │   │       └── flapjack-http v1.0.1 (*)
+      │   │   └── reqwest v0.12.28
+      │   │       ├── (dev) flapjack v1.0.1 (*)
+      │   │       ├── flapjack-http v1.0.1 (*)
+      │   │       └── flapjack-replication v1.0.1 (*)
+      │   ├── instant-acme v0.8.4 (*)
+      │   ├── reqwest v0.12.28 (*)
+      │   ├── rustls-platform-verifier v0.6.2
+      │   │   └── hyper-rustls v0.27.7 (*)
+      │   ├── tokio-rustls v0.26.4
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── hyper-rustls v0.27.7 (*)
+      │   │   └── reqwest v0.12.28 (*)
+      │   └── ureq v2.12.1
+      │       └── hf-hub v0.4.3
+      │           └── fastembed v5.11.0
+      │               └── flapjack v1.0.1 (*)
+      └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: Reachable panic in certificate revocation list parsing
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:438:1
+    │
+438 │ rustls-webpki 0.103.9 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0104
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0104
+    ├ A panic was reachable when parsing certificate revocation lists via [`BorrowedCertRevocationList::from_der`]
+      or [`OwnedCertRevocationList::from_der`].  This was the result of mishandling a syntactically valid empty
+      `BIT STRING` appearing in the `onlySomeReasons` element of a `IssuingDistributionPoint` CRL extension.
+      
+      This panic is reachable prior to a CRL's signature being verified.
+      
+      Applications that do not use CRLs are not affected.
+      
+      Thank you to @tynus3 for the report.
+    ├ Solution: Upgrade to >=0.103.13, <0.104.0-alpha.1 OR >=0.104.0-alpha.7 (try `cargo update -p rustls-webpki`)
+    ├ rustls-webpki v0.103.9
+      ├── rustls v0.23.36
+      │   ├── attohttpc v0.28.5
+      │   │   └── aws-creds v0.37.0
+      │   │       └── rust-s3 v0.35.1
+      │   │           └── flapjack v1.0.1
+      │   │               ├── flapjack-http v1.0.1
+      │   │               │   └── (dev) flapjack v1.0.1 (*)
+      │   │               └── flapjack-replication v1.0.1
+      │   │                   ├── (dev) flapjack v1.0.1 (*)
+      │   │                   └── flapjack-http v1.0.1 (*)
+      │   ├── aws-smithy-http-client v1.1.10
+      │   │   └── aws-smithy-runtime v1.10.1
+      │   │       ├── aws-config v1.8.14
+      │   │       │   └── flapjack-http v1.0.1 (*)
+      │   │       ├── aws-runtime v1.7.0
+      │   │       │   ├── aws-config v1.8.14 (*)
+      │   │       │   ├── aws-sdk-sesv2 v1.113.0
+      │   │       │   │   └── flapjack-http v1.0.1 (*)
+      │   │       │   ├── aws-sdk-sso v1.94.0
+      │   │       │   │   └── aws-config v1.8.14 (*)
+      │   │       │   ├── aws-sdk-ssooidc v1.96.0
+      │   │       │   │   └── aws-config v1.8.14 (*)
+      │   │       │   └── aws-sdk-sts v1.98.0
+      │   │       │       └── aws-config v1.8.14 (*)
+      │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │       ├── aws-sdk-sso v1.94.0 (*)
+      │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │       └── aws-sdk-sts v1.98.0 (*)
+      │   ├── hyper-rustls v0.27.7
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── instant-acme v0.8.4
+      │   │   │   └── flapjack-ssl v1.0.1
+      │   │   │       ├── (dev) flapjack v1.0.1 (*)
+      │   │   │       └── flapjack-http v1.0.1 (*)
+      │   │   └── reqwest v0.12.28
+      │   │       ├── (dev) flapjack v1.0.1 (*)
+      │   │       ├── flapjack-http v1.0.1 (*)
+      │   │       └── flapjack-replication v1.0.1 (*)
+      │   ├── instant-acme v0.8.4 (*)
+      │   ├── reqwest v0.12.28 (*)
+      │   ├── rustls-platform-verifier v0.6.2
+      │   │   └── hyper-rustls v0.27.7 (*)
+      │   ├── tokio-rustls v0.26.4
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── hyper-rustls v0.27.7 (*)
+      │   │   └── reqwest v0.12.28 (*)
+      │   └── ureq v2.12.1
+      │       └── hf-hub v0.4.3
+      │           └── fastembed v5.11.0
+      │               └── flapjack v1.0.1 (*)
+      └── rustls-platform-verifier v0.6.2 (*)
+
+error[vulnerability]: `unpack_in` can chmod arbitrary directories by following symlinks
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:500:1
+    │
+500 │ tar 0.4.44 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0067
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0067
+    ├ In versions 0.4.44 and below of tar-rs, when unpacking a tar archive, the tar
+      crate's `unpack_dir` function uses [`fs::metadata()`][fs-metadata] to check
+      whether a path that already exists is a directory. Because `fs::metadata()`
+      follows symbolic links, a crafted tarball containing a symlink entry followed
+      by a directory entry with the same name causes the crate to treat the symlink
+      target as a valid existing directory — and subsequently apply chmod to it. This
+      allows an attacker to modify the permissions of arbitrary directories outside
+      the extraction root.
+      
+      This issue has been fixed in version 0.4.45.
+      
+      [fs-metadata]: https://doc.rust-lang.org/std/fs/fn.metadata.html
+    ├ Solution: Upgrade to >=0.4.45 (try `cargo update -p tar`)
+    ├ tar v0.4.44
+      └── flapjack v1.0.1
+          ├── flapjack-http v1.0.1
+          │   └── (dev) flapjack v1.0.1 (*)
+          └── flapjack-replication v1.0.1
+              ├── (dev) flapjack v1.0.1 (*)
+              └── flapjack-http v1.0.1 (*)
+
+error[vulnerability]: tar-rs incorrectly ignores PAX size headers if header size is nonzero
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:500:1
+    │
+500 │ tar 0.4.44 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0068
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0068
+    ├ Versions 0.4.44 and below of tar-rs have conditional logic that skips the PAX
+      size header in cases where the base header size is nonzero.
+      
+      As part of [CVE-2025-62518][astral-cve], the [astral-tokio-tar]
+      project was changed to correctly honor PAX size headers in the case where it
+      was different from the base header. This is almost the inverse of the
+      astral-tokio-tar issue.
+      
+      Any discrepancy in how tar parsers honor file size can be used to create
+      archives that appear differently when unpacked by different archivers. In this
+      case, the tar-rs (Rust tar) crate is an outlier in checking for the header size
+      — other tar parsers (including e.g. Go [`archive/tar`][go-tar]) unconditionally
+      use the PAX size override. This can affect anything that uses the tar crate to
+      parse archives and expects to have a consistent view with other parsers.
+      
+      This issue has been fixed in version 0.4.45.
+      
+      [astral-cve]: https://www.cve.org/CVERecord?id=CVE-2025-62518
+      [astral-tokio-tar]: https://github.com/astral-sh/tokio-tar
+      [go-tar]: https://pkg.go.dev/archive/tar
+    ├ Solution: Upgrade to >=0.4.45 (try `cargo update -p tar`)
+    ├ tar v0.4.44
+      └── flapjack v1.0.1
+          ├── flapjack-http v1.0.1
+          │   └── (dev) flapjack v1.0.1 (*)
+          └── flapjack-replication v1.0.1
+              ├── (dev) flapjack v1.0.1 (*)
+              └── flapjack-http v1.0.1 (*)
+
+error[vulnerability]: Denial of Service via Stack Exhaustion
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:512:1
+    │
+512 │ time 0.3.44 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ security vulnerability detected
+    │
+    ├ ID: RUSTSEC-2026-0009
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0009
+    ├ ## Impact
+      
+      When user-provided input is provided to any type that parses with the RFC 2822 format, a denial of
+      service attack via stack exhaustion is possible. The attack relies on formally deprecated and
+      rarely-used features that are part of the RFC 2822 format used in a malicious manner. Ordinary,
+      non-malicious input will never encounter this scenario.
+      
+      ## Patches
+      
+      A limit to the depth of recursion was added in v0.3.47. From this version, an error will be returned
+      rather than exhausting the stack.
+      
+      ## Workarounds
+      
+      Limiting the length of user input is the simplest way to avoid stack exhaustion, as the amount of
+      the stack consumed would be at most a factor of the length of the input.
+    ├ Announcement: https://github.com/time-rs/time/blob/main/CHANGELOG.md#0347-2026-02-05
+    ├ Solution: Upgrade to >=0.3.47 (try `cargo update -p time`)
+    ├ time v0.3.44
+      ├── asn1-rs v0.6.2
+      │   ├── der-parser v9.0.0
+      │   │   └── x509-parser v0.16.0
+      │   │       └── flapjack-ssl v1.0.1
+      │   │           ├── (dev) flapjack v1.0.1
+      │   │           │   ├── flapjack-http v1.0.1
+      │   │           │   │   └── (dev) flapjack v1.0.1 (*)
+      │   │           │   └── flapjack-replication v1.0.1
+      │   │           │       ├── (dev) flapjack v1.0.1 (*)
+      │   │           │       └── flapjack-http v1.0.1 (*)
+      │   │           └── flapjack-http v1.0.1 (*)
+      │   ├── oid-registry v0.7.1
+      │   │   └── x509-parser v0.16.0 (*)
+      │   └── x509-parser v0.16.0 (*)
+      ├── aws-config v1.8.14
+      │   └── flapjack-http v1.0.1 (*)
+      ├── aws-creds v0.37.0
+      │   └── rust-s3 v0.35.1
+      │       └── flapjack v1.0.1 (*)
+      ├── aws-sigv4 v1.4.0
+      │   └── aws-runtime v1.7.0
+      │       ├── aws-config v1.8.14 (*)
+      │       ├── aws-sdk-sesv2 v1.113.0
+      │       │   └── flapjack-http v1.0.1 (*)
+      │       ├── aws-sdk-sso v1.94.0
+      │       │   └── aws-config v1.8.14 (*)
+      │       ├── aws-sdk-ssooidc v1.96.0
+      │       │   └── aws-config v1.8.14 (*)
+      │       └── aws-sdk-sts v1.98.0
+      │           └── aws-config v1.8.14 (*)
+      ├── aws-smithy-types v1.4.4
+      │   ├── aws-config v1.8.14 (*)
+      │   ├── aws-credential-types v1.2.12
+      │   │   ├── aws-config v1.8.14 (*)
+      │   │   ├── aws-runtime v1.7.0 (*)
+      │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │   ├── aws-sdk-sso v1.94.0 (*)
+      │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │   ├── aws-sdk-sts v1.98.0 (*)
+      │   │   ├── aws-sigv4 v1.4.0 (*)
+      │   │   └── aws-types v1.3.12
+      │   │       ├── aws-config v1.8.14 (*)
+      │   │       ├── aws-runtime v1.7.0 (*)
+      │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │       ├── aws-sdk-sso v1.94.0 (*)
+      │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │       └── aws-sdk-sts v1.98.0 (*)
+      │   ├── aws-runtime v1.7.0 (*)
+      │   ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   ├── aws-sdk-sso v1.94.0 (*)
+      │   ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   ├── aws-sdk-sts v1.98.0 (*)
+      │   ├── aws-sigv4 v1.4.0 (*)
+      │   ├── aws-smithy-http v0.63.4
+      │   │   ├── aws-config v1.8.14 (*)
+      │   │   ├── aws-runtime v1.7.0 (*)
+      │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │   ├── aws-sdk-sso v1.94.0 (*)
+      │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │   ├── aws-sdk-sts v1.98.0 (*)
+      │   │   ├── aws-sigv4 v1.4.0 (*)
+      │   │   └── aws-smithy-runtime v1.10.1
+      │   │       ├── aws-config v1.8.14 (*)
+      │   │       ├── aws-runtime v1.7.0 (*)
+      │   │       ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │       ├── aws-sdk-sso v1.94.0 (*)
+      │   │       ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │       └── aws-sdk-sts v1.98.0 (*)
+      │   ├── aws-smithy-http-client v1.1.10
+      │   │   └── aws-smithy-runtime v1.10.1 (*)
+      │   ├── aws-smithy-json v0.62.4
+      │   │   ├── aws-config v1.8.14 (*)
+      │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │   ├── aws-sdk-sso v1.94.0 (*)
+      │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │   └── aws-sdk-sts v1.98.0 (*)
+      │   ├── aws-smithy-query v0.60.14
+      │   │   └── aws-sdk-sts v1.98.0 (*)
+      │   ├── aws-smithy-runtime v1.10.1 (*)
+      │   ├── aws-smithy-runtime-api v1.11.4
+      │   │   ├── aws-config v1.8.14 (*)
+      │   │   ├── aws-credential-types v1.2.12 (*)
+      │   │   ├── aws-runtime v1.7.0 (*)
+      │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │   ├── aws-sdk-sso v1.94.0 (*)
+      │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │   ├── aws-sdk-sts v1.98.0 (*)
+      │   │   ├── aws-sigv4 v1.4.0 (*)
+      │   │   ├── aws-smithy-http v0.63.4 (*)
+      │   │   ├── aws-smithy-http-client v1.1.10 (*)
+      │   │   ├── aws-smithy-observability v0.2.5
+      │   │   │   ├── aws-sdk-sesv2 v1.113.0 (*)
+      │   │   │   ├── aws-sdk-sso v1.94.0 (*)
+      │   │   │   ├── aws-sdk-ssooidc v1.96.0 (*)
+      │   │   │   ├── aws-sdk-sts v1.98.0 (*)
+      │   │   │   └── aws-smithy-runtime v1.10.1 (*)
+      │   │   ├── aws-smithy-runtime v1.10.1 (*)
+      │   │   └── aws-types v1.3.12 (*)
+      │   └── aws-types v1.3.12 (*)
+      ├── rcgen v0.13.2
+      │   └── flapjack-ssl v1.0.1 (*)
+      ├── rcgen v0.14.7
+      │   └── instant-acme v0.8.4
+      │       └── flapjack-ssl v1.0.1 (*)
+      ├── rust-s3 v0.35.1 (*)
+      ├── tantivy v0.25.0
+      │   └── flapjack v1.0.1 (*)
+      ├── tantivy-common v0.10.0
+      │   ├── tantivy v0.25.0 (*)
+      │   ├── tantivy-columnar v0.6.0
+      │   │   └── tantivy v0.25.0 (*)
+      │   ├── tantivy-sstable v0.6.0
+      │   │   └── tantivy-columnar v0.6.0 (*)
+      │   └── tantivy-stacker v0.6.0
+      │       ├── tantivy v0.25.0 (*)
+      │       └── tantivy-columnar v0.6.0 (*)
+      ├── x509-parser v0.16.0 (*)
+      └── yasna v0.5.2
+          ├── rcgen v0.13.2 (*)
+          └── rcgen v0.14.7 (*)
+
+warning[yanked]: detected yanked crate (try `cargo update -p lz4_flex`)
+    ┌─ /Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine/Cargo.lock:303:1
+    │
+303 │ lz4_flex 0.11.5 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ yanked version
+    │
+    ├ lz4_flex v0.11.5
+      ├── arrow-ipc v53.4.1
+      │   ├── arrow v53.4.1
+      │   │   ├── datafusion v44.0.0
+      │   │   │   └── flapjack v1.0.1
+      │   │   │       ├── flapjack-http v1.0.1
+      │   │   │       │   └── (dev) flapjack v1.0.1 (*)
+      │   │   │       └── flapjack-replication v1.0.1
+      │   │   │           ├── (dev) flapjack v1.0.1 (*)
+      │   │   │           └── flapjack-http v1.0.1 (*)
+      │   │   ├── datafusion-common v44.0.0
+      │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   ├── datafusion-catalog v44.0.0
+      │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   └── datafusion-functions-table v44.0.0
+      │   │   │   │       └── datafusion v44.0.0 (*)
+      │   │   │   ├── datafusion-execution v44.0.0
+      │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-catalog v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-aggregate v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-optimizer v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   └── datafusion-physical-plan v44.0.0
+      │   │   │   │       ├── datafusion v44.0.0 (*)
+      │   │   │   │       ├── datafusion-catalog v44.0.0 (*)
+      │   │   │   │       ├── datafusion-functions-table v44.0.0 (*)
+      │   │   │   │       └── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-expr v44.0.0
+      │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-catalog v44.0.0 (*)
+      │   │   │   │   ├── datafusion-execution v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-table v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-window v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-optimizer v44.0.0
+      │   │   │   │   │   └── datafusion v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-expr v44.0.0
+      │   │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-optimizer v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   │   └── datafusion-sql v44.0.0
+      │   │   │   │       └── datafusion v44.0.0 (*)
+      │   │   │   ├── datafusion-expr-common v44.0.0
+      │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   │   │   ├── datafusion-functions-aggregate-common v44.0.0
+      │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   │   │   └── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   │   ├── datafusion-physical-expr-common v44.0.0
+      │   │   │   │   │   ├── datafusion v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-functions-window-common v44.0.0
+      │   │   │   │   │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   │   │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   │   │   └── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   │   └── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-table v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-window v44.0.0 (*)
+      │   │   │   ├── datafusion-functions-window-common v44.0.0 (*)
+      │   │   │   ├── datafusion-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-expr-common v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   │   ├── datafusion-physical-plan v44.0.0 (*)
+      │   │   │   └── datafusion-sql v44.0.0 (*)
+      │   │   ├── datafusion-execution v44.0.0 (*)
+      │   │   ├── datafusion-expr v44.0.0 (*)
+      │   │   ├── datafusion-expr-common v44.0.0 (*)
+      │   │   ├── datafusion-functions v44.0.0 (*)
+      │   │   ├── datafusion-functions-aggregate v44.0.0 (*)
+      │   │   ├── datafusion-functions-aggregate-common v44.0.0 (*)
+      │   │   ├── datafusion-functions-table v44.0.0 (*)
+      │   │   ├── datafusion-optimizer v44.0.0 (*)
+      │   │   ├── datafusion-physical-expr v44.0.0 (*)
+      │   │   ├── datafusion-physical-expr-common v44.0.0 (*)
+      │   │   ├── datafusion-physical-optimizer v44.0.0 (*)
+      │   │   ├── datafusion-physical-plan v44.0.0 (*)
+      │   │   ├── datafusion-sql v44.0.0 (*)
+      │   │   └── flapjack v1.0.1 (*)
+      │   ├── datafusion v44.0.0 (*)
+      │   └── parquet v53.4.1
+      │       ├── datafusion v44.0.0 (*)
+      │       ├── datafusion-common v44.0.0 (*)
+      │       └── flapjack v1.0.1 (*)
+      ├── parquet v53.4.1 (*)
+      └── tantivy v0.25.0
+          └── flapjack v1.0.1 (*)
+
+advisories FAILED
+[exit:1]

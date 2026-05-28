@@ -226,30 +226,30 @@ download_and_verify() {
   download_release_asset "$archive_name" "${tmpdir}/${archive_name}"
 
   info "Downloading checksum..."
-  if download_release_asset "$checksum_name" "${tmpdir}/${checksum_name}" 2>/dev/null; then
-    info "Verifying SHA256 checksum..."
-    cd "$tmpdir"
-    if command -v shasum > /dev/null 2>&1; then
-      shasum -a 256 -c "${checksum_name}" > /dev/null 2>&1
-    elif command -v sha256sum > /dev/null 2>&1; then
-      sha256sum -c "${checksum_name}" > /dev/null 2>&1
-    else
-      warn "No checksum tool found — skipping verification"
-      cd - > /dev/null
-      return
-    fi
+  if ! download_release_asset "$checksum_name" "${tmpdir}/${checksum_name}" 2>/dev/null; then
+    error "No checksum file available for ${archive_name}; refusing unverifiable install."
+    exit 1
+  fi
 
-    if [ $? -eq 0 ]; then
-      printf "  ${GREEN}Checksum verified${NC}\n"
-    else
+  info "Verifying SHA256 checksum..."
+  if command -v shasum > /dev/null 2>&1; then
+    if ! (cd "$tmpdir" && shasum -a 256 -c "${checksum_name}" > /dev/null 2>&1); then
       error "Checksum verification FAILED! The download may be corrupted."
       error "Expected checksum from: ${checksum_name}"
       exit 1
     fi
-    cd - > /dev/null
+  elif command -v sha256sum > /dev/null 2>&1; then
+    if ! (cd "$tmpdir" && sha256sum -c "${checksum_name}" > /dev/null 2>&1); then
+      error "Checksum verification FAILED! The download may be corrupted."
+      error "Expected checksum from: ${checksum_name}"
+      exit 1
+    fi
   else
-    warn "No checksum file available — skipping verification"
+    error "No checksum tool found — refusing unverifiable install."
+    exit 1
   fi
+
+  printf "  ${GREEN}Checksum verified${NC}\n"
 }
 
 # ── Install ──────────────────────────────────────────────────────────────────

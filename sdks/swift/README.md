@@ -1,6 +1,6 @@
 # Flapjack Search Swift Client
 
-Official Swift client for the [Flapjack Search API](https://github.com/flapjackhq).
+Official Swift client for the [Flapjack Search API](https://github.com/gridl-staging).
 
 Drop-in replacement for `AlgoliaSearchClient` Swift package. Algolia-compatible REST API with Flapjack-native host routing.
 
@@ -8,11 +8,13 @@ Drop-in replacement for `AlgoliaSearchClient` Swift package. Algolia-compatible 
 
 ### Swift Package Manager
 
-Add to your `Package.swift`:
+Add to your `Package.swift` using repository URL <https://github.com/gridl-staging/flapjack-search-swift.git>:
 
 ```swift
+let flapjackSearchSwiftRepository = "FLAPJACK_SWIFT_REPOSITORY_URL"
+
 dependencies: [
-    .package(url: "https://github.com/flapjackhq/flapjack-search-swift.git", from: "0.1.0")
+    .package(url: flapjackSearchSwiftRepository, from: "0.1.0")
 ]
 ```
 

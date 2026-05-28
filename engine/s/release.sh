@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/ui.sh"
 source "$SCRIPT_DIR/lib/version.sh"
 
-GH_REPO="gridl-hq/flapjack"
+GH_REPO="flapjackhq/flapjack"
 
 LATEST_TAG=$(latest_release_version "$GH_REPO")
 AUTO_VERSION=$(auto_bump_version "$GH_REPO" "beta" "$LATEST_TAG")

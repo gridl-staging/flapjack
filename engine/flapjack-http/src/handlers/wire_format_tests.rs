@@ -82,7 +82,7 @@ mod tests {
             .layer(middleware::from_fn(normalize_content_type))
             .layer(middleware::from_fn(ensure_json_errors))
             .layer(peer_info_middleware)
-            .layer(build_cors_layer(&CorsMode::Permissive))
+            .layer(build_cors_layer(&CorsMode::LoopbackOnly))
     }
 
     /// Create a search-only API key with a specified per-IP rate limit and return its plaintext value.
@@ -386,23 +386,53 @@ mod tests {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // T4.4 CORS: OPTIONS preflight returns permissive headers
+    // T4.4 CORS: OPTIONS preflight enforces loopback-default contract
     // ──────────────────────────────────────────────────────────────────────────
 
-    /// Assert that an `OPTIONS` preflight request receives permissive CORS headers.
-    ///
-    /// Verifies that `Access-Control-Allow-Origin` mirrors the request `Origin`
-    /// and that `Access-Control-Allow-Methods` includes `POST`, matching the
-    /// permissive production CORS configuration.
+    /// Assert that default CORS mode allows loopback origins and blocks non-loopback origins.
     #[tokio::test]
-    async fn cors_preflight_returns_permissive_headers() {
+    async fn cors_preflight_respects_loopback_default_contract() {
         let tmp = TempDir::new().unwrap();
         let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
         let key_store = Arc::new(KeyStore::load_or_create(tmp.path(), TEST_ADMIN_KEY));
         let rate_limiter = RateLimiter::new();
         let app = full_stack_router(state, key_store, rate_limiter);
 
-        let resp = app
+        let loopback_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/1/indexes/products/query")
+                    .header("origin", "http://127.0.0.1:3000")
+                    .header("access-control-request-method", "POST")
+                    .header("access-control-request-headers", "content-type")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let allow_origin = loopback_resp
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert_eq!(
+            allow_origin, "http://127.0.0.1:3000",
+            "default CORS mode should allow loopback browser origins"
+        );
+        let allow_methods = loopback_resp
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            allow_methods == "*" || allow_methods.contains("POST"),
+            "preflight allow methods should include POST or wildcard, got: {allow_methods}"
+        );
+
+        let blocked_resp = app
             .clone()
             .oneshot(
                 Request::builder()
@@ -416,23 +446,12 @@ mod tests {
             )
             .await
             .unwrap();
-
-        let headers = resp.headers();
-        let allow_origin = headers
-            .get("access-control-allow-origin")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        assert_eq!(
-            allow_origin, "https://example.com",
-            "preflight should mirror request origin for permissive CORS"
-        );
-        let allow_methods = headers
-            .get("access-control-allow-methods")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
         assert!(
-            allow_methods.contains("POST"),
-            "preflight allow methods should include POST, got: {allow_methods}"
+            blocked_resp
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none(),
+            "default CORS mode must not allow non-loopback origins"
         );
     }
 

@@ -97,7 +97,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
 fn log_cors_mode(cors_mode: &CorsMode) {
     match cors_mode {
-        CorsMode::Permissive => tracing::info!("CORS: permissive (all origins)"),
+        CorsMode::LoopbackOnly => tracing::info!(
+            "CORS: default loopback-only mode (non-loopback origins require FLAPJACK_ALLOWED_ORIGINS)"
+        ),
         CorsMode::Restricted(origins) => {
             let configured_origins = origins
                 .iter()

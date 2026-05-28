@@ -1,7 +1,8 @@
 use super::{
     acquire_data_dir_process_lock, build_log_layer_with_writer, build_tracing_subscriber,
     cors_origins_from_value, initialize_key_store, log_format_from_value, normalize_admin_key,
-    read_admin_key, shutdown_timeout_secs_from_value, CorsMode, LogFormat, ServerConfig,
+    read_admin_key, shutdown_timeout_secs_from_value, validate_startup_auth_policy, CorsMode,
+    LogFormat, ServerConfig, StartupAuthValidationError,
 };
 use crate::test_helpers::{EnvVarRestoreGuard, ENV_MUTEX};
 use axum::http::HeaderValue;
@@ -149,10 +150,10 @@ fn shutdown_timeout_secs_from_value_defaults_to_30_for_invalid_empty_or_non_posi
 }
 
 #[test]
-fn cors_origins_from_value_defaults_to_permissive_when_missing_or_empty() {
-    assert_eq!(cors_origins_from_value(None), CorsMode::Permissive);
-    assert_eq!(cors_origins_from_value(Some("")), CorsMode::Permissive);
-    assert_eq!(cors_origins_from_value(Some("   ")), CorsMode::Permissive);
+fn cors_origins_from_value_defaults_to_loopback_only_when_missing_or_empty() {
+    assert_eq!(cors_origins_from_value(None), CorsMode::LoopbackOnly);
+    assert_eq!(cors_origins_from_value(Some("")), CorsMode::LoopbackOnly);
+    assert_eq!(cors_origins_from_value(Some("   ")), CorsMode::LoopbackOnly);
 }
 
 #[test]
@@ -187,6 +188,42 @@ fn cors_origins_from_value_ignores_trailing_commas_and_empty_segments() {
             HeaderValue::from_static("https://allowed.example"),
             HeaderValue::from_static("https://second.example"),
         ])
+    );
+}
+
+#[test]
+fn validate_startup_auth_policy_rejects_production_no_auth() {
+    assert_eq!(
+        validate_startup_auth_policy("production", true, Some("long-enough-admin-key")),
+        Err(StartupAuthValidationError::NoAuthInProduction)
+    );
+}
+
+#[test]
+fn validate_startup_auth_policy_rejects_missing_blank_and_short_production_admin_key() {
+    assert_eq!(
+        validate_startup_auth_policy("production", false, None),
+        Err(StartupAuthValidationError::MissingAdminKeyInProduction)
+    );
+    assert_eq!(
+        validate_startup_auth_policy("production", false, Some("   ")),
+        Err(StartupAuthValidationError::MissingAdminKeyInProduction)
+    );
+    assert_eq!(
+        validate_startup_auth_policy("production", false, Some("short-key")),
+        Err(StartupAuthValidationError::AdminKeyTooShortInProduction)
+    );
+}
+
+#[test]
+fn validate_startup_auth_policy_accepts_safe_configs() {
+    assert_eq!(
+        validate_startup_auth_policy("production", false, Some("1234567890abcdef")),
+        Ok(())
+    );
+    assert_eq!(
+        validate_startup_auth_policy("development", true, None),
+        Ok(())
     );
 }
 

@@ -59,7 +59,7 @@ pub enum FlapjackError {
     #[error("ObjectID does not exist")]
     ObjectNotFound,
 
-    #[error("Write queue full (1000 operations pending)")]
+    #[error("Write queue full")]
     QueueFull,
 
     #[error("IO error: {0}")]
@@ -477,6 +477,54 @@ mod tests {
             );
         }
 
+        /// PL-8 / ADR 0005: 429 QueueFull must signal the client to retry so
+        /// nginx-window write losses are recoverable without operator action.
+        #[test]
+        fn test_queue_full_has_retry_after() {
+            let response = FlapjackError::QueueFull.into_response();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|v| v.to_str().ok()),
+                Some("1"),
+                "QueueFull (429) response must include Retry-After: 1",
+            );
+        }
+
+        /// PL-8 / ADR 0005: 503 TooManyConcurrentWrites is a transient
+        /// backpressure signal and must carry Retry-After so clients retry.
+        #[test]
+        fn test_too_many_concurrent_writes_has_retry_after() {
+            let response = FlapjackError::TooManyConcurrentWrites {
+                current: 41,
+                max: 40,
+            }
+            .into_response();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|v| v.to_str().ok()),
+                Some("1"),
+                "TooManyConcurrentWrites response must include Retry-After: 1",
+            );
+        }
+
+        /// Non-retryable errors must NOT advertise a Retry-After header —
+        /// otherwise clients would retry on hard 404s and amplify load.
+        #[test]
+        fn test_non_retryable_no_retry_after() {
+            let response = FlapjackError::TenantNotFound("missing".into()).into_response();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert!(
+                response.headers().get("Retry-After").is_none(),
+                "TenantNotFound (404) must not include Retry-After",
+            );
+        }
+
         /// Exhaustively verify that every `FlapjackError` variant produces an HTTP response
         /// whose status code matches `status_code()`, guarding against divergence between
         /// the status mapping and the `IntoResponse` implementation.
@@ -710,7 +758,10 @@ impl IntoResponse for FlapjackError {
     /// - HTTP status from [`status_code`](Self::status_code)
     /// - JSON body containing only `message` and `status` fields
     /// - `Retry-After: 5` header for `MemoryPressure` variants
-    /// - `Retry-After: 1` header for `IndexPaused` variants
+    /// - `Retry-After: 1` header for `IndexPaused`, `QueueFull`,
+    ///   and `TooManyConcurrentWrites` variants (PL-8 / ADR 0005:
+    ///   transient backpressure must invite client retry so writes
+    ///   lost during nginx upstream failover are recoverable)
     ///
     /// Internal errors (`Io`, `Tantivy`, `S3`, `Ssl`, `Acme`, `Config`) are logged at
     /// error level server-side, then sanitized to a generic "Internal server error" message
@@ -744,6 +795,16 @@ impl IntoResponse for FlapjackError {
                 .insert("Retry-After", "5".parse().unwrap());
         }
         if matches!(&self, FlapjackError::IndexPaused(_)) {
+            response
+                .headers_mut()
+                .insert("Retry-After", "1".parse().unwrap());
+        }
+        if matches!(&self, FlapjackError::QueueFull) {
+            response
+                .headers_mut()
+                .insert("Retry-After", "1".parse().unwrap());
+        }
+        if matches!(&self, FlapjackError::TooManyConcurrentWrites { .. }) {
             response
                 .headers_mut()
                 .insert("Retry-After", "1".parse().unwrap());

@@ -5,7 +5,7 @@ Go client for the [Flapjack Search API](https://flapjack.io) — a drop-in repla
 ## Installation
 
 ```bash
-go get github.com/flapjackhq/flapjack-search-go/v4
+go get github.com/gridl-staging/flapjack-search-go/v4
 ```
 
 ## Quick Start
@@ -15,7 +15,7 @@ package main
 
 import (
     "fmt"
-    "github.com/flapjackhq/flapjack-search-go/v4/flapjack/search"
+    "github.com/gridl-staging/flapjack-search-go/v4/flapjack/search"
 )
 
 func main() {
@@ -38,9 +38,9 @@ func main() {
 
 ```go
 import (
-    "github.com/flapjackhq/flapjack-search-go/v4/flapjack/call"
-    "github.com/flapjackhq/flapjack-search-go/v4/flapjack/search"
-    "github.com/flapjackhq/flapjack-search-go/v4/flapjack/transport"
+    "github.com/gridl-staging/flapjack-search-go/v4/flapjack/call"
+    "github.com/gridl-staging/flapjack-search-go/v4/flapjack/search"
+    "github.com/gridl-staging/flapjack-search-go/v4/flapjack/transport"
 )
 
 client, _ := search.NewClientWithConfig(search.SearchConfiguration{
@@ -59,7 +59,7 @@ client, _ := search.NewClientWithConfig(search.SearchConfiguration{
 Replace your import:
 ```diff
 - "github.com/algolia/algoliasearch-client-go/v4/algolia/search"
-+ "github.com/flapjackhq/flapjack-search-go/v4/flapjack/search"
++ "github.com/gridl-staging/flapjack-search-go/v4/flapjack/search"
 ```
 
 The API is identical — all methods, types, and options work the same way.

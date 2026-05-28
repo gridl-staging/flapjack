@@ -88,6 +88,26 @@ fn lookup_authenticated_key(
     }
 }
 
+fn classify_auth_attempt_type(key_store: &KeyStore, api_key_value: &str) -> &'static str {
+    if key_store.lookup(api_key_value).is_some() {
+        return "direct";
+    }
+    if validate_secured_key(api_key_value, key_store).is_some() {
+        return "secured";
+    }
+    "direct"
+}
+
+fn log_auth_failure(path: &str, auth_attempt_type: &str, reason: &str) {
+    tracing::warn!(
+        event = "security_audit_auth_failure",
+        auth_attempt_type,
+        reason,
+        path,
+        "security event: auth failure"
+    );
+}
+
 fn ensure_key_is_not_expired(api_key: &ApiKey) -> Option<Response> {
     if api_key.validity <= 0 {
         return None;
@@ -252,18 +272,38 @@ pub async fn authenticate_and_authorize(
 
     let api_key_value = match extract_api_key(&request) {
         Some(key_value) => key_value,
-        None => return Err(invalid_api_credentials_error()),
+        None => {
+            log_auth_failure(&path, "missing", "api_key_missing");
+            return Err(invalid_api_credentials_error());
+        }
     };
 
     let application_id = match application_id_opt {
         Some(id) => id,
         // Allow admin-key-only metrics scraping for metering agents.
         None if path == "/metrics" && key_store.is_admin(&api_key_value) => String::new(),
-        None => return Err(invalid_api_credentials_error()),
+        None => {
+            log_auth_failure(
+                &path,
+                classify_auth_attempt_type(&key_store, &api_key_value),
+                "application_id_missing",
+            );
+            return Err(invalid_api_credentials_error());
+        }
     };
 
-    let (api_key, secured_restrictions) = lookup_authenticated_key(&key_store, &api_key_value)
-        .ok_or_else(invalid_api_credentials_error)?;
+    let (api_key, secured_restrictions) = match lookup_authenticated_key(&key_store, &api_key_value)
+    {
+        Some(authenticated) => authenticated,
+        None => {
+            log_auth_failure(
+                &path,
+                classify_auth_attempt_type(&key_store, &api_key_value),
+                "invalid_credentials",
+            );
+            return Err(invalid_api_credentials_error());
+        }
+    };
     if let Some(response) = ensure_key_is_not_expired(&api_key) {
         return Err(response);
     }

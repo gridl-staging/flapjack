@@ -650,6 +650,11 @@ mod memory_safety {
                 flapjack_http::conversation_store::ConversationStore::default_shared(),
             experiment_store: None,
             embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
+            idempotency_cache: std::sync::Arc::new(
+                flapjack_http::idempotency::IdempotencyCache::new(std::time::Duration::from_secs(
+                    300,
+                )),
+            ),
         });
 
         let health_route =

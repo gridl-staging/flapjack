@@ -1,6 +1,6 @@
 [package]
 name = "flapjack-http"
-version = "1.0.0"
+version = "1.0.2"
 edition = "2021"
 
 [features]
@@ -15,7 +15,7 @@ vector-search = ["flapjack/vector-search", "dep:lru"]
 vector-search-local = ["vector-search", "flapjack/vector-search-local"]
 
 [dependencies]
-flapjack = { path = "..", features = ["analytics", "openapi"] }
+flapjack = { path = "..", default-features = false, features = ["axum-support", "s3-snapshots", "openapi", "analytics", "decompound"] }
 flapjack-replication = { path = "../flapjack-replication" }
 flapjack-ssl = { path = "../flapjack-ssl" }
 
@@ -35,6 +35,7 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22.1"
 hmac = "0.12"
 sha2 = "0.10"
+aes-gcm-siv = "0.11"
 subtle = "2"
 hex = "0.4"
 rand = "0.8"
@@ -46,7 +47,7 @@ colored = "2"
 fs2 = "0.4"
 hostname = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-lru = { version = "0.12", optional = true }
+lru = { version = "0.16", optional = true }
 opentelemetry = { version = "0.28", optional = true }
 opentelemetry_sdk = { version = "0.28", optional = true, features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.28", optional = true, features = ["grpc-tonic"] }
@@ -56,11 +57,15 @@ prometheus = { version = "0.13", default-features = false }
 utoipa = { version = "5.3", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "8.0", features = ["axum"] }
 ipnet = "2.11"
-maxminddb = "0.24"
+maxminddb = "0.27"
 aws-config = "1"
-aws-sdk-sesv2 = "1"
+aws-sdk-sesv2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a"] }
 
 [dev-dependencies]
 tempfile = "3"
 wiremock = "0.6"
 tokio-test = "0.4"
+# Serializes hydration-path integration tests that share the
+# FLAPJACK_AI_ALLOW_LOCAL_URLS env var so they don't race on the SSRF
+# opt-in. Used in handlers/search/tests/auto_embed_integration_tests.rs.
+serial_test = "3.0"

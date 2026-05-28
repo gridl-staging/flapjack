@@ -1,3 +1,4 @@
+use base64::Engine;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -5,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::config::AnalyticsConfig;
+use super::manifest::RollupManifest;
 
 mod click_analytics;
 mod conversion_analytics;
@@ -89,6 +91,54 @@ impl AnalyticsQueryEngine {
     ) -> Result<Vec<serde_json::Value>, String> {
         let dir = self.config.events_dir(index_name);
         self.query_parquet_dir(&dir, "events", sql).await
+    }
+
+    /// Execute a SQL query over pre-aggregated rollup Parquet files for a given
+    /// index/tier. Internal engine seam: Stage 3 routes `top_searches` /
+    /// `search_count` / `users_count_hll` through this method when the rollup
+    /// manifest certifies coverage for the requested window. Stage 1 only
+    /// establishes the seam so the crate compiles with the rollup-aware surface.
+    pub async fn query_rollup_parquet(
+        &self,
+        index_name: &str,
+        tier: &str,
+        sql: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let dir = self.config.rollups_dir(index_name, tier);
+        self.query_parquet_dir(&dir, "rollups", sql).await
+    }
+
+    /// Return a single certified non-raw tier only when every UTC date in the
+    /// requested range resolves to the same best tier in the rollup manifest.
+    /// Mixed tiers, uncertified dates, parse failures, or missing manifests all
+    /// return `None`, which the caller treats as a raw-path fallback.
+    fn select_uniform_certified_tier(
+        &self,
+        index_name: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> Option<String> {
+        let manifest_path = self.config.rollup_manifest_path(index_name);
+        let manifest = RollupManifest::load(&manifest_path).ok()?;
+        let dates = enumerate_utc_dates_inclusive(start_date, end_date).ok()?;
+        if dates.is_empty() {
+            return None;
+        }
+
+        let mut selected_tier: Option<String> = None;
+        for date in dates {
+            let best_tier = manifest.best_tier_for_date(&date);
+            if best_tier == "raw" {
+                return None;
+            }
+            match selected_tier.as_deref() {
+                None => selected_tier = Some(best_tier.to_string()),
+                Some(existing) if existing == best_tier => {}
+                Some(_) => return None,
+            }
+        }
+
+        selected_tier
     }
 
     /// Execute an arbitrary SQL query against all Parquet files in the given directory, registered under the specified table name. Returns results as a `Vec<serde_json::Value>`. Returns an empty `Vec` if the directory does not exist or contains no Parquet files.
@@ -764,6 +814,24 @@ fn date_to_end_ms(date: &str) -> Result<i64, String> {
         .timestamp_millis())
 }
 
+/// Enumerate UTC calendar dates in `[start_date, end_date]` (inclusive).
+fn enumerate_utc_dates_inclusive(start_date: &str, end_date: &str) -> Result<Vec<String>, String> {
+    const DAY_MS: i64 = 86_400_000;
+
+    let mut current_ms = date_to_start_ms(start_date)?;
+    let end_ms = date_to_start_ms(end_date)?;
+    if current_ms > end_ms {
+        return Ok(Vec::new());
+    }
+
+    let mut dates = Vec::new();
+    while current_ms <= end_ms {
+        dates.push(ms_to_date_string(current_ms));
+        current_ms += DAY_MS;
+    }
+    Ok(dates)
+}
+
 fn ms_to_date_string(ms: i64) -> String {
     let dt = chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default();
     dt.format("%Y-%m-%d").to_string()
@@ -846,6 +914,21 @@ fn arrow_value_at(col: &dyn arrow::array::Array, idx: usize) -> serde_json::Valu
         DataType::Utf8View => {
             let arr = col.as_any().downcast_ref::<StringViewArray>().unwrap();
             serde_json::json!(arr.value(idx))
+        }
+        DataType::Binary => {
+            let arr = col.as_any().downcast_ref::<BinaryArray>().unwrap();
+            let bytes = arr.value(idx);
+            serde_json::json!(base64::engine::general_purpose::STANDARD.encode(bytes))
+        }
+        DataType::LargeBinary => {
+            let arr = col.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+            let bytes = arr.value(idx);
+            serde_json::json!(base64::engine::general_purpose::STANDARD.encode(bytes))
+        }
+        DataType::BinaryView => {
+            let arr = col.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+            let bytes = arr.value(idx);
+            serde_json::json!(base64::engine::general_purpose::STANDARD.encode(bytes))
         }
         _ => serde_json::Value::Null,
     }

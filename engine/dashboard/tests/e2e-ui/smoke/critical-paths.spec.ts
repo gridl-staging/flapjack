@@ -72,7 +72,13 @@ test.describe('Smoke Tests', () => {
     await expect(resultsPanel).toBeVisible({ timeout: 10000 });
 
     // Verify at least one document card rendered with real data
-    await expect(resultsPanel.getByTestId('document-card').first()).toBeVisible({ timeout: 10000 });
+    const firstResultCard = resultsPanel.getByTestId('document-card').first();
+    await expect(firstResultCard).toBeVisible({ timeout: 10000 });
+
+    // Seeded rules pin p01 to the top for "laptop" queries.
+    // Assert seeded identity fields that are always rendered in the card payload.
+    await expect(firstResultCard).toContainText('p01');
+    await expect(firstResultCard).toContainText('brand:Apple');
 
     // Verify the localized results summary contract is rendered.
     // Count and label are separate nodes in ResultsPanel, so assert both directly.

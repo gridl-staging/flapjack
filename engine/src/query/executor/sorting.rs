@@ -61,7 +61,9 @@ impl QueryExecutor {
         offset: usize,
     ) -> Result<(Vec<ScoredDocument>, usize)> {
         let prelim_limit = (limit + offset).saturating_mul(100).max(1000);
-        let collector = TopDocs::with_limit(prelim_limit).and_offset(offset);
+        let collector = TopDocs::with_limit(prelim_limit)
+            .and_offset(offset)
+            .order_by_score();
         let (total, prelim_results) = searcher.search(query.as_ref(), &(Count, collector))?;
         let sorted_docs =
             self.sort_docs_by_json_field(searcher, prelim_results, field, order, limit, 0)?;
@@ -83,14 +85,14 @@ impl QueryExecutor {
         if field == "objectID" {
             let is_ascending = matches!(order, SortOrder::Asc);
 
-            let collector = TopDocs::with_limit(limit + offset).custom_score(
+            let collector = TopDocs::with_limit(limit + offset).tweak_score(
                 move |segment_reader: &tantivy::SegmentReader| {
                     let ff = segment_reader.fast_fields();
                     // ff.str() takes &str, returns Result<Option<StrColumn>>
                     let str_col: Option<tantivy::columnar::StrColumn> =
                         ff.str("_id").ok().flatten();
 
-                    move |doc_id: tantivy::DocId| {
+                    move |doc_id: tantivy::DocId, _original_score: tantivy::Score| {
                         if let Some(ref col) = str_col {
                             // Get term ordinal - ordinals are sorted lexicographically
                             let ord = col.term_ords(doc_id).next().unwrap_or(0);
@@ -138,13 +140,13 @@ impl QueryExecutor {
             return self.execute_pure_sort_fallback(searcher, query, field, order, limit, offset);
         }
 
-        let collector = TopDocs::with_limit(limit + offset).custom_score(
+        let collector = TopDocs::with_limit(limit + offset).tweak_score(
             move |segment_reader: &tantivy::SegmentReader| {
                 let ff = segment_reader.fast_fields();
                 let col: Option<tantivy::columnar::Column<f64>> =
                     ff.column_opt(&path_clone).ok().flatten();
 
-                move |doc_id: tantivy::DocId| {
+                move |doc_id: tantivy::DocId, _original_score: tantivy::Score| {
                     if let Some(ref c) = col {
                         let val = c.first(doc_id).unwrap_or(if is_ascending {
                             f64::MAX
@@ -186,7 +188,7 @@ impl QueryExecutor {
         offset: usize,
     ) -> Result<(Vec<ScoredDocument>, usize)> {
         let fetch_limit = (limit + offset).saturating_mul(3).max(100);
-        let collector = TopDocs::with_limit(fetch_limit);
+        let collector = TopDocs::with_limit(fetch_limit).order_by_score();
         let (total, prelim_results) = searcher.search(query.as_ref(), &(Count, collector))?;
         let sorted_docs =
             self.sort_docs_by_json_field(searcher, prelim_results, field, order, limit, offset)?;
@@ -221,12 +223,12 @@ impl QueryExecutor {
         if field == "objectID" {
             let is_ascending = matches!(order, SortOrder::Asc);
 
-            let collector = TopDocs::with_limit(limit + offset).custom_score(
+            let collector = TopDocs::with_limit(limit + offset).tweak_score(
                 move |segment_reader: &tantivy::SegmentReader| {
                     let ff = segment_reader.fast_fields();
                     let str_col: Option<tantivy::columnar::StrColumn> =
                         ff.str("_id").ok().flatten();
-                    move |doc_id: tantivy::DocId| {
+                    move |doc_id: tantivy::DocId, _original_score: tantivy::Score| {
                         if let Some(ref col) = str_col {
                             let ord = col.term_ords(doc_id).next().unwrap_or(0);
                             if is_ascending {
@@ -271,12 +273,12 @@ impl QueryExecutor {
         };
 
         if has_fast_column {
-            let collector = TopDocs::with_limit(limit + offset).custom_score(
+            let collector = TopDocs::with_limit(limit + offset).tweak_score(
                 move |segment_reader: &tantivy::SegmentReader| {
                     let ff = segment_reader.fast_fields();
                     let col: Option<tantivy::columnar::Column<f64>> =
                         ff.column_opt(&path_clone).ok().flatten();
-                    move |doc_id: tantivy::DocId| {
+                    move |doc_id: tantivy::DocId, _original_score: tantivy::Score| {
                         if let Some(ref c) = col {
                             let val = c.first(doc_id).unwrap_or(if is_ascending {
                                 f64::MAX
@@ -318,7 +320,7 @@ impl QueryExecutor {
             fast_field_path
         );
         let fetch_limit = (limit + offset).saturating_mul(3).max(100);
-        let collector = TopDocs::with_limit(fetch_limit);
+        let collector = TopDocs::with_limit(fetch_limit).order_by_score();
 
         let (total, prelim_results, facets) = if let Some(fc) = facet_collector {
             let (count, docs, f) = searcher.search(query.as_ref(), &(Count, collector, fc))?;

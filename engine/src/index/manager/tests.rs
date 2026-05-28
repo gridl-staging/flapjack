@@ -2695,9 +2695,17 @@ async fn test_load_vector_index_skips_when_already_loaded() {
 
 #[cfg(feature = "vector-search")]
 #[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
 async fn test_full_crash_recovery_vectors_available() {
+    use crate::security::test_helpers::AllowLocalUrlsGuard;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Full hydration path through IndexSettings::load with a wiremock
+    // loopback URL — opt in to the SSRF policy like an operator running a
+    // local model server would. See crate::security::test_helpers for the
+    // discipline behind this guard.
+    let _allow_local = AllowLocalUrlsGuard::enable();
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -2782,12 +2790,22 @@ async fn test_fingerprint_match_loads_vectors() {
     }
 
     // Save settings with a rest embedder
+    // url/request/response are required by IndexSettings::load (which now
+    // runs full intake-style validation at the disk-load trust boundary
+    // post-Plan-B SoC split). We use an RFC 5737 TEST-NET-3 address
+    // (203.0.113.0/24) so the URL is a) syntactically valid, b) never
+    // routes to a real host, and c) passes the SSRF policy with the env
+    // var unset — this test cares about fingerprint matching, not about
+    // outbound URL policy.
     let settings = crate::index::settings::IndexSettings {
         embedders: Some(std::collections::HashMap::from([(
             "default".to_string(),
             serde_json::json!({
                 "source": "rest",
                 "model": "text-embedding-3-small",
+                "url": "http://203.0.113.42/embed",
+                "request": {"input": "{{text}}"},
+                "response": {"embedding": "{{embedding}}"},
                 "dimensions": 3
             }),
         )])),
@@ -2892,13 +2910,18 @@ async fn test_no_fingerprint_file_loads_vectors_anyway() {
         let _ = crate::index::Index::create(&tenant_path, schema).unwrap();
     }
 
-    // Save settings with embedder
+    // Save settings with embedder. See test_fingerprint_match_loads_vectors
+    // for the rationale on the TEST-NET-3 URL and missing-fields fix —
+    // this test exercises the same load path through IndexSettings::load.
     let settings = crate::index::settings::IndexSettings {
         embedders: Some(std::collections::HashMap::from([(
             "default".to_string(),
             serde_json::json!({
                 "source": "rest",
                 "model": "text-embedding-3-small",
+                "url": "http://203.0.113.42/embed",
+                "request": {"input": "{{text}}"},
+                "response": {"embedding": "{{embedding}}"},
                 "dimensions": 3
             }),
         )])),
@@ -3016,9 +3039,13 @@ async fn test_vector_memory_usage_no_indices() {
 
 #[cfg(feature = "vector-search")]
 #[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
 async fn test_vectors_survive_manager_restart() {
+    use crate::security::test_helpers::AllowLocalUrlsGuard;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let _allow_local = AllowLocalUrlsGuard::enable();
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -3107,9 +3134,13 @@ async fn test_vectors_survive_manager_restart() {
 
 #[cfg(feature = "vector-search")]
 #[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
 async fn test_vectors_lost_when_embedder_model_changes() {
+    use crate::security::test_helpers::AllowLocalUrlsGuard;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let _allow_local = AllowLocalUrlsGuard::enable();
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))

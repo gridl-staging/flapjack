@@ -107,6 +107,29 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, serde_json::json!({ "ready": true }));
     }
+
+    #[tokio::test]
+    async fn ready_uses_sorted_first_visible_tenant_for_probe() {
+        let tmp = TempDir::new().unwrap();
+        let state = TestStateBuilder::new(&tmp).build_shared();
+        state.manager.create_tenant("zeta").unwrap();
+        std::fs::create_dir_all(tmp.path().join("alpha")).unwrap();
+        let app = Router::new()
+            .route("/health/ready", get(ready))
+            .with_state(state);
+
+        let (status, body) = readiness_response_json(app).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "message": "Service unavailable",
+                "status": 503
+            }),
+            "probe must deterministically use first sorted visible tenant (alpha before zeta)"
+        );
+    }
     #[tokio::test]
     async fn ready_returns_canonical_503_when_visible_tenant_discovery_fails() {
         let tmp = TempDir::new().unwrap();

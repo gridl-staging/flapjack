@@ -11,6 +11,11 @@ outside the current proof bar.
 
 ## What is verified today
 
+Full OWASP top-10 pass complete (2026-05-25); consolidated category-by-category
+proof and RED baselines live in
+`engine/docs2/4_EVIDENCE/SECURITY_BASELINE_AUDIT.md` under
+`## OWASP Top-10 Audit (2021)`.
+
 ### Production auth floor
 
 - `FLAPJACK_NO_AUTH=1` is blocked in production mode.
@@ -58,19 +63,22 @@ Proof surfaces:
 
 ### CORS origin enforcement
 
-- `FLAPJACK_ALLOWED_ORIGINS` parses into permissive mode when missing/empty and
-  into restricted mode when valid origins are provided.
+- `FLAPJACK_ALLOWED_ORIGINS` defaults to loopback-only browser access when
+  missing/empty, and switches to restricted mode when valid origins are
+  provided.
 - CORS preflight reflects allowed origins in restricted mode.
 - blocked origins in restricted mode do not receive
   `access-control-allow-origin`.
+- non-loopback origins are blocked by default in loopback-only mode.
 
 Proof surfaces:
 
-- `engine/flapjack-http/src/startup_tests.rs::cors_origins_from_value_defaults_to_permissive_when_missing_or_empty`
+- `engine/flapjack-http/src/startup_tests.rs::cors_origins_from_value_defaults_to_loopback_only_when_missing_or_empty`
 - `engine/flapjack-http/src/startup_tests.rs::cors_origins_from_value_parses_single_origin`
 - `engine/flapjack-http/src/startup_tests.rs::cors_origins_from_value_parses_comma_separated_origins_with_trimmed_whitespace`
 - `engine/flapjack-http/src/startup_tests.rs::cors_origins_from_value_ignores_trailing_commas_and_empty_segments`
-- `engine/flapjack-http/src/router_inline_tests.rs::cors_preflight_returns_expected_allow_origin_for_restricted_and_permissive_modes`
+- `engine/flapjack-http/src/router_inline_tests.rs::cors_preflight_returns_expected_allow_origin_for_restricted_and_loopback_modes`
+- `engine/flapjack-http/src/router_inline_tests.rs::cors_preflight_blocks_non_loopback_origins_in_loopback_mode`
 - `engine/flapjack-http/src/router_inline_tests.rs::cors_preflight_rejects_blocked_origins_in_restricted_mode`
 
 ### Request body-size limit
@@ -153,7 +161,7 @@ Proof surfaces:
 
 - `FLAPJACK_ALLOWED_ORIGINS` is parsed by
   `engine/flapjack-http/src/startup.rs` (`cors_origins_from_value`) into
-  permissive vs restricted mode.
+  loopback-only vs restricted mode.
 - CORS policy is enforced in `engine/flapjack-http/src/router.rs`
   (`build_cors_layer`).
 - defaults and env-var typing are documented in
@@ -230,7 +238,6 @@ production baseline:
 
 These areas remain outside the current OSS hardening proof bar:
 
-- full OWASP-style deep pass
 - formal pentest or hostile-network review
 - SaaS/multi-tenant isolation review beyond the current targeted tests
 - SSO, SCIM, audit-log, and enterprise IAM controls

@@ -1,4 +1,3 @@
-//! Embedder configuration and document templating with fingerprinting to detect incompatible embedder changes.
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -42,8 +41,31 @@ impl EmbedderConfig {
         )
     }
 
-    /// Validate that required fields are present for the given source type.
+    /// Full validation = required-fields check + outbound-URL safety check.
+    ///
+    /// The composite reads the SSOT env-var opt-in via
+    /// `crate::security::allow_local_outbound_urls()`. Used by the intake
+    /// gate at `settings.rs::validate_embedders_inner` and by the
+    /// `IndexSettings::load` disk-load defense.
+    ///
+    /// Constructors call `validate_required_fields()` plus a targeted
+    /// `vet_outbound_url_target` pass to pin connect addresses for long-lived
+    /// clients, but they intentionally do not call this composite method.
     pub fn validate(&self) -> Result<(), VectorError> {
+        self.validate_required_fields()?;
+        self.validate_url_for_outbound(crate::security::allow_local_outbound_urls())?;
+        Ok(())
+    }
+
+    /// Required-field validation only — no env access, no I/O, no network
+    /// policy. This is the precondition embedder constructors enforce so
+    /// they fail fast on a malformed `EmbedderConfig` (missing `apiKey`,
+    /// missing `url`/`request`/`response`, etc.) before constructor-level
+    /// address pinning runs.
+    ///
+    /// SSRF policy lives at the trust boundary (intake + disk-load); see
+    /// `validate_url_for_outbound` and the doc on `validate()`.
+    pub fn validate_required_fields(&self) -> Result<(), VectorError> {
         match self.source {
             EmbedderSource::OpenAi => {
                 if self.api_key.is_none() {
@@ -85,6 +107,70 @@ impl EmbedderConfig {
         }
         Ok(())
     }
+
+    /// SSRF outbound-URL safety check, with explicit policy.
+    ///
+    /// `allow_local = false` is the production-default policy: loopback and
+    /// RFC1918/ULA private destinations are rejected. `allow_local = true`
+    /// is the operator opt-in that permits loopback/private targets for
+    /// legitimate local-AI deployments (Ollama, vLLM, llama.cpp).
+    ///
+    /// The link-local / metadata / unspecified / broadcast class is rejected
+    /// unconditionally — even under `allow_local = true`. The cloud
+    /// metadata endpoint `169.254.169.254` is a pure SSRF target with no
+    /// legitimate AI-provider use, and the opt-in must not silently widen
+    /// to it. See `is_always_blocked_ip` vs. `is_local_network_ip` below.
+    ///
+    /// Sources that have no outbound URL (`UserProvided`, `FastEmbed`)
+    /// are a no-op here — there is no SSRF surface to validate.
+    pub fn validate_url_for_outbound(&self, allow_local: bool) -> Result<(), VectorError> {
+        match self.source {
+            EmbedderSource::OpenAi => {
+                // OpenAi has a default base URL (https://api.openai.com); only
+                // validate when the operator has supplied an override.
+                if let Some(url) = self.url.as_deref() {
+                    validate_outbound_url(url, "openAi", allow_local)?;
+                }
+            }
+            EmbedderSource::Rest => {
+                // Required-fields check guarantees self.url is Some by the
+                // time the composite reaches us, but we tolerate a missing
+                // URL here so callers can invoke the two methods in any
+                // order without panicking on unwrap.
+                if let Some(url) = self.url.as_deref() {
+                    validate_outbound_url(url, "rest", allow_local)?;
+                }
+            }
+            EmbedderSource::UserProvided | EmbedderSource::FastEmbed => {
+                // No outbound URL — no SSRF surface.
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Outbound-URL SSRF guard with explicit policy.
+///
+/// `allow_local`:
+///   - `false` (production default) — rejects loopback, RFC1918/ULA private,
+///     link-local, broadcast, and unspecified destinations.
+///   - `true` (operator opt-in via `FLAPJACK_AI_ALLOW_LOCAL_URLS`) — permits
+///     loopback and RFC1918/ULA private destinations for local-AI deployments
+///     (Ollama, vLLM, llama.cpp). Link-local / metadata / unspecified /
+///     broadcast remain rejected unconditionally — those are pure SSRF
+///     targets with no legitimate AI-provider use, regardless of opt-in.
+///
+/// Mirrors the chat-side three-tier policy at
+/// `flapjack-http::handlers::chat::validate_ai_base_url`, both via shared
+/// `crate::security` helpers to keep classification behavior aligned.
+fn validate_outbound_url(
+    raw_url: &str,
+    source: &str,
+    allow_local: bool,
+) -> Result<(), VectorError> {
+    crate::security::vet_outbound_url_target(raw_url, allow_local)
+        .map(|_| ())
+        .map_err(|error| VectorError::EmbeddingError(format!("{source} embedder URL {error}")))
 }
 
 /// A single entry in the embedder fingerprint, capturing the semantic-relevant

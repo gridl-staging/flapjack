@@ -330,33 +330,36 @@ pub fn assert_error_envelope(body: &serde_json::Value, expected_status: u16) {
 
 /// Assert that a task-status response body has the Algolia-exact published shape:
 /// `{ "status": "published", "pendingTask": false }`.
+fn published_task_shape_error(body: &serde_json::Value) -> Option<String> {
+    let object = body.as_object();
+    let Some(object) = object else {
+        return Some(format!(
+            "task status response must be a JSON object: {}",
+            body
+        ));
+    };
+    if object.len() != 2 {
+        return Some(format!(
+            "task status response must contain exactly 'status' and 'pendingTask': {}",
+            body
+        ));
+    }
+    if body["status"].as_str() != Some("published") {
+        return Some(format!("task status must be 'published': {}", body));
+    }
+    if body["pendingTask"].as_bool() != Some(false) {
+        return Some(format!("task pendingTask must be false: {}", body));
+    }
+    if body.get("pending_task").is_some() {
+        return Some(format!("must not have snake_case 'pending_task': {}", body));
+    }
+    None
+}
+
 pub fn assert_published_task_shape(body: &serde_json::Value) {
-    let object = body
-        .as_object()
-        .unwrap_or_else(|| panic!("task status response must be a JSON object: {}", body));
-    assert_eq!(
-        object.len(),
-        2,
-        "task status response must contain exactly 'status' and 'pendingTask': {}",
-        body
-    );
-    assert_eq!(
-        body["status"].as_str(),
-        Some("published"),
-        "task status must be 'published': {}",
-        body
-    );
-    assert_eq!(
-        body["pendingTask"].as_bool(),
-        Some(false),
-        "task pendingTask must be false: {}",
-        body
-    );
-    assert!(
-        body.get("pending_task").is_none(),
-        "must not have snake_case 'pending_task': {}",
-        body
-    );
+    if let Some(message) = published_task_shape_error(body) {
+        panic!("{message}");
+    }
 }
 
 /// Poll the index-level task-status route (local app variant) until the task is
@@ -424,21 +427,18 @@ pub async fn put_settings_and_wait(
 
 #[cfg(test)]
 mod tests {
-    use super::assert_published_task_shape;
+    use super::published_task_shape_error;
     use serde_json::json;
 
     #[test]
     fn published_task_shape_rejects_extra_fields() {
-        let result = std::panic::catch_unwind(|| {
-            assert_published_task_shape(&json!({
+        assert!(
+            published_task_shape_error(&json!({
                 "status": "published",
                 "pendingTask": false,
                 "taskID": 123
-            }));
-        });
-
-        assert!(
-            result.is_err(),
+            }))
+            .is_some(),
             "published-task assertion must reject extra fields"
         );
     }

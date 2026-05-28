@@ -329,6 +329,9 @@ fn make_app_state(tmp: &tempfile::TempDir) -> std::sync::Arc<crate::handlers::Ap
         start_time: std::time::Instant::now(),
         conversation_store: crate::conversation_store::ConversationStore::default_shared(),
         embedder_store: std::sync::Arc::new(crate::embedder_store::EmbedderStore::new()),
+        idempotency_cache: std::sync::Arc::new(crate::idempotency::IdempotencyCache::new(
+            std::time::Duration::from_secs(300),
+        )),
     })
 }
 

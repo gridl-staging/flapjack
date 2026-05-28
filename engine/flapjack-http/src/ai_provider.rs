@@ -1,11 +1,15 @@
-//! AI provider abstraction supporting OpenAI-compatible APIs and a stub provider for testing, with helpers for message building, endpoint normalization, and SSE chunking.
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(test)]
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct AiProviderConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub pinned_connect_addrs: Option<Vec<std::net::SocketAddr>>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,7 +105,7 @@ pub struct OpenAiCompatibleProvider {
 impl OpenAiCompatibleProvider {
     pub fn new(config: AiProviderConfig) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: build_openai_client(&config),
             config,
         }
     }
@@ -165,6 +169,74 @@ impl OpenAiCompatibleProvider {
 
         Ok(answer)
     }
+}
+
+fn build_openai_client(config: &AiProviderConfig) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder();
+
+    // Keep URL host in `base_url` as SSOT for endpoint construction + TLS/SNI.
+    // Only pin the connect address list to the already-vetted resolution output.
+    if let Some(host) = reqwest::Url::parse(&config.base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_string()))
+    {
+        if let Some(addrs) = &config.pinned_connect_addrs {
+            builder = builder.resolve_to_addrs(&host, addrs);
+        }
+    }
+
+    #[cfg(test)]
+    if let Some(resolver) = take_test_dns_resolver() {
+        return builder
+            .dns_resolver2(resolver)
+            .connect_timeout(Duration::from_millis(250))
+            .timeout(Duration::from_millis(600))
+            .build()
+            .expect("failed to build OpenAI test client with custom DNS resolver");
+    }
+
+    builder
+        .build()
+        .expect("failed to build OpenAI client for outbound requests")
+}
+
+#[cfg(test)]
+fn test_dns_resolver_slot() -> &'static Mutex<Option<Arc<dyn reqwest::dns::Resolve>>> {
+    static SLOT: OnceLock<Mutex<Option<Arc<dyn reqwest::dns::Resolve>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn take_test_dns_resolver() -> Option<Arc<dyn reqwest::dns::Resolve>> {
+    test_dns_resolver_slot()
+        .lock()
+        .expect("test DNS resolver slot mutex poisoned")
+        .clone()
+}
+
+#[cfg(test)]
+pub(crate) struct TestDnsResolverGuard {
+    previous: Option<Arc<dyn reqwest::dns::Resolve>>,
+}
+
+#[cfg(test)]
+impl Drop for TestDnsResolverGuard {
+    fn drop(&mut self) {
+        *test_dns_resolver_slot()
+            .lock()
+            .expect("test DNS resolver slot mutex poisoned") = self.previous.take();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_test_dns_resolver(
+    resolver: Arc<dyn reqwest::dns::Resolve>,
+) -> TestDnsResolverGuard {
+    let mut slot = test_dns_resolver_slot()
+        .lock()
+        .expect("test DNS resolver slot mutex poisoned");
+    let previous = slot.replace(resolver);
+    TestDnsResolverGuard { previous }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

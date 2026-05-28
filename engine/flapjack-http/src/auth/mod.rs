@@ -83,8 +83,9 @@ pub struct ApiKey {
     /// Unique salt for this key (hex-encoded)
     pub salt: String,
     /// HMAC verification key (for secured API key validation)
-    /// NOTE: Stored in plaintext to enable HMAC verification of secured keys.
-    /// This is a security tradeoff - secured keys require the parent key for HMAC validation.
+    /// NOTE: Held as plaintext in memory for HMAC verification and persisted
+    /// encrypted at rest by the key-store material sidecar.
+    /// Secured keys require parent-key material for HMAC validation.
     /// Admin keys should not be used as parents for secured keys and won't have this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hmac_key: Option<String>,
@@ -163,6 +164,8 @@ pub fn request_application_id(request: &Request) -> Option<String> {
         .headers()
         .get("x-algolia-application-id")
         .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(str::to_owned)
 }
 

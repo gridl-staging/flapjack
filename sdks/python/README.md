@@ -1,6 +1,6 @@
 # Flapjack Search Python SDK
 
-A fully-featured Python API client for [Flapjack Search](https://github.com/flapjackhq/flapjack-search-python). Drop-in replacement for `algoliasearch`.
+A fully-featured Python API client for [Flapjack Search](https://github.com/gridl-staging/flapjack-search-python). Drop-in replacement for `algoliasearch`.
 
 [![PyPI](https://img.shields.io/pypi/v/flapjack-search.svg)](https://pypi.org/project/flapjack-search)
 [![Python](https://img.shields.io/badge/python-3.8+-blue)](https://pypi.org/project/flapjack-search)
@@ -110,7 +110,7 @@ Every method from Algolia's Python v4 SDK works identically:
 
 ## Troubleshooting
 
-Encountering an issue? [Open a GitHub issue](https://github.com/flapjackhq/flapjack-search-python/issues/new) and we'll help.
+Encountering an issue? [Open a GitHub issue](https://github.com/gridl-staging/flapjack-search-python/issues/new) and we'll help.
 
 ## License
 

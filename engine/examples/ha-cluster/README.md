@@ -87,16 +87,20 @@ docker compose start node-b
 docker compose exec -T node-b curl -sf http://localhost:7700/health
 ```
 
-## Known soak divergence boundary
+## Soak convergence boundary
 
-Under sustained rolling restarts with continuous writes, per-node document counts can
-diverge in this topology. This is an inherent boundary of async replication combined
-with nginx round-robin routing while nodes repeatedly leave and rejoin.
+Under sustained rolling restarts with continuous writes, this topology converges to a
+**bounded steady-state spread** rather than exact per-node equality. The L1 anti-entropy
+and strict bootstrap peer-coverage fix (`066549d5`) shipped and narrowed that spread to
+~0.88% in the May 26 diagnostic soak — 3.4× tighter than the Mar 30 ~3% — with clean
+segment integrity across all three nodes and no node-zero failure mode.
 
-The canonical retained evidence is the HA soak proof in
-[`engine/loadtest/BENCHMARKS.md`](../../loadtest/BENCHMARKS.md), including the
-`warning-findings` / `diverged` final classification and the Per-Node Consistency
-Finding.
+The residual ~1% is writes lost at the nginx routing layer during restart windows, not an
+engine bug; closing it (client-side retry / write-buffering) is tracked as roadmap
+**PL-8**. Canonical retained evidence and interpretation is the HA Soak Proof (May 26,
+2026) section in [`engine/loadtest/BENCHMARKS.md`](../../loadtest/BENCHMARKS.md); the
+narrative seam is ADR
+[`0004`](../../docs2/3_IMPLEMENTATION/decisions/active/0004_ha_convergence_reversal.md).
 
 ## Configuration
 

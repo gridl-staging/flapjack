@@ -314,11 +314,22 @@ fn resolve_provider_config(
     if api_key.is_none() {
         return Err("Missing API key for AI provider".to_string());
     }
+    let resolved_base_url = base_url.expect("checked above");
+    let vetted_target = validate_ai_base_url(&resolved_base_url)?;
+    let pinned_connect_addrs = vetted_target.as_ref().map(|target| {
+        let port = target.port.unwrap_or(443);
+        target
+            .resolved_ips
+            .iter()
+            .map(|ip| std::net::SocketAddr::new(*ip, port))
+            .collect()
+    });
 
     Ok(AiProviderConfig {
-        base_url: base_url.expect("checked above"),
+        base_url: resolved_base_url,
         api_key: api_key.expect("checked above"),
         model,
+        pinned_connect_addrs,
     })
 }
 
@@ -326,6 +337,20 @@ fn normalized_non_empty(value: Option<String>) -> Option<String> {
     value
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+fn validate_ai_base_url(
+    base_url: &str,
+) -> Result<Option<flapjack::security::VettedOutboundUrlTarget>, String> {
+    if base_url == "stub" {
+        return Ok(None);
+    }
+
+    let allow_local = flapjack::security::allow_local_outbound_urls();
+    // Close the validate->send TOCTOU window by returning the vetted resolution
+    // result from this single policy-owner lookup, so the send path can pin it.
+    flapjack::security::vet_outbound_url_target(base_url, allow_local)
+        .map_err(|error| format!("Invalid base URL for AI provider: {error}"))
 }
 
 fn wants_sse(headers: &HeaderMap, stream_flag: bool) -> bool {

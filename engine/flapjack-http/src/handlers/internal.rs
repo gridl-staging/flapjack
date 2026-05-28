@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, Query, State},
     http::header,
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Json,
 };
 use flapjack::index::oplog::{OpLog, OpLogEntry};
@@ -19,7 +19,7 @@ use flapjack::{validate_index_name, IndexManager};
 use flapjack_replication::types::{
     GetOpsQuery, GetOpsResponse, ListTenantsResponse, ReplicateOpsRequest, ReplicateOpsResponse,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Core apply logic: parse ops and write to IndexManager.
@@ -140,6 +140,14 @@ fn log_op_error(result: Result<(), String>) {
     }
 }
 
+fn local_node_current_seq_map(state: &AppState, current_seq: u64) -> BTreeMap<String, u64> {
+    let mut node_current_seqs = BTreeMap::new();
+    if let Some(repl_mgr) = state.replication_manager.as_ref() {
+        node_current_seqs.insert(repl_mgr.node_id().to_string(), current_seq);
+    }
+    node_current_seqs
+}
+
 /// POST /internal/replicate
 /// Receive operations from a peer and apply them to local index.
 pub async fn replicate_ops(
@@ -202,6 +210,7 @@ pub async fn get_ops(
                     ops,
                     current_seq,
                     oldest_retained_seq: None,
+                    node_current_seqs: local_node_current_seq_map(&state, current_seq),
                 }));
             }
 
@@ -232,6 +241,7 @@ pub async fn get_ops(
         ops,
         current_seq,
         oldest_retained_seq,
+        node_current_seqs: local_node_current_seq_map(&state, current_seq),
     }))
 }
 
@@ -460,16 +470,31 @@ pub async fn rotate_admin_key(
     key_store: axum::Extension<Arc<crate::auth::KeyStore>>,
 ) -> impl IntoResponse {
     match key_store.rotate_admin_key() {
-        Ok(new_key) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "key": new_key, "message": "Admin key rotated" })),
-        )
-            .into_response(),
+        Ok(new_key) => {
+            tracing::info!(
+                event = "security_audit_admin_action",
+                admin_action = "rotate_admin_key",
+                "security event: admin action"
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "key": new_key, "message": "Admin key rotated" })),
+            )
+                .into_response()
+        }
         Err(e) => crate::error_response::json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to rotate admin key: {}", e),
         ),
     }
+}
+
+fn rotate_admin_key_error_response(error: &dyn std::fmt::Display) -> Response {
+    tracing::error!(error = %error, "admin key rotation failed");
+    crate::error_response::json_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Failed to rotate admin key",
+    )
 }
 
 #[cfg(test)]

@@ -374,6 +374,7 @@ pub(crate) fn initialize_state(
         start_time: startup_start,
         conversation_store: ConversationStore::default_shared(),
         embedder_store: Arc::new(crate::embedder_store::EmbedderStore::new()),
+        idempotency_cache: Arc::new(crate::idempotency::IdempotencyCache::from_env()),
     }))
 }
 

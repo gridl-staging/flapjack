@@ -1,5 +1,37 @@
 # Flapjack Loadtest Evidence
 
+## PL-10 Stage 6 Dual-Scenario Revalidation (May 28, 2026)
+
+### Run Metadata
+
+- Run timestamp (UTC): 2026-05-28T06:25:47Z
+- Canonical classification artifact: `engine/docs/research/pl10_stage6_dual_scenario_classification.md`
+- Results directory: `engine/loadtest/results/20260528T062547Z-pl10-stage6-dual-scenario/`
+- Head SHA: `fea67c90fd4dce88c53c470129ff65f132226889`
+- Environment assumptions: release binary target at `127.0.0.1:17700`, `--no-auth`, seeded loadtest data, local single-node run
+
+### Exact Commands
+
+- Server: `/Users/stuart/parallel_development/flapjack_dev/may27_8pm_1_pl10v2_write_throughput/flapjack_dev/engine/target/release/flapjack --no-auth --bind-addr 127.0.0.1:17700 --data-dir /Users/stuart/parallel_development/flapjack_dev/may27_8pm_1_pl10v2_write_throughput/flapjack_dev/engine/loadtest/results/20260528T062547Z-pl10-stage6-dual-scenario/server_data`
+- Seed: `FLAPJACK_LOADTEST_BASE_URL=http://127.0.0.1:17700 bash engine/loadtest/seed-loadtest-data.sh`
+- Mixed soak (60m): `cd engine/loadtest && FLAPJACK_LOADTEST_BASE_URL=http://127.0.0.1:17700 FLAPJACK_LOADTEST_SOAK_DURATION=60m k6 run scenarios/mixed-soak.js`
+- Realistic batch soak (30m): `cd engine/loadtest && FLAPJACK_LOADTEST_BASE_URL=http://127.0.0.1:17700 FLAPJACK_LOADTEST_SOAK_DURATION=30m k6 run scenarios/realistic_batch_soak.js`
+
+### Measured Stage 6 Throughput + Classification
+
+| Scenario | Duration | Throughput (http_reqs/s) | Successful writes | Write failure % | write_http_5xx_rate | write_http_unexpected_4xx_rate | Contract-health verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `mixed-soak.js` | `60m` | `921.538969/s` | `196274` | `85.04%` | `0.00%` | `0.00%` | PASS |
+| `realistic_batch_soak.js` | `30m` | `831.652577/s` | `26688` | `98.21%` | `0.00%` | `0.00%` | PASS |
+
+### Threshold Ownership
+
+Threshold and contract semantics are owned by `engine/loadtest/lib/throughput.js`:
+
+- `SOAK_WRITE_THRESHOLDS` governs sustained-write soak classification.
+- Stage 6 contract-health PASS requires `write_http_5xx_rate=0.00%` and `write_http_unexpected_4xx_rate=0.00%` from retained stdout metrics.
+- High `write_http_4xx_rate` is expected under saturation (dominantly `429`) and does not by itself fail Stage 6 contract health.
+
 ## Stage 3 Soak Proof (Mar 28, 2026)
 
 ### Run Metadata
@@ -167,6 +199,70 @@ Evidence artifacts (stored locally, gitignored):
 - `engine/loadtest/lib/throughput.js` (SOAK_WRITE_THRESHOLDS)
 - `engine/loadtest/tests/ha_soak_acceptance.sh`
 - Local 2h soak run artifacts (gitignored)
+
+---
+
+## HA Soak Proof (May 26, 2026)
+
+### Context
+
+Diagnostic 2h soak following the L1 anti-entropy / strict bootstrap peer-coverage fix (`066549d5`). Goal: prove L1 closes the convergence boundary the Mar 30 soak surfaced. Run uses the script fix from `528235bf` (preserves per-node `/data` snapshots on non-converged runs).
+
+### Run Metadata
+
+- Run date (UTC): 2026-05-26 (soak started 19:16:18Z, completed ~21:25Z)
+- Harness: dev-repo HA soak harness
+- Validation command: `engine/_dev/s/manual-tests/ha-soak-test.sh`
+- Compose target: `engine/examples/ha-cluster/docker-compose.yml`
+- Load scenario: `engine/loadtest/scenarios/mixed-soak.js`
+- Results: `engine/loadtest/results/20260526T191618Z-ha-soak/`
+
+### Harness Classification
+
+| Field | Value |
+|---|---|
+| Final classification | `warning-findings` |
+| Convergence result | `diverged` (per script's strict-equality check) |
+| k6 exit code | non-zero (write threshold breached under saturation) |
+| Restart count | 36 |
+| Per-node final docs | node-a=335,929 / node-b=337,184 / node-c=334,209 |
+| Spread (max − min) / max | **0.88%** (vs Mar 30's ~3%) |
+| Steady-state | All 24 polls in the 120s post-load convergence window held identical numbers — cluster reached steady state at 0.88%, not "still catching up" |
+| Segment integrity | **11/11, 11/11, 9/9** segments in `meta.json` matched files on disk across all 3 nodes (vs the 2026-05-25 18:46Z fluke where meta referenced absent segments) |
+
+### What This Soak Demonstrates
+
+- **L1 anti-entropy + strict bootstrap peer-coverage works as designed.** The `c1_ownership` and `c3_replica_freshness` contracts hold; segment integrity recovers cleanly under sustained restart pressure.
+- **Convergence improved 3.4× over Mar 30** — steady-state spread is 0.88% (vs ~3%).
+- **No node-zero failure mode.** All three nodes ended healthy with non-trivial doc counts. The 2026-05-25 18:46Z node-a→0-docs fluke (preserved evidence at `docs/research/2026_05_26_ha_soak_segment_inconsistency.md`) did not reproduce.
+
+### What This Soak Does Not Prove
+
+- **Strict zero-spread convergence.** The residual ~1% spread reflects writes lost at the nginx routing layer during restart windows (`engine/_dev/s/manual-tests/ha-soak-test.sh:244-247` documents this explicitly: writes lost during restarts are unrecoverable under the current nginx-routed topology). Closing that boundary requires client-side retry / write-buffering and is tracked as roadmap **PL-8**.
+- **Write-queue saturation under sustained cross-replication.** In the 21:00-21:10Z window, node-b logged 24,356 and node-c logged 22,050 "Write-queue-full / peer-failed" lines; the 1000-op queue cap saturated simultaneously on both peers. node-b transiently stalled at 291,816 docs for 3 samples before recovering. Symptom of the saturation, not a segment-integrity bug. Resolution path is part of PL-8.
+
+### Boundary Interpretation (canonical)
+
+The Mar 30 entry above described this as a "Known boundary" between async replication and nginx-routed restarts. **That framing remains substantially correct for the current topology.** L1 narrowed the boundary materially (3% → ~1% steady-state spread; clean segment recovery; no node-zero failures). The remaining ~1% is the nginx-write-loss residual, not an engine bug; PL-8 tracks the work to close it.
+
+### Artifact Pack
+
+| File | Contents |
+|---|---|
+| `summary.md` | Machine-generated run metadata + classification |
+| `cluster_samples.csv` | Per-node health and doc counts at each sample |
+| `restart_events.csv` | Restart start/healthy timestamps per node |
+| `cluster_status_snapshots.log` | Full cluster status JSON snapshots |
+| `mixed-soak.stdout.txt` | k6 progress + final summary |
+| `node_data/{node-a,node-b,node-c}/` | Preserved on-disk state per the `528235bf` script fix |
+
+### Evidence Sources
+
+- dev-repo HA soak harness (`engine/_dev/s/manual-tests/ha-soak-test.sh`)
+- L1 fix commit `066549d5` (strict bootstrap peer coverage; touches `engine/flapjack-replication/src/manager.rs` + `engine/flapjack-http/src/startup_catchup.rs`)
+- Script fix commit `528235bf` (preserves per-node `/data` snapshots on non-converged runs)
+- Partial diagnostic evidence from the 2026-05-25 18:46Z run preserved at `docs/research/2026_05_26_ha_soak_segment_inconsistency.md`
+- Local 2h soak run artifacts (gitignored, but `node_data/` snapshots are local-only)
 
 ---
 

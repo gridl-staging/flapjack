@@ -73,6 +73,11 @@ pub mod language;
 pub mod personalization;
 pub mod query;
 pub mod recommend;
+// Cross-cutting outbound-URL policy. Lives here (not under vector or under
+// flapjack-http) so both the chat seam and the vector seam can read the
+// FLAPJACK_AI_ALLOW_LOCAL_URLS opt-in from a single source of truth without
+// coupling the two seams to each other. See security.rs for the rationale.
+pub mod security;
 mod text_normalization;
 pub mod tokenizer;
 pub mod types;

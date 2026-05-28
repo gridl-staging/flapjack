@@ -1,6 +1,8 @@
 use dashmap::DashMap;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::Notify;
 
 use super::aggregation::QueryAggregator;
@@ -10,6 +12,7 @@ use super::writer;
 
 /// Maximum number of debug events retained in the ring buffer.
 const DEBUG_BUFFER_CAP: usize = 3000;
+const FLUSH_LATENCY_SAMPLE_CAP: usize = 2048;
 
 /// A debug entry recorded for every event received via POST /1/events,
 /// regardless of whether it passed validation. Used by the event debugger UI.
@@ -27,6 +30,18 @@ pub struct DebugEvent {
     pub validation_errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AnalyticsMetricsSnapshot {
+    pub accepted_events_total: u64,
+    pub dropped_events_total: u64,
+    pub flush_latency_p99_ms: f64,
+    pub rollup_windows_generated_total: u64,
+    pub rollup_events_generated_total: u64,
+    pub rollup_latest_nonempty_window_end_ms: i64,
+    pub soak_marker_first_event_timestamp_ms: i64,
+    pub rollup_generation_latency_p99_ms: f64,
+}
+
 /// Central analytics event collector.
 ///
 /// Buffers events in memory and flushes to Parquet files either on a timer
@@ -41,6 +56,15 @@ pub struct AnalyticsCollector {
     /// queryID -> (query, index_name, timestamp_ms) for correlating clicks with searches
     query_id_cache: DashMap<String, QueryIdEntry>,
     shutdown: Notify,
+    accepted_events_total: AtomicU64,
+    dropped_events_total: AtomicU64,
+    flush_latency_ms_samples: Mutex<VecDeque<f64>>,
+    rollup_windows_generated_total: AtomicU64,
+    rollup_events_generated_total: AtomicU64,
+    rollup_latest_nonempty_window_end_ms: AtomicI64,
+    soak_marker_user_token: Option<String>,
+    soak_marker_first_event_timestamp_ms: AtomicI64,
+    rollup_latency_ms_samples: Mutex<VecDeque<f64>>,
 }
 
 #[derive(Clone)]
@@ -52,6 +76,9 @@ pub struct QueryIdEntry {
 
 impl AnalyticsCollector {
     pub fn new(config: AnalyticsConfig) -> Arc<Self> {
+        let soak_marker_user_token = std::env::var("FLAPJACK_LOADTEST_SOAK_MARKER_USER_TOKEN")
+            .ok()
+            .filter(|value| !value.is_empty());
         Arc::new(Self {
             config,
             search_buffer: Mutex::new(Vec::with_capacity(1024)),
@@ -60,6 +87,17 @@ impl AnalyticsCollector {
             aggregator: QueryAggregator::new(30),
             query_id_cache: DashMap::new(),
             shutdown: Notify::new(),
+            accepted_events_total: AtomicU64::new(0),
+            dropped_events_total: AtomicU64::new(0),
+            flush_latency_ms_samples: Mutex::new(VecDeque::with_capacity(FLUSH_LATENCY_SAMPLE_CAP)),
+            rollup_windows_generated_total: AtomicU64::new(0),
+            rollup_events_generated_total: AtomicU64::new(0),
+            rollup_latest_nonempty_window_end_ms: AtomicI64::new(0),
+            soak_marker_user_token,
+            soak_marker_first_event_timestamp_ms: AtomicI64::new(0),
+            rollup_latency_ms_samples: Mutex::new(VecDeque::with_capacity(
+                FLUSH_LATENCY_SAMPLE_CAP,
+            )),
         })
     }
 
@@ -96,6 +134,7 @@ impl AnalyticsCollector {
             .should_count(user_id, &event.index_name, &event.query);
         // We always store the raw event; aggregation is applied at query time.
         // The aggregator is kept for future use (e.g. deduped search count queries).
+        self.accepted_events_total.fetch_add(1, Ordering::Relaxed);
 
         let should_flush = {
             let mut buf = self.search_buffer.lock().unwrap();
@@ -113,6 +152,8 @@ impl AnalyticsCollector {
         if !self.config.enabled {
             return;
         }
+        self.record_soak_marker_event_if_match(&event.user_token);
+        self.accepted_events_total.fetch_add(1, Ordering::Relaxed);
 
         let should_flush = {
             let mut buf = self.insight_buffer.lock().unwrap();
@@ -194,6 +235,7 @@ impl AnalyticsCollector {
 
     /// Flush search events to Parquet. Swaps buffer to avoid holding lock during I/O.
     pub fn flush_searches(&self) {
+        let flush_started_at = Instant::now();
         let events = {
             let mut buf = self.search_buffer.lock().unwrap();
             std::mem::take(&mut *buf)
@@ -212,9 +254,11 @@ impl AnalyticsCollector {
                 .push(event);
         }
 
+        let mut dropped_events = 0_u64;
         for (index_name, index_events) in by_index {
             let dir = self.config.searches_dir(&index_name);
             if let Err(e) = writer::flush_search_events(&index_events, &dir) {
+                dropped_events += index_events.len() as u64;
                 tracing::error!(
                     "[analytics] Failed to flush {} search events for {}: {}",
                     index_events.len(),
@@ -229,10 +273,16 @@ impl AnalyticsCollector {
                 );
             }
         }
+        if dropped_events > 0 {
+            self.dropped_events_total
+                .fetch_add(dropped_events, Ordering::Relaxed);
+        }
+        self.record_flush_latency_sample(flush_started_at.elapsed().as_secs_f64() * 1000.0);
     }
 
     /// Flush insight events to Parquet.
     pub fn flush_insights(&self) {
+        let flush_started_at = Instant::now();
         let events = {
             let mut buf = self.insight_buffer.lock().unwrap();
             std::mem::take(&mut *buf)
@@ -247,9 +297,11 @@ impl AnalyticsCollector {
             by_index.entry(event.index.clone()).or_default().push(event);
         }
 
+        let mut dropped_events = 0_u64;
         for (index_name, index_events) in by_index {
             let dir = self.config.events_dir(&index_name);
             if let Err(e) = writer::flush_insight_events(&index_events, &dir) {
+                dropped_events += index_events.len() as u64;
                 tracing::error!(
                     "[analytics] Failed to flush {} insight events for {}: {}",
                     index_events.len(),
@@ -264,6 +316,11 @@ impl AnalyticsCollector {
                 );
             }
         }
+        if dropped_events > 0 {
+            self.dropped_events_total
+                .fetch_add(dropped_events, Ordering::Relaxed);
+        }
+        self.record_flush_latency_sample(flush_started_at.elapsed().as_secs_f64() * 1000.0);
     }
 
     /// Flush all buffers (called at shutdown or periodically).
@@ -328,11 +385,97 @@ impl AnalyticsCollector {
         self.shutdown.notify_one();
     }
 
+    pub fn analytics_metrics_snapshot(&self) -> AnalyticsMetricsSnapshot {
+        let flush_samples: Vec<f64> = {
+            let samples = self.flush_latency_ms_samples.lock().unwrap();
+            samples.iter().copied().collect()
+        };
+        let rollup_samples: Vec<f64> = {
+            let samples = self.rollup_latency_ms_samples.lock().unwrap();
+            samples.iter().copied().collect()
+        };
+        AnalyticsMetricsSnapshot {
+            accepted_events_total: self.accepted_events_total.load(Ordering::Relaxed),
+            dropped_events_total: self.dropped_events_total.load(Ordering::Relaxed),
+            flush_latency_p99_ms: percentile_99(&flush_samples),
+            rollup_windows_generated_total: self
+                .rollup_windows_generated_total
+                .load(Ordering::Relaxed),
+            rollup_events_generated_total: self
+                .rollup_events_generated_total
+                .load(Ordering::Relaxed),
+            rollup_latest_nonempty_window_end_ms: self
+                .rollup_latest_nonempty_window_end_ms
+                .load(Ordering::Relaxed),
+            soak_marker_first_event_timestamp_ms: self
+                .soak_marker_first_event_timestamp_ms
+                .load(Ordering::Relaxed),
+            rollup_generation_latency_p99_ms: percentile_99(&rollup_samples),
+        }
+    }
+
+    /// Records latency for one rollup window generated by the running server.
+    pub fn record_rollup_generation_sample(
+        &self,
+        sample_ms: f64,
+        event_count: i64,
+        window_end_ms: i64,
+    ) {
+        self.rollup_windows_generated_total
+            .fetch_add(1, Ordering::Relaxed);
+        if event_count > 0 {
+            self.rollup_events_generated_total
+                .fetch_add(event_count as u64, Ordering::Relaxed);
+            self.rollup_latest_nonempty_window_end_ms
+                .store(window_end_ms, Ordering::Relaxed);
+        }
+        let mut samples = self.rollup_latency_ms_samples.lock().unwrap();
+        if samples.len() >= FLUSH_LATENCY_SAMPLE_CAP {
+            samples.pop_front();
+        }
+        samples.push_back(sample_ms);
+    }
+
     /// Evict queryID entries older than 1 hour.
     fn evict_old_query_ids(&self) {
         let cutoff = chrono::Utc::now().timestamp_millis() - 3_600_000;
         self.query_id_cache.retain(|_, v| v.timestamp_ms > cutoff);
     }
+
+    fn record_flush_latency_sample(&self, sample_ms: f64) {
+        let mut samples = self.flush_latency_ms_samples.lock().unwrap();
+        if samples.len() >= FLUSH_LATENCY_SAMPLE_CAP {
+            samples.pop_front();
+        }
+        samples.push_back(sample_ms);
+    }
+
+    fn record_soak_marker_event_if_match(&self, user_token: &str) {
+        let Some(marker_user_token) = self.soak_marker_user_token.as_deref() else {
+            return;
+        };
+        if user_token != marker_user_token {
+            return;
+        }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let _ = self.soak_marker_first_event_timestamp_ms.compare_exchange(
+            0,
+            now_ms,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+}
+
+fn percentile_99(samples: &[f64]) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let last_idx = sorted.len() - 1;
+    let idx = ((last_idx as f64) * 0.99).ceil() as usize;
+    sorted[idx.min(last_idx)]
 }
 
 #[cfg(test)]
@@ -472,5 +615,150 @@ mod tests {
                 "first".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn analytics_metrics_snapshot_tracks_accepted_events_and_flush_latency() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_search(SearchEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            query: "laptop".to_string(),
+            query_id: None,
+            index_name: "products".to_string(),
+            nb_hits: 1,
+            processing_time_ms: 5,
+            user_token: Some("user-1".to_string()),
+            user_ip: None,
+            filters: None,
+            facets: None,
+            analytics_tags: None,
+            page: 0,
+            hits_per_page: 20,
+            has_results: true,
+            country: None,
+            region: None,
+            experiment_id: None,
+            variant_id: None,
+            assignment_method: None,
+        });
+
+        collector.flush_all();
+        collector.record_rollup_generation_sample(123.0, 7, 3_600_000);
+        let snapshot = collector.analytics_metrics_snapshot();
+        assert_eq!(snapshot.accepted_events_total, 1);
+        assert_eq!(snapshot.dropped_events_total, 0);
+        assert!(
+            snapshot.flush_latency_p99_ms >= 0.0,
+            "flush latency p99 should be recorded"
+        );
+        assert_eq!(snapshot.rollup_windows_generated_total, 1);
+        assert_eq!(snapshot.rollup_events_generated_total, 7);
+        assert_eq!(snapshot.rollup_latest_nonempty_window_end_ms, 3_600_000);
+        assert_eq!(snapshot.soak_marker_first_event_timestamp_ms, 0);
+        assert!(
+            snapshot.rollup_generation_latency_p99_ms >= 123.0,
+            "rollup generation p99 should be recorded"
+        );
+    }
+
+    #[test]
+    fn rollup_boundary_metric_only_tracks_nonempty_windows() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_rollup_generation_sample(10.0, 0, 7_200_000);
+        assert_eq!(
+            collector
+                .analytics_metrics_snapshot()
+                .rollup_latest_nonempty_window_end_ms,
+            0
+        );
+
+        collector.record_rollup_generation_sample(12.0, 2, 10_800_000);
+        assert_eq!(
+            collector
+                .analytics_metrics_snapshot()
+                .rollup_latest_nonempty_window_end_ms,
+            10_800_000
+        );
+    }
+
+    #[test]
+    fn soak_marker_metric_tracks_first_matching_insight_event() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let marker_token = "soak-marker-test-token";
+        unsafe {
+            std::env::set_var("FLAPJACK_LOADTEST_SOAK_MARKER_USER_TOKEN", marker_token);
+        }
+        let collector = AnalyticsCollector::new(test_config(&temp_dir));
+        collector.record_insight(InsightEvent {
+            event_type: "click".to_string(),
+            event_subtype: None,
+            event_name: "control-event".to_string(),
+            index: "products".to_string(),
+            user_token: "someone-else".to_string(),
+            authenticated_user_token: None,
+            query_id: Some("0123456789abcdef0123456789abcdef".to_string()),
+            object_ids: vec!["obj-1".to_string()],
+            object_ids_alt: vec![],
+            positions: Some(vec![1]),
+            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            value: None,
+            currency: None,
+            interleaving_team: None,
+        });
+        let before = collector
+            .analytics_metrics_snapshot()
+            .soak_marker_first_event_timestamp_ms;
+        assert_eq!(before, 0);
+
+        collector.record_insight(InsightEvent {
+            event_type: "click".to_string(),
+            event_subtype: None,
+            event_name: "marker".to_string(),
+            index: "products".to_string(),
+            user_token: marker_token.to_string(),
+            authenticated_user_token: None,
+            query_id: Some("fedcba9876543210fedcba9876543210".to_string()),
+            object_ids: vec!["obj-1".to_string()],
+            object_ids_alt: vec![],
+            positions: Some(vec![1]),
+            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            value: None,
+            currency: None,
+            interleaving_team: None,
+        });
+        let first = collector
+            .analytics_metrics_snapshot()
+            .soak_marker_first_event_timestamp_ms;
+        assert!(
+            first > 0,
+            "expected first matching marker insight event timestamp"
+        );
+
+        collector.record_insight(InsightEvent {
+            event_type: "click".to_string(),
+            event_subtype: None,
+            event_name: "marker-again".to_string(),
+            index: "products".to_string(),
+            user_token: marker_token.to_string(),
+            authenticated_user_token: None,
+            query_id: Some("00112233445566778899aabbccddeeff".to_string()),
+            object_ids: vec!["obj-2".to_string()],
+            object_ids_alt: vec![],
+            positions: Some(vec![1]),
+            timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            value: None,
+            currency: None,
+            interleaving_team: None,
+        });
+        let after = collector
+            .analytics_metrics_snapshot()
+            .soak_marker_first_event_timestamp_ms;
+        assert_eq!(after, first);
+
+        unsafe {
+            std::env::remove_var("FLAPJACK_LOADTEST_SOAK_MARKER_USER_TOKEN");
+        }
     }
 }

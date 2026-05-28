@@ -9,16 +9,16 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Minimal - core search only
-flapjack = { version = "0.1", default-features = false }
+flapjack = { version = "1.0", default-features = false }
 
 # OR with HTTP support
-flapjack = { version = "0.1", default-features = false, features = ["axum-support"] }
+flapjack = { version = "1.0", default-features = false, features = ["axum-support"] }
 
 # OR with S3 backups
-flapjack = { version = "0.1", default-features = false, features = ["s3-snapshots"] }
+flapjack = { version = "1.0", default-features = false, features = ["s3-snapshots"] }
 
 # OR everything (default)
-flapjack = "0.1"
+flapjack = "1.0"
 ```
 
 ## Feature Flags
@@ -28,10 +28,13 @@ flapjack = "0.1"
 | `axum-support` | axum | Axum web framework integration (IntoResponse trait) |
 | `s3-snapshots` | rust-s3, flate2, tar | S3 backup/restore, snapshot export/import |
 | `openapi` | utoipa | OpenAPI schema generation for API docs |
+| `analytics` | datafusion, arrow, parquet | Analytics query engine and query-suggestion exports |
+| `vector-search` | usearch | Vector index/search support with external embeddings |
+| `vector-search-local` | usearch, fastembed | Vector index/search with local embedding runtime |
+| `decompound` | (none) | Compound-word splitting in query processing |
+| `memory-stats` | tikv-jemalloc-ctl, sysinfo | Memory statistics instrumentation |
 
-**Default features**: All enabled for convenience. Opt out with `default-features = false`.
-
-**Dependency impact**: Core library without features has **24% fewer dependencies** (618 vs 816).
+**Default features**: `axum-support`, `s3-snapshots`, `openapi`, `analytics`, `vector-search-local`, and `decompound` are enabled by default. Add `memory-stats` explicitly when needed, or opt out entirely with `default-features = false`.
 
 ## Basic Usage
 
@@ -331,10 +334,10 @@ All errors implement `std::error::Error` and can be converted with `?`.
 
 ```
 flapjack/              # Core library (search engine, indexing, query execution)
-flapjack-http/         # HTTP server layer (handlers, middleware, routing)
-flapjack-replication/  # Cluster coordination (peer discovery, state sync)
-flapjack-ssl/          # SSL/TLS management (Let's Encrypt, ACME)
-flapjack-server/       # Binary entrypoint (CLI, config, main loop)
+flapjack-http/         # Axum HTTP layer (routing, middleware, handlers)
+flapjack-replication/  # Replication peer coordination
+flapjack-ssl/          # TLS/ACME support
+flapjack-server/       # Binary entrypoint (CLI/env bootstrap)
 ```
 
 **When embedding**, you typically only need the core `flapjack` crate. The HTTP and server crates are for running a standalone service.
@@ -358,7 +361,7 @@ Data format is identical. No re-indexing needed.
 ## Further Reading
 
 - [ARCHITECTURE.md](docs2/3_IMPLEMENTATION/ARCHITECTURE.md) — Core design decisions
-- [Integration Tests](tests/) — Real-world usage examples (`test_library_usage.rs`, `test_query.rs`)
+- [Integration Tests](tests/) — Real-world usage examples (`test_query.rs`, `test_index_ops.rs`)
 - **API Docs**: Run `cargo doc --open --no-deps` for generated API documentation
 
 ## License

@@ -20,7 +20,7 @@ jobs:
     steps:
       - id: check
         run: |
-          if [ "${{ github.repository }}" = "gridl-hq/flapjack" ] || [ "${{ github.repository }}" = "gridl-staging/flapjack" ]; then
+          if [ "${{ github.repository }}" = "flapjackhq/flapjack" ] || [ "${{ github.repository }}" = "gridl-staging/flapjack" ]; then
             echo "is-public-repo=true" >> $GITHUB_OUTPUT
           else
             echo "is-public-repo=false" >> $GITHUB_OUTPUT
@@ -38,8 +38,8 @@ jobs:
       run:
         working-directory: engine
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: rustfmt
       - run: cargo fmt --all --check
@@ -53,11 +53,11 @@ jobs:
       run:
         working-directory: engine
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: engine
       - name: Create dashboard dist stub (for RustEmbed)
@@ -92,19 +92,23 @@ jobs:
           sudo apt-get clean
           df -h
         working-directory: .
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: engine
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@a93b01ec36baa756f8701f3a0a8daa54a46d6339 # nextest
       - name: Create dashboard dist stub (for RustEmbed)
         run: mkdir -p dashboard/dist && echo '<html></html>' > dashboard/dist/index.html
+      - name: Workspace build gate
+        run: cargo build --tests --workspace
       - name: Build binaries (needed by integration tests)
         run: cargo build --package flapjack-server --features vector-search
       - name: Fast tests (vector-search)
+        timeout-minutes: 10
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search
       - name: Fast tests (remaining)
+        timeout-minutes: 10
         run: cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication
 
   rust-tests-all:
@@ -122,19 +126,21 @@ jobs:
           sudo apt-get clean
           df -h
         working-directory: .
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: engine
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@a93b01ec36baa756f8701f3a0a8daa54a46d6339 # nextest
       - name: Create dashboard dist stub (for RustEmbed)
         run: mkdir -p dashboard/dist && echo '<html></html>' > dashboard/dist/index.html
       - name: Build binaries (needed by integration tests)
         run: cargo build --package flapjack-server --features vector-search
       - name: All tests (vector-search)
+        timeout-minutes: 10
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci
       - name: All tests (remaining)
+        timeout-minutes: 10
         run: cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication -P ci
 
   # ============================================================================
@@ -147,9 +153,9 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: engine
       - name: Create dashboard dist stub (for RustEmbed)
@@ -159,7 +165,7 @@ jobs:
         working-directory: engine
         run: cargo build --package flapjack-server --features vector-search
       - name: Upload server binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flapjack-server
           path: engine/target/debug/flapjack
@@ -175,9 +181,9 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -189,7 +195,7 @@ jobs:
           FLAPJACK_BIN=/tmp/flapjack/flapjack bash engine/tests/integration_smoke.sh 2>&1 | tee "$SMOKE_LOG"
       - name: Upload smoke log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: integration-smoke-log
           path: ${{ runner.temp }}/integration-smoke.log
@@ -205,8 +211,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: 'npm'
@@ -224,8 +230,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: 'npm'
@@ -243,9 +249,9 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -257,7 +263,7 @@ jobs:
           FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: 'npm'
@@ -272,7 +278,7 @@ jobs:
         working-directory: engine/dashboard
         run: npm run test:e2e-ui:smoke
       - name: Upload test report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: dashboard-pages-report
@@ -285,9 +291,9 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -299,7 +305,7 @@ jobs:
           FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: 'npm'
@@ -314,7 +320,7 @@ jobs:
         working-directory: engine/dashboard
         run: npm run test:e2e-ui:full
       - name: Upload test report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: dashboard-full-e2e-report
@@ -327,9 +333,9 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -341,7 +347,7 @@ jobs:
           FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: 'npm'
@@ -359,7 +365,7 @@ jobs:
           ALGOLIA_APP_ID: ${{ secrets.ALGOLIA_APP_ID }}
           ALGOLIA_ADMIN_KEY: ${{ secrets.ALGOLIA_ADMIN_KEY }}
       - name: Upload test report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: dashboard-integration-report
@@ -383,9 +389,9 @@ jobs:
       matrix:
         php: ['8.1', '8.2', '8.3']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -398,7 +404,7 @@ jobs:
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
         with:
           php-version: ${{ matrix.php }}
           extensions: mbstring, curl, json
@@ -422,9 +428,9 @@ jobs:
       matrix:
         python: ['3.9', '3.10', '3.11', '3.12']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -439,7 +445,7 @@ jobs:
       - name: Install Poetry
         run: pipx install poetry
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python }}
           cache: 'poetry'
@@ -456,8 +462,8 @@ jobs:
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
       - name: Enable corepack (for yarn)
@@ -480,9 +486,9 @@ jobs:
     env:
       FLAPJACK_ADMIN_KEY: fj_devtestadminkey000000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -494,7 +500,7 @@ jobs:
           FLAPJACK_ADMIN_KEY="$FLAPJACK_ADMIN_KEY" /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: 'npm'
@@ -518,9 +524,9 @@ jobs:
       matrix:
         go: ['1.21', '1.22', '1.23']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ matrix.go }}
       - name: Run unit tests
@@ -536,9 +542,9 @@ jobs:
       FLAPJACK_APP_ID: test-app
       FLAPJACK_API_KEY: test-api-key
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -551,7 +557,7 @@ jobs:
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.23'
       - name: Run e2e tests
@@ -567,9 +573,9 @@ jobs:
       FLAPJACK_APP_ID: test-app
       FLAPJACK_API_KEY: test-api-key
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -582,7 +588,7 @@ jobs:
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: '3.3'
           bundler-cache: true
@@ -600,9 +606,9 @@ jobs:
       FLAPJACK_APP_ID: test-app
       FLAPJACK_API_KEY: test-api-key
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -615,7 +621,7 @@ jobs:
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -632,9 +638,9 @@ jobs:
       FLAPJACK_APP_ID: test-app
       FLAPJACK_API_KEY: test-api-key
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Download server binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -647,7 +653,7 @@ jobs:
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
       - name: Restore dependencies
@@ -671,7 +677,7 @@ jobs:
       matrix:
         php: ['8.1', '8.2', '8.3']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Check if tests exist
         id: check-tests
         run: |
@@ -683,7 +689,7 @@ jobs:
           fi
       - name: Download server binary
         if: steps.check-tests.outputs.has-tests == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flapjack-server
           path: /tmp/flapjack
@@ -698,7 +704,7 @@ jobs:
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - name: Setup PHP
         if: steps.check-tests.outputs.has-tests == 'true'
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
         with:
           php-version: ${{ matrix.php }}
           extensions: mbstring, curl, json
@@ -721,13 +727,13 @@ jobs:
       matrix:
         php: ['8.1', '8.2', '8.3']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Checkout PHP SDK
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           path: temp-php-sdk
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
         with:
           php-version: ${{ matrix.php }}
           extensions: mbstring, curl, json

@@ -108,6 +108,22 @@ fn default_admin_key_acls_match_canonical_valid_acls() {
         "default admin ACL set drifted from canonical VALID_ACLS"
     );
 }
+
+#[test]
+fn default_search_key_has_bounded_per_ip_rate_limit() {
+    let temp_dir = TempDir::new().unwrap();
+    let store = KeyStore::load_or_create(temp_dir.path(), "test-admin-key");
+    let search_key = store
+        .list_all()
+        .into_iter()
+        .find(|k| k.description == "Default Search API Key")
+        .expect("default search key must exist");
+
+    assert!(
+        search_key.max_queries_per_ip_per_hour > 0,
+        "default search key must ship with a positive maxQueriesPerIPPerHour limit"
+    );
+}
 #[test]
 fn load_or_create_recreates_default_keys_when_keys_json_is_corrupt() {
     let temp_dir = TempDir::new().unwrap();

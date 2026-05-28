@@ -20,11 +20,19 @@ pub(crate) enum LogFormat {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CorsMode {
-    Permissive,
+    LoopbackOnly,
     Restricted(Vec<HeaderValue>),
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
+const MIN_PRODUCTION_ADMIN_KEY_LENGTH: usize = 16;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupAuthValidationError {
+    NoAuthInProduction,
+    MissingAdminKeyInProduction,
+    AdminKeyTooShortInProduction,
+}
 
 /// Parse an optional raw string into a `LogFormat`.
 /// Only the value `"json"` (case-insensitive) selects JSON mode;
@@ -43,10 +51,10 @@ pub(crate) fn log_format_from_env() -> LogFormat {
 
 /// Parse `FLAPJACK_ALLOWED_ORIGINS`-style values.
 ///
-/// - `None`/empty/whitespace-only: permissive mode.
+/// - `None`/empty/whitespace-only: loopback-only mode.
 /// - comma-separated origins: restricted mode using trimmed, valid `HeaderValue`s.
 /// - invalid/empty segments are ignored.
-pub(crate) fn cors_origins_from_value(raw: Option<&str>) -> CorsMode {
+pub fn cors_origins_from_value(raw: Option<&str>) -> CorsMode {
     let origins = raw
         .unwrap_or_default()
         .split(',')
@@ -56,7 +64,7 @@ pub(crate) fn cors_origins_from_value(raw: Option<&str>) -> CorsMode {
         .collect::<Vec<_>>();
 
     if origins.is_empty() {
-        CorsMode::Permissive
+        CorsMode::LoopbackOnly
     } else {
         CorsMode::Restricted(origins)
     }
@@ -65,6 +73,28 @@ pub(crate) fn cors_origins_from_value(raw: Option<&str>) -> CorsMode {
 /// Read `FLAPJACK_ALLOWED_ORIGINS` and parse into a typed CORS mode.
 pub(crate) fn cors_origins_from_env() -> CorsMode {
     cors_origins_from_value(std::env::var("FLAPJACK_ALLOWED_ORIGINS").ok().as_deref())
+}
+
+/// Validate startup auth policy before server initialization.
+///
+/// This is intentionally exposed for cross-crate security contract tests.
+pub fn validate_startup_auth_policy(
+    env_mode: &str,
+    no_auth: bool,
+    raw_admin_key: Option<&str>,
+) -> Result<(), StartupAuthValidationError> {
+    if no_auth && env_mode == "production" {
+        return Err(StartupAuthValidationError::NoAuthInProduction);
+    }
+
+    let admin_key = raw_admin_key.and_then(normalize_admin_key);
+    match (env_mode, admin_key) {
+        ("production", None) => Err(StartupAuthValidationError::MissingAdminKeyInProduction),
+        ("production", Some(key)) if key.len() < MIN_PRODUCTION_ADMIN_KEY_LENGTH => {
+            Err(StartupAuthValidationError::AdminKeyTooShortInProduction)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Parse `FLAPJACK_SHUTDOWN_TIMEOUT_SECS`-style values.
@@ -201,28 +231,30 @@ pub(crate) fn load_server_config() -> ServerConfig {
         .filter(|value| value == "1")
         .is_some();
 
-    if no_auth && env_mode == "production" {
-        eprintln!("ERROR: --no-auth cannot be used in production mode.");
+    let raw_admin_key_env = std::env::var("FLAPJACK_ADMIN_KEY").ok();
+    if let Err(error) =
+        validate_startup_auth_policy(&env_mode, no_auth, raw_admin_key_env.as_deref())
+    {
+        match error {
+            StartupAuthValidationError::NoAuthInProduction => {
+                eprintln!("ERROR: --no-auth cannot be used in production mode.");
+            }
+            StartupAuthValidationError::MissingAdminKeyInProduction => {
+                let suggested = generate_hex_key();
+                eprintln!("ERROR: FLAPJACK_ADMIN_KEY is required in production mode.");
+                eprintln!("Suggested key: {}", suggested);
+            }
+            StartupAuthValidationError::AdminKeyTooShortInProduction => {
+                eprintln!(
+                    "ERROR: FLAPJACK_ADMIN_KEY must be at least {} characters in production.",
+                    MIN_PRODUCTION_ADMIN_KEY_LENGTH
+                );
+            }
+        }
         std::process::exit(1);
     }
 
-    let admin_key_env = std::env::var("FLAPJACK_ADMIN_KEY")
-        .ok()
-        .and_then(|key| normalize_admin_key(&key));
-
-    match (env_mode.as_str(), &admin_key_env) {
-        ("production", None) => {
-            let suggested = generate_hex_key();
-            eprintln!("ERROR: FLAPJACK_ADMIN_KEY is required in production mode.");
-            eprintln!("Suggested key: {}", suggested);
-            std::process::exit(1);
-        }
-        ("production", Some(key)) if key.len() < 16 => {
-            eprintln!("ERROR: FLAPJACK_ADMIN_KEY must be at least 16 characters in production.");
-            std::process::exit(1);
-        }
-        _ => {}
-    }
+    let admin_key_env = raw_admin_key_env.as_deref().and_then(normalize_admin_key);
 
     let data_dir = std::env::var("FLAPJACK_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     let data_dir_lock = match acquire_data_dir_process_lock(Path::new(&data_dir)) {

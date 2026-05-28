@@ -1175,3 +1175,177 @@ mod stage4_multi_index {
             .unwrap_or(false)));
     }
 }
+
+// ── Content-hash auto-IDs and idempotency-key dedup (PL-8 Stage 2) ──
+//
+// These tests pin the write-loss-recovery contract: identical request bodies
+// must produce identical auto-IDs (so client retries upsert instead of
+// duplicating) and an explicit `X-Flapjack-Idempotency-Key` header must dedup
+// the entire response on retry.
+mod content_hash_and_idempotency {
+    use super::*;
+    use crate::test_helpers::body_json;
+    use serde_json::{json, Value};
+
+    fn make_app(state: Arc<AppState>) -> Router {
+        Router::new()
+            .route("/1/indexes/:indexName", post(super::add_record_auto_id))
+            .route("/1/indexes/:indexName/batch", post(super::add_documents))
+            .with_state(state)
+    }
+
+    async fn post_auto_id(
+        app: &Router,
+        index: &str,
+        body: Value,
+        idem_key: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(format!("/1/indexes/{}", index))
+            .header("content-type", "application/json");
+        if let Some(k) = idem_key {
+            builder = builder.header("x-flapjack-idempotency-key", k);
+        }
+        let request = builder
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(request).await.unwrap();
+        let status = resp.status();
+        let json = body_json(resp).await;
+        (status, json)
+    }
+
+    async fn post_batch(app: &Router, index: &str, body: Value) -> (StatusCode, Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/1/indexes/{}/batch", index))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let json = body_json(resp).await;
+        (status, json)
+    }
+
+    /// Same body in two separate auto-ID calls must produce the same objectID
+    /// so a retried POST upserts rather than creates a duplicate document.
+    #[tokio::test]
+    async fn test_auto_id_same_body_same_objectid() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_write_guard_state(&tmp);
+        let app = make_app(state.clone());
+
+        let body = json!({"title": "hello", "count": 1, "tags": ["x", "y"]});
+        let (s1, r1) = post_auto_id(&app, "idem_idx", body.clone(), None).await;
+        let (s2, r2) = post_auto_id(&app, "idem_idx", body, None).await;
+
+        assert_eq!(s1, StatusCode::CREATED);
+        assert_eq!(s2, StatusCode::CREATED);
+        let id1 = r1["objectID"].as_str().expect("objectID present");
+        let id2 = r2["objectID"].as_str().expect("objectID present");
+        assert_eq!(
+            id1, id2,
+            "identical bodies must yield identical content-hash objectIDs",
+        );
+        // The two taskIDs may differ (each request enqueues a write), but the
+        // shared object ID is what makes the retry safe — same key into the
+        // index ⇒ upsert at storage layer, not a duplicate row.
+    }
+
+    /// Distinct bodies must produce distinct objectIDs.
+    #[tokio::test]
+    async fn test_auto_id_different_body_different_objectid() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_write_guard_state(&tmp);
+        let app = make_app(state);
+
+        let (_, r1) = post_auto_id(&app, "diff_idx", json!({"x": 1}), None).await;
+        let (_, r2) = post_auto_id(&app, "diff_idx", json!({"x": 2}), None).await;
+
+        assert_ne!(r1["objectID"], r2["objectID"]);
+    }
+
+    /// Explicit objectID supplied via the batch addObject path must be preserved
+    /// (no content-hash override). Auto-ID is only the fallback for missing IDs.
+    #[tokio::test]
+    async fn test_explicit_objectid_not_overridden() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_write_guard_state(&tmp);
+        let app = make_app(state);
+
+        let body = json!({
+            "requests": [
+                { "action": "addObject", "body": { "objectID": "explicit-keepme", "title": "kept" } }
+            ]
+        });
+        let (status, response) = post_batch(&app, "explicit_idx", body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["objectIDs"][0], "explicit-keepme");
+    }
+
+    /// Batch addObject without an explicit objectID must use the same content-hash
+    /// helper as the single-record auto-ID path so the two paths converge.
+    #[tokio::test]
+    async fn test_batch_auto_id_same_body_same_objectid() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_write_guard_state(&tmp);
+        let app = make_app(state);
+
+        let doc = json!({"name": "alpha", "score": 7});
+        let batch_body = json!({"requests": [{"action": "addObject", "body": doc.clone()}]});
+
+        let (_, b1) = post_batch(&app, "batch_idx", batch_body.clone()).await;
+        let (_, b2) = post_batch(&app, "batch_idx", batch_body).await;
+
+        let id_b1 = b1["objectIDs"][0].as_str().unwrap();
+        let id_b2 = b2["objectIDs"][0].as_str().unwrap();
+        assert_eq!(id_b1, id_b2, "batch addObject must produce stable IDs");
+
+        // Same body via the single-record auto-ID path must converge on the same ID.
+        let (_, r_auto) = post_auto_id(&app, "batch_idx", doc, None).await;
+        assert_eq!(
+            id_b1,
+            r_auto["objectID"].as_str().unwrap(),
+            "batch and single-record auto-ID paths must share the same hash helper",
+        );
+    }
+
+    /// Two requests with the same X-Flapjack-Idempotency-Key must return the
+    /// cached response from the first call, even when the body differs.
+    #[tokio::test]
+    async fn test_idempotency_key_dedup() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_write_guard_state(&tmp);
+        let app = make_app(state);
+
+        let key = "client-retry-abc-123";
+        let (s1, r1) = post_auto_id(&app, "key_idx", json!({"v": 1}), Some(key)).await;
+        let (s2, r2) = post_auto_id(&app, "key_idx", json!({"v": 2}), Some(key)).await;
+
+        assert_eq!(s1, StatusCode::CREATED);
+        assert_eq!(s2, StatusCode::CREATED);
+        assert_eq!(r1["objectID"], r2["objectID"]);
+        assert_eq!(r1["taskID"], r2["taskID"]);
+        assert_eq!(r1["createdAt"], r2["createdAt"]);
+    }
+
+    /// Without an idempotency key, distinct bodies must remain independent —
+    /// the dedup cache must not conflate unrelated requests.
+    #[tokio::test]
+    async fn test_no_idempotency_key_independent() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_write_guard_state(&tmp);
+        let app = make_app(state);
+
+        let (_, r1) = post_auto_id(&app, "noidem_idx", json!({"v": "a"}), None).await;
+        let (_, r2) = post_auto_id(&app, "noidem_idx", json!({"v": "b"}), None).await;
+        assert_ne!(r1["objectID"], r2["objectID"]);
+    }
+}

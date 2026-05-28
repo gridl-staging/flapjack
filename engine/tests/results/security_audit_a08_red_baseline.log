@@ -1,0 +1,46 @@
+   Compiling flapjack v1.0.1 (/Users/stuart/parallel_development/flapjack_dev/may25_1248pm_owasp_top10_audit/flapjack_dev/engine)
+    Finished `test` profile [optimized + debuginfo] target(s) in 25.55s
+     Running tests/test_security_audit.rs (target/debug/deps/test_security_audit-b09a3feab8b17f9c)
+
+running 5 tests
+test a08_release_workflow_emits_verifiable_provenance_metadata ... FAILED
+test a08_installer_fails_closed_when_verification_material_is_missing ... FAILED
+test a08_snapshot_import_rejects_parent_dir_traversal_entries ... FAILED
+test a08_snapshot_import_rejects_symlink_escape_pivots ... ok
+test a08_snapshot_import_rejects_absolute_path_entries ... FAILED
+
+failures:
+
+---- a08_release_workflow_emits_verifiable_provenance_metadata stdout ----
+
+thread 'a08_release_workflow_emits_verifiable_provenance_metadata' (67238345) panicked at tests/test_security_audit.rs:1061:5:
+release workflow must request OIDC token permissions for provenance attestation
+
+---- a08_installer_fails_closed_when_verification_material_is_missing stdout ----
+
+thread 'a08_installer_fails_closed_when_verification_material_is_missing' (67238344) panicked at tests/test_security_audit.rs:1019:13:
+missing expected snippet `exit 1` in install.sh checksum-file gate
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a08_snapshot_import_rejects_parent_dir_traversal_entries stdout ----
+
+thread 'a08_snapshot_import_rejects_parent_dir_traversal_entries' (67238347) panicked at tests/test_security_audit.rs:1148:5:
+snapshot import must reject parent-dir traversal entries
+
+---- a08_snapshot_import_rejects_absolute_path_entries stdout ----
+
+thread 'a08_snapshot_import_rejects_absolute_path_entries' (67238346) panicked at tests/test_security_audit.rs:1167:5:
+snapshot import must reject absolute-path entries
+
+
+failures:
+    a08_installer_fails_closed_when_verification_material_is_missing
+    a08_release_workflow_emits_verifiable_provenance_metadata
+    a08_snapshot_import_rejects_absolute_path_entries
+    a08_snapshot_import_rejects_parent_dir_traversal_entries
+
+test result: FAILED. 1 passed; 4 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p flapjack --test test_security_audit`
+error: 1 target failed:
+    `-p flapjack --test test_security_audit`

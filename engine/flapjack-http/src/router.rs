@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -322,20 +323,26 @@ fn build_internal_routes(state: Arc<AppState>, auth_enabled: bool) -> Router {
         .route("/internal/cluster/status", get(internal::cluster_status))
         .with_state(state.clone());
 
+    // Replication/catch-up routes must stay reachable in no-auth HA deployments
+    // (compose sets FLAPJACK_NO_AUTH=1). Without these endpoints, peers get 404s
+    // and anti-entropy cannot deliver writes.
+    let replication_mesh_routes = Router::new()
+        .route("/internal/replicate", post(internal::replicate_ops))
+        .route("/internal/ops", get(internal::get_ops))
+        .route("/internal/tenants", get(internal::list_tenants))
+        .route(
+            "/internal/snapshot/:tenantId",
+            get(internal::internal_snapshot),
+        )
+        .route(
+            "/internal/analytics-rollup",
+            post(internal::receive_analytics_rollup),
+        )
+        .with_state(state.clone());
+
     let internal_routes = if auth_enabled {
-        // Auth mode: expose all internal/replication routes plus admin key rotation
+        // Auth mode: expose all internal routes plus admin key rotation.
         let admin_internal_routes = Router::new()
-            .route("/internal/replicate", post(internal::replicate_ops))
-            .route("/internal/ops", get(internal::get_ops))
-            .route("/internal/tenants", get(internal::list_tenants))
-            .route(
-                "/internal/snapshot/:tenantId",
-                get(internal::internal_snapshot),
-            )
-            .route(
-                "/internal/analytics-rollup",
-                post(internal::receive_analytics_rollup),
-            )
             .route("/internal/rollup-cache", get(internal::rollup_cache_status))
             .route("/internal/storage", get(internal::storage_all))
             .route("/internal/storage/:indexName", get(internal::storage_index))
@@ -348,10 +355,13 @@ fn build_internal_routes(state: Arc<AppState>, auth_enabled: bool) -> Router {
             .with_state(state.clone());
         Router::new()
             .merge(peer_health_routes)
+            .merge(replication_mesh_routes)
             .merge(admin_internal_routes)
     } else {
-        // No-auth mode: only peer-health routes for HA probing
-        peer_health_routes
+        // No-auth mode still needs replication/catch-up routes for HA convergence.
+        Router::new()
+            .merge(peer_health_routes)
+            .merge(replication_mesh_routes)
     };
 
     public_routes.merge(internal_routes)
@@ -485,13 +495,44 @@ fn build_insights_routes(analytics_collector: Arc<AnalyticsCollector>, data_dir:
 pub(crate) fn build_cors_layer(mode: &CorsMode) -> CorsLayer {
     let max_age = std::time::Duration::from_secs(86400);
     match mode {
-        CorsMode::Permissive => CorsLayer::very_permissive().max_age(max_age),
+        CorsMode::LoopbackOnly => CorsLayer::new()
+            .allow_origin(AllowOrigin::predicate(is_loopback_origin))
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .max_age(max_age),
         CorsMode::Restricted(origins) => CorsLayer::new()
             .allow_origin(AllowOrigin::list(origins.iter().cloned()))
             .allow_methods(Any)
             .allow_headers(Any)
             .max_age(max_age),
     }
+}
+
+fn is_loopback_origin(origin: &axum::http::HeaderValue, _: &axum::http::request::Parts) -> bool {
+    let Ok(raw_origin) = origin.to_str() else {
+        return false;
+    };
+    let Ok(uri) = raw_origin.parse::<axum::http::Uri>() else {
+        return false;
+    };
+    let Some(scheme) = uri.scheme_str() else {
+        return false;
+    };
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    let normalized_host = host.trim_start_matches('[').trim_end_matches(']');
+    normalized_host
+        .parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
 }
 
 /// Parse `FLAPJACK_MAX_BODY_MB`-style values.

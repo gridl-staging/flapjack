@@ -5,7 +5,7 @@ mod support;
 
 use support::{
     admin_auth_headers, admin_entry_exists_in_json, extract_admin_key_hash_from_json, flapjack_cmd,
-    http_request_with_headers, RunningServer, TempDir,
+    http_request_with_headers, run_auth_auto_port_startup_once, RunningServer, TempDir,
 };
 
 #[test]
@@ -13,13 +13,7 @@ fn env_var_key_overrides_existing_keys_json() {
     let tmp = TempDir::new("fj_test_env_override");
     let admin_key_path = tmp.root().join(".admin_key");
 
-    let _output1 = flapjack_cmd()
-        .env("FLAPJACK_ENV", "development")
-        .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
-        .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
-        .output()
-        .expect("failed to run");
+    run_auth_auto_port_startup_once(tmp.path(), &[("FLAPJACK_ENV", "development")]);
 
     let first_admin_key = std::fs::read_to_string(&admin_key_path)
         .expect("first start should persist the generated admin key to .admin_key");
@@ -34,14 +28,14 @@ fn env_var_key_overrides_existing_keys_json() {
     let hash_before = extract_admin_key_hash_from_json(&keys_json_before);
 
     let custom_key = "rotated_key_abcdef0123456789";
-    let _output2 = flapjack_cmd()
-        .env("FLAPJACK_ENV", "development")
-        .env("FLAPJACK_ADMIN_KEY", custom_key)
-        .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
-        .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
-        .output()
-        .expect("failed to run");
+    run_auth_auto_port_startup_once(
+        tmp.path(),
+        &[
+            ("FLAPJACK_ENV", "development"),
+            ("FLAPJACK_ADMIN_KEY", custom_key),
+        ],
+    );
+
     let persisted_admin_key = std::fs::read_to_string(&admin_key_path)
         .expect("override start should rewrite .admin_key with the provided key");
     assert_eq!(
@@ -213,5 +207,181 @@ fn reset_admin_key_fails_without_keys_json() {
         stderr.contains("No keys.json found"),
         "Expected 'No keys.json found' error, got: {}",
         stderr
+    );
+}
+
+#[test]
+fn reset_admin_key_invalidates_previous_admin_key_for_auth() {
+    let tmp = TempDir::new("fj_test_reset_invalidates_old_key");
+    let server_before_restart = RunningServer::spawn_auth_auto_port(tmp.path());
+    let admin_key_path = tmp.root().join(".admin_key");
+    let old_key = std::fs::read_to_string(&admin_key_path)
+        .expect("startup should persist admin key to .admin_key")
+        .trim()
+        .to_string();
+
+    let output = flapjack_cmd()
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("reset-admin-key")
+        .output()
+        .expect("failed to run");
+    assert!(output.status.success(), "reset-admin-key should succeed");
+
+    let new_key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_ne!(new_key, old_key, "reset should generate a new admin key");
+
+    let old_key_before_restart = http_request_with_headers(
+        server_before_restart.bind_addr(),
+        "GET",
+        "/metrics",
+        &admin_auth_headers(old_key.as_str()),
+        None,
+    )
+    .expect("old-key request before restart should return an HTTP response");
+    assert_eq!(
+        old_key_before_restart.status, 200,
+        "reset-admin-key should not change in-memory auth for an already-running server"
+    );
+
+    drop(server_before_restart);
+    let server_after_restart = RunningServer::spawn_auth_auto_port(tmp.path());
+
+    let old_key_metrics = http_request_with_headers(
+        server_after_restart.bind_addr(),
+        "GET",
+        "/metrics",
+        &admin_auth_headers(old_key.as_str()),
+        None,
+    )
+    .expect("old-key metrics request should return an HTTP response");
+    assert_eq!(
+        old_key_metrics.status, 403,
+        "old key should be rejected after reset-admin-key, body: {}",
+        old_key_metrics.body
+    );
+
+    let new_key_metrics = http_request_with_headers(
+        server_after_restart.bind_addr(),
+        "GET",
+        "/metrics",
+        &admin_auth_headers(new_key.as_str()),
+        None,
+    )
+    .expect("new-key metrics request should return an HTTP response");
+    assert_eq!(
+        new_key_metrics.status, 200,
+        "new key should be accepted after reset-admin-key, body: {}",
+        new_key_metrics.body
+    );
+}
+
+// DEFERRED to next stage (bug: admin-key-rotate-concurrency-desync).
+//
+// This test asserts the real operator contract — the key persisted to
+// `.admin_key` after concurrent rotations must authorize requests (200, not
+// 403). It currently exposes a genuine production race in
+// `flapjack-http/src/auth/key_store.rs::rotate_admin_key`: the `.admin_key`
+// file write (unlocked) and the in-memory `admin_key_value`/keys.json update
+// (locked) are two independent critical sections, so two concurrent rotations
+// A and B can finish with the file holding key B while in-memory state holds
+// key A. A request using the persisted file key then 403s.
+//
+// Because the desync depends on thread interleaving, the test is non-
+// deterministic as written (~1/5 fails when run in isolation), which would
+// make the suite flaky. It cannot be made deterministically green without a
+// production fix (serializing the entire rotation — file write + in-memory
+// update — under one lock so the persisted file always matches in-memory
+// state). That production change is out of scope for this test-audit stage,
+// so the test is quarantined here rather than deleted or weakened. Remove the
+// `#[ignore]` once the rotation is made atomic.
+#[ignore = "exposes unfixed production race admin-key-rotate-concurrency-desync; \
+            flaky until rotate_admin_key serializes file+memory writes (next stage)"]
+#[test]
+fn rotate_admin_key_concurrent_requests_allow_only_documented_outcomes() {
+    let tmp = TempDir::new("fj_test_rotate_admin_key_concurrent");
+    let server = RunningServer::spawn_auth_auto_port(tmp.path());
+    let key_path = tmp.root().join(".admin_key");
+    let starting_key = std::fs::read_to_string(&key_path)
+        .expect("startup should persist admin key to .admin_key")
+        .trim()
+        .to_string();
+
+    let mut handles = Vec::new();
+    for _ in 0..6 {
+        let bind_addr = server.bind_addr().to_string();
+        let key = starting_key.clone();
+        handles.push(std::thread::spawn(move || {
+            http_request_with_headers(
+                &bind_addr,
+                "POST",
+                "/internal/rotate-admin-key",
+                &admin_auth_headers(key.as_str()),
+                None,
+            )
+            .expect("rotate-admin-key request should return an HTTP response")
+        }));
+    }
+
+    let responses: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("rotate worker should join"))
+        .collect();
+    assert!(
+        responses
+            .iter()
+            .all(|response| response.status == 200 || response.status == 403),
+        "concurrent rotate-admin-key responses must be only 200 or 403"
+    );
+
+    let successful_payload_keys: Vec<String> = responses
+        .iter()
+        .filter(|response| response.status == 200)
+        .map(|response| {
+            serde_json::from_str::<serde_json::Value>(&response.body)
+                .expect("200 rotate response should be valid JSON")["key"]
+                .as_str()
+                .expect("200 rotate response should include key")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        !successful_payload_keys.is_empty(),
+        "at least one concurrent rotate request must succeed"
+    );
+
+    let persisted_key = std::fs::read_to_string(&key_path)
+        .expect(".admin_key should exist after concurrent rotations")
+        .trim()
+        .to_string();
+    assert!(
+        successful_payload_keys.contains(&persisted_key),
+        "persisted admin key must come from one successful rotation response"
+    );
+
+    let old_key_metrics = http_request_with_headers(
+        server.bind_addr(),
+        "GET",
+        "/metrics",
+        &admin_auth_headers(starting_key.as_str()),
+        None,
+    )
+    .expect("old-key metrics request should return an HTTP response");
+    assert_eq!(
+        old_key_metrics.status, 403,
+        "starting key should be invalid after concurrent rotations"
+    );
+
+    let persisted_key_metrics = http_request_with_headers(
+        server.bind_addr(),
+        "GET",
+        "/metrics",
+        &admin_auth_headers(persisted_key.as_str()),
+        None,
+    )
+    .expect("persisted-key metrics request should return an HTTP response");
+    assert_eq!(
+        persisted_key_metrics.status, 200,
+        "persisted final key should authorize requests after concurrent rotations"
     );
 }

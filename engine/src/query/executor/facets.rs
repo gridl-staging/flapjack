@@ -196,7 +196,7 @@ impl QueryExecutor {
                 } else {
                     limit + offset
                 };
-                let top_collector = TopDocs::with_limit(prelim_limit);
+                let top_collector = TopDocs::with_limit(prelim_limit).order_by_score();
                 let (count, mut top_docs, facets) =
                     searcher.search(query.as_ref(), &(Count, top_collector, facet_collector))?;
                 let fi1 = fi0.elapsed();
@@ -222,7 +222,9 @@ impl QueryExecutor {
             Some(Sort::ByField { field, order }) => {
                 if has_text_query {
                     let prelim_limit = (limit + offset).saturating_mul(3).max(50);
-                    let top_collector = TopDocs::with_limit(prelim_limit).and_offset(offset);
+                    let top_collector = TopDocs::with_limit(prelim_limit)
+                        .and_offset(offset)
+                        .order_by_score();
                     let (count, prelim, facets) = searcher
                         .search(query.as_ref(), &(Count, top_collector, facet_collector))?;
                     let sorted =

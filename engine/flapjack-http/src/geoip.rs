@@ -36,16 +36,16 @@ impl GeoIpReader {
             return None;
         }
 
-        let city: maxminddb::geoip2::City = self.reader.lookup(ip).ok()?;
+        let lookup = self.reader.lookup(ip).ok()?;
+        let city: maxminddb::geoip2::City = lookup.decode().ok().flatten()?;
 
-        let country_code = city.country?.iso_code?.to_string();
+        let country_code = city.country.iso_code?.to_string();
         let region = city
             .subdivisions
-            .as_ref()
-            .and_then(|subs| subs.first())
+            .first()
             .and_then(|sub| sub.iso_code)
             .map(|code| code.to_string());
-        let location = city.location?;
+        let location = city.location;
         let lat = location.latitude?;
         let lng = location.longitude?;
 

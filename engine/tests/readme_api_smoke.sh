@@ -127,6 +127,19 @@ extract_task_id() {
   printf '%s\n' "$response_body" | sed -n 's/.*"taskID":\([0-9]*\).*/\1/p' | head -1
 }
 
+readme_has_api_docs_swagger_link() {
+  target_readme="$1"
+  awk '
+    /^## API Documentation[[:space:]]*$/ { in_section = 1; next }
+    /^## / && in_section { exit }
+    in_section && /http:\/\/localhost:7700\/swagger-ui\/?/ {
+      found = 1
+      exit
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$target_readme"
+}
+
 wait_for_task_published() {
   task_id="$1"
 
@@ -235,6 +248,85 @@ if [ "$health_http" = "200" ] && echo "$health_body" | grep -q '{'; then
 else
   fail "GET /health expected HTTP 200 with JSON body" "HTTP $health_http — $health_body"
 fi
+
+# ── Public entrypoint routes used by README ──────────────────────────────────
+
+ready_resp=$(curl -sS -w "\n%{http_code}" "${BASE}/health/ready" 2>&1) || true
+ready_http=$(echo "$ready_resp" | tail -1)
+ready_body=$(echo "$ready_resp" | sed '$d')
+if [ "$ready_http" = "200" ] && echo "$ready_body" | grep -q '"ready":true'; then
+  pass "GET /health/ready returns HTTP 200 with ready=true"
+else
+  fail "GET /health/ready expected HTTP 200 with ready=true" "HTTP $ready_http — $ready_body"
+fi
+
+openapi_resp=$(curl -sS -w "\n%{http_code}" "${BASE}/api-docs/openapi.json" 2>&1) || true
+openapi_http=$(echo "$openapi_resp" | tail -1)
+openapi_body=$(echo "$openapi_resp" | sed '$d')
+if [ "$openapi_http" = "200" ] && printf '%s\n' "$openapi_body" | grep '"openapi"' >/dev/null; then
+  pass "GET /api-docs/openapi.json returns HTTP 200 with OpenAPI document"
+else
+  fail "GET /api-docs/openapi.json expected HTTP 200 with OpenAPI document" "HTTP $openapi_http — $openapi_body"
+fi
+
+swagger_headers=$(curl -sS -D - -o /dev/null "${BASE}/swagger-ui" 2>&1) || true
+swagger_http=$(printf '%s\n' "$swagger_headers" | awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}')
+swagger_location=$(printf '%s\n' "$swagger_headers" | grep -i '^location:' | head -1 | cut -d' ' -f2 | tr -d '\r')
+swagger_follow_resp=$(curl -sS -L -w "\n%{http_code}" "${BASE}/swagger-ui" 2>&1) || true
+swagger_follow_http=$(echo "$swagger_follow_resp" | tail -1)
+swagger_follow_body=$(echo "$swagger_follow_resp" | sed '$d')
+
+if [ "$swagger_follow_http" = "200" ] && echo "$swagger_follow_body" | grep -q 'Swagger UI'; then
+  pass "GET /swagger-ui resolves to Swagger UI HTML (HTTP 200 after redirect follow)"
+else
+  fail "GET /swagger-ui expected Swagger UI HTML after redirect follow" "Initial HTTP $swagger_http, Location $swagger_location, final HTTP $swagger_follow_http"
+fi
+
+if [ "$swagger_http" = "303" ] && [ "$swagger_location" = "/swagger-ui/" ]; then
+  pass "GET /swagger-ui redirects to /swagger-ui/"
+elif [ "$swagger_http" = "200" ]; then
+  pass "GET /swagger-ui served Swagger UI without redirect"
+else
+  fail "GET /swagger-ui expected 303->/swagger-ui/ or direct 200" "Initial HTTP $swagger_http, Location $swagger_location"
+fi
+
+dashboard_resp=$(curl -sS -w "\n%{http_code}" "${BASE}/dashboard" 2>&1) || true
+dashboard_http=$(echo "$dashboard_resp" | tail -1)
+if [ "$dashboard_http" = "200" ]; then
+  pass "GET /dashboard is reachable (HTTP 200)"
+else
+  fail "GET /dashboard expected HTTP 200" "HTTP $dashboard_http"
+fi
+
+# Ensure README route references align with mounted local routes.
+# Assert the local route target in the API Documentation section so quickstart
+# comments cannot satisfy this proof.
+if readme_has_api_docs_swagger_link "$README_PATH"; then
+  pass "README API Documentation section links to local /swagger-ui"
+else
+  fail "README API Documentation section must link to local /swagger-ui"
+fi
+
+if grep -q 'http://localhost:7700/dashboard' "$README_PATH"; then
+  pass "README references local /dashboard route"
+else
+  fail "README must reference local /dashboard route"
+fi
+
+swagger_fixture=$(mktemp)
+cat >"$swagger_fixture" <<'EOF'
+## Quick Start
+#   http://localhost:7700/swagger-ui
+
+## API Documentation
+- [OpenAPI JSON](http://localhost:7700/api-docs/openapi.json)
+EOF
+if readme_has_api_docs_swagger_link "$swagger_fixture"; then
+  fail "Swagger README matcher must reject quickstart-only /swagger-ui references"
+else
+  pass "Swagger README matcher rejects quickstart-only /swagger-ui references"
+fi
+rm -f "$swagger_fixture"
 
 # ── README batch-add (execute README curl block verbatim) ────────────────────
 

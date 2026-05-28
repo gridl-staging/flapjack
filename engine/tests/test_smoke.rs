@@ -372,6 +372,9 @@ async fn smoke_internal_endpoint() {
         conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         experiment_store: None,
         embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
+        idempotency_cache: std::sync::Arc::new(flapjack_http::idempotency::IdempotencyCache::new(
+            std::time::Duration::from_secs(300),
+        )),
     });
 
     let internal = Router::new()
@@ -474,6 +477,11 @@ mod cors {
                 flapjack_http::conversation_store::ConversationStore::default_shared(),
             experiment_store: None,
             embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
+            idempotency_cache: std::sync::Arc::new(
+                flapjack_http::idempotency::IdempotencyCache::new(std::time::Duration::from_secs(
+                    300,
+                )),
+            ),
         });
 
         let public_health_routes =

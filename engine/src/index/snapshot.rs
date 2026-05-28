@@ -1,11 +1,53 @@
-//! Gzipped-tar snapshot helpers for exporting and importing index directories, supporting both file-based and in-memory byte-buffer round-trips.
 use crate::error::Result;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fs::File;
-use std::path::Path;
+use std::path::{Component, Path};
 use tar::{Archive, Builder};
+
+fn reject_invalid_snapshot_entry_path(entry_path: &Path) -> Result<()> {
+    if entry_path.is_absolute() {
+        return Err(crate::error::FlapjackError::InvalidDocument(format!(
+            "snapshot entry path must be relative: {}",
+            entry_path.display()
+        )));
+    }
+
+    for component in entry_path.components() {
+        if matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        ) {
+            return Err(crate::error::FlapjackError::InvalidDocument(format!(
+                "snapshot entry path escapes destination: {}",
+                entry_path.display()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_archive_entries<R: std::io::Read>(archive: &mut Archive<R>) -> Result<()> {
+    for entry_result in archive.entries()? {
+        let entry = entry_result?;
+        let entry_path = entry.path()?.into_owned();
+        reject_invalid_snapshot_entry_path(&entry_path)?;
+
+        // Links can pivot writes outside the destination tree at extraction time.
+        // Reject link entries so snapshot imports are fail-closed by default.
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            return Err(crate::error::FlapjackError::InvalidDocument(format!(
+                "snapshot archive contains unsupported link entry: {}",
+                entry_path.display()
+            )));
+        }
+    }
+
+    Ok(())
+}
 
 pub fn export_to_tarball(index_path: &Path, dest_file: &Path) -> Result<u64> {
     let file = File::create(dest_file)?;
@@ -23,6 +65,11 @@ pub fn export_to_tarball(index_path: &Path, dest_file: &Path) -> Result<u64> {
 
 pub fn import_from_tarball(tarball_path: &Path, dest_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dest_dir)?;
+
+    let validation_file = File::open(tarball_path)?;
+    let validation_decoder = GzDecoder::new(validation_file);
+    let mut validation_archive = Archive::new(validation_decoder);
+    validate_archive_entries(&mut validation_archive)?;
 
     let file = File::open(tarball_path)?;
     let decoder = GzDecoder::new(file);
@@ -47,6 +94,10 @@ pub fn export_to_bytes(index_path: &Path) -> Result<Vec<u8>> {
 
 pub fn import_from_bytes(data: &[u8], dest_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dest_dir)?;
+
+    let validation_decoder = GzDecoder::new(data);
+    let mut validation_archive = Archive::new(validation_decoder);
+    validate_archive_entries(&mut validation_archive)?;
 
     let decoder = GzDecoder::new(data);
     let mut archive = Archive::new(decoder);

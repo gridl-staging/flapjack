@@ -1,6 +1,6 @@
 # Flapjack Search Java Client
 
-Official Java client for the [Flapjack Search API](https://github.com/flapjackhq).
+Official Java client for the [Flapjack Search API](https://github.com/gridl-staging).
 
 Drop-in replacement for `algoliasearch` Java client. Algolia-compatible REST API with Flapjack-native host routing.
 
@@ -10,7 +10,7 @@ Drop-in replacement for `algoliasearch` Java client. Algolia-compatible REST API
 
 ```groovy
 dependencies {
-    implementation 'com.flapjackhq:flapjacksearch:0.1.0'
+    implementation 'com.gridl-staging:flapjacksearch:0.1.0'
 }
 ```
 
@@ -18,7 +18,7 @@ dependencies {
 
 ```xml
 <dependency>
-    <groupId>com.flapjackhq</groupId>
+    <groupId>com.gridl-staging</groupId>
     <artifactId>flapjacksearch</artifactId>
     <version>0.1.0</version>
 </dependency>
@@ -27,8 +27,8 @@ dependencies {
 ## Quick Start
 
 ```java
-import com.flapjackhq.api.SearchClient;
-import com.flapjackhq.model.search.*;
+import com.gridl-staging.api.SearchClient;
+import com.gridl-staging.model.search.*;
 
 import java.util.*;
 
@@ -64,7 +64,7 @@ public class Example {
 For self-hosted Flapjack instances:
 
 ```java
-import com.flapjackhq.config.*;
+import com.gridl-staging.config.*;
 import java.util.*;
 
 ClientOptions options = ClientOptions.builder()
@@ -78,8 +78,8 @@ SearchClient client = new SearchClient("YOUR_APP_ID", "YOUR_API_KEY", options);
 
 ## Migrating from Algolia
 
-1. Replace dependency: `com.algolia:algoliasearch` -> `com.flapjackhq:flapjacksearch`
-2. Update imports: `com.algolia.*` -> `com.flapjackhq.*`
+1. Replace dependency: `com.algolia:algoliasearch` -> `com.gridl-staging:flapjacksearch`
+2. Update imports: `com.algolia.*` -> `com.gridl-staging.*`
 3. Rename exceptions: `AlgoliaApiException` -> `FlapjackApiException`
 4. Rename agent: `AlgoliaAgent` -> `FlapjackAgent`
 5. Update env vars: `ALGOLIA_*` -> `FLAPJACK_*`

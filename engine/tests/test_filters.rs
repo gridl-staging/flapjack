@@ -23,7 +23,7 @@ mod params {
     fn facet_filters_single_string() {
         let req =
             make_request(serde_json::json!({"query": "test", "facetFilters": ["brand:Apple"]}));
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         match filter {
             Filter::Equals { field, value } => {
                 assert_eq!(field, "brand");
@@ -38,7 +38,7 @@ mod params {
         let req = make_request(
             serde_json::json!({"query": "test", "facetFilters": [["brand:Apple", "brand:Samsung"]]}),
         );
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         match filter {
             Filter::Or(parts) => assert_eq!(parts.len(), 2),
             _ => panic!("Expected Or"),
@@ -50,7 +50,7 @@ mod params {
         let req = make_request(
             serde_json::json!({"query": "test", "facetFilters": [["brand:Apple", "brand:Samsung"], "category:Electronics"]}),
         );
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         match filter {
             Filter::And(parts) => {
                 assert_eq!(parts.len(), 2);
@@ -65,7 +65,7 @@ mod params {
     fn facet_filters_negated() {
         let req =
             make_request(serde_json::json!({"query": "test", "facetFilters": ["-brand:Apple"]}));
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         assert!(
             matches!(filter, Filter::Not(inner) if matches!(*inner, Filter::Equals { ref field, .. } if field == "brand"))
         );
@@ -76,7 +76,7 @@ mod params {
         let req = make_request(
             serde_json::json!({"query": "test", "numericFilters": ["price>=10", "price<=100"]}),
         );
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         match filter {
             Filter::And(parts) => {
                 assert_eq!(parts.len(), 2);
@@ -95,7 +95,7 @@ mod params {
     fn numeric_filters_float() {
         let req =
             make_request(serde_json::json!({"query": "test", "numericFilters": ["price>=10.50"]}));
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         assert!(
             matches!(filter, Filter::GreaterThanOrEqual { ref field, value: FieldValue::Float(f) } if field == "price" && f == 10.50)
         );
@@ -106,7 +106,7 @@ mod params {
         let req = make_request(
             serde_json::json!({"query": "test", "filters": "price > 50", "facetFilters": ["brand:Apple"]}),
         );
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         assert!(matches!(filter, Filter::And(parts) if parts.len() == 2));
     }
 
@@ -115,7 +115,7 @@ mod params {
         let req = make_request(
             serde_json::json!({"query": "test", "tagFilters": ["electronics", "sale"]}),
         );
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         match filter {
             Filter::And(parts) => {
                 assert_eq!(parts.len(), 2);
@@ -149,7 +149,7 @@ mod params {
         );
         req.apply_params_string();
         assert_eq!(req.query, "phone");
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         assert!(matches!(filter, Filter::Or(parts) if parts.len() == 2));
     }
 
@@ -166,7 +166,7 @@ mod params {
     #[test]
     fn empty_facet_filters() {
         let req = make_request(serde_json::json!({"query": "test", "facetFilters": []}));
-        assert!(req.build_combined_filter().is_none());
+        assert!(req.build_combined_filter().unwrap().is_none());
     }
 
     #[test]
@@ -174,7 +174,7 @@ mod params {
         let req = make_request(
             serde_json::json!({"query": "test", "filters": "in_stock:true", "facetFilters": ["brand:Apple"], "numericFilters": ["price>=10"], "tagFilters": ["sale"]}),
         );
-        let filter = req.build_combined_filter().unwrap();
+        let filter = req.build_combined_filter().unwrap().unwrap();
         assert!(matches!(filter, Filter::And(parts) if parts.len() == 4));
     }
 }

@@ -62,6 +62,9 @@ fn build_stage4_app(tmp: &TempDir) -> (Router, Arc<AnalyticsCollector>) {
         start_time: std::time::Instant::now(),
         conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         embedder_store: Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
+        idempotency_cache: Arc::new(flapjack_http::idempotency::IdempotencyCache::new(
+            std::time::Duration::from_secs(300),
+        )),
     });
 
     let index_routes = Router::new()

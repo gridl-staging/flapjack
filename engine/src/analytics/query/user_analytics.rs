@@ -80,10 +80,67 @@ impl super::AnalyticsQueryEngine {
         use crate::analytics::hll::HllSketch;
         use std::collections::HashMap;
 
-        let ctx = self.create_session_with_searches(index_name).await?;
         let start_ms = date_to_start_ms(start_date)?;
         let end_ms = date_to_end_ms(end_date)?;
 
+        if let Some(tier) = self.select_uniform_certified_tier(index_name, start_date, end_date) {
+            let sql = format!(
+                "SELECT window_start_ms, unique_users_hll \
+                 FROM rollups \
+                 WHERE window_start_ms >= {} AND window_start_ms <= {}",
+                start_ms, end_ms
+            );
+            let rows = self.query_rollup_parquet(index_name, &tier, &sql).await?;
+
+            let mut overall = HllSketch::new();
+            let mut daily: HashMap<String, HllSketch> = HashMap::new();
+
+            for row in rows {
+                let Some(day_ms) = row.get("window_start_ms").and_then(|v| v.as_i64()) else {
+                    continue;
+                };
+                let Some(sketch_b64) = row.get("unique_users_hll").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let sketch = HllSketch::from_base64(sketch_b64)
+                    .ok_or_else(|| "Invalid rollup HLL payload in unique_users_hll".to_string())?;
+                overall.merge(&sketch);
+                daily
+                    .entry(ms_to_date_string(day_ms))
+                    .or_default()
+                    .merge(&sketch);
+            }
+
+            let mut day_keys: Vec<String> = daily.keys().cloned().collect();
+            day_keys.sort();
+            let dates: Vec<serde_json::Value> = day_keys
+                .iter()
+                .map(|day| {
+                    serde_json::json!({
+                        "date": day,
+                        "count": daily[day].cardinality() as i64
+                    })
+                })
+                .collect();
+            let daily_sketches: serde_json::Map<String, serde_json::Value> = day_keys
+                .iter()
+                .map(|day| {
+                    (
+                        day.clone(),
+                        serde_json::Value::String(daily[day].to_base64()),
+                    )
+                })
+                .collect();
+
+            return Ok(serde_json::json!({
+                "count": overall.cardinality() as i64,
+                "hll_sketch": overall.to_base64(),
+                "dates": dates,
+                "daily_sketches": daily_sketches,
+            }));
+        }
+
+        let ctx = self.create_session_with_searches(index_name).await?;
         // Fetch all (user_id, day_ms) pairs — we process HLL in Rust, not SQL.
         let sql = format!(
             "SELECT COALESCE(user_token, user_ip, 'anonymous') as user_id, \

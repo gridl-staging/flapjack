@@ -2,6 +2,7 @@
 use crate::auth::KeyStore;
 use crate::conversation_store::ConversationStore;
 use crate::geoip::GeoIpReader;
+use crate::idempotency::IdempotencyCache;
 use crate::notifications::NotificationService;
 use crate::pause_registry::PausedIndexes;
 use crate::usage_middleware::TenantUsageCounters;
@@ -74,6 +75,9 @@ pub struct AppState {
     pub start_time: std::time::Instant,
     pub conversation_store: Arc<ConversationStore>,
     pub embedder_store: Arc<crate::embedder_store::EmbedderStore>,
+    /// Per-node TTL cache that dedups writes carrying an `X-Flapjack-Idempotency-Key`
+    /// header (ADR 0005 / PL-8 write-loss recovery).
+    pub idempotency_cache: Arc<IdempotencyCache>,
 }
 
 /// Compute nbPages safely for Algolia-style paginated responses.

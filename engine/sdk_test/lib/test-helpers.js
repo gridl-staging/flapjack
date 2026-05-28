@@ -25,7 +25,7 @@ export function createTestRunner() {
     tests.push({ name, fn });
   }
 
-  async function runAllTests({ banner = 'Tests', setup, cleanup } = {}) {
+  async function runAllTests({ banner = "Tests", setup, cleanup } = {}) {
     if (setup) await setup();
 
     console.log(`\n=== Running ${banner} (${tests.length}) ===\n`);
@@ -42,7 +42,7 @@ export function createTestRunner() {
         console.log(`✗ ${name}`);
         console.log(`  Error: ${e.message}`);
         if (e.stack) {
-          console.log(`  ${e.stack.split('\n')[1]}`);
+          console.log(`  ${e.stack.split("\n")[1]}`);
         }
         failed++;
       }
@@ -55,6 +55,64 @@ export function createTestRunner() {
   }
 
   return { test, runAllTests };
+}
+
+/**
+ * Build PASS/FAIL row printers and summary accounting used by smoke harnesses.
+ */
+export function createVerdictRecorder() {
+  const rows = [];
+  let firstFailureError = null;
+
+  function printPass(name, detail) {
+    console.log(`PASS ${name}: ${detail}`);
+  }
+
+  function printFail(name, detail) {
+    console.log(`FAIL ${name}: ${detail}`);
+  }
+
+  function printSkip(name, reason) {
+    console.log(`SKIP ${name}: ${reason}`);
+  }
+
+  async function runStep(name, operation) {
+    try {
+      const detail = await operation();
+      printPass(name, detail ?? "ok");
+      rows.push("pass");
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (firstFailureError === null) {
+        firstFailureError = error instanceof Error ? error : new Error(message);
+      }
+      printFail(name, message);
+      rows.push("fail");
+      return false;
+    }
+  }
+
+  function runSkip(name, reason) {
+    const detail = reason ?? "policy skip";
+    printSkip(name, detail);
+    rows.push("skip");
+    return true;
+  }
+
+  function summarize() {
+    const passCount = rows.filter((row) => row === "pass").length;
+    const failCount = rows.filter((row) => row === "fail").length;
+    const skipCount = rows.filter((row) => row === "skip").length;
+    console.log(`SUMMARY pass=${passCount} fail=${failCount} skip=${skipCount}`);
+    return { passCount, failCount, skipCount, totalCount: rows.length };
+  }
+
+  function getFirstFailureError() {
+    return firstFailureError;
+  }
+
+  return { runStep, runSkip, summarize, getFirstFailureError };
 }
 
 /**
@@ -115,8 +173,8 @@ export async function waitForMinHits(client, indexName, minHits, maxWaitMs = 700
   const ready = await waitForSearch(
     client,
     indexName,
-    { query: '', hitsPerPage: 0 },
-    (result) => typeof result.nbHits === 'number' && result.nbHits >= minHits,
+    { query: "", hitsPerPage: 0 },
+    (result) => typeof result.nbHits === "number" && result.nbHits >= minHits,
     maxWaitMs
   );
   if (!ready) {

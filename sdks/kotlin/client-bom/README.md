@@ -1,10 +1,10 @@
-# Algolia Kotlin API client BOM
+# Flapjack Kotlin API client BOM
 
 Client [BOM][1] module, can be used to control the dependency versions of direct and transitive dependencies:
 
 ```groovy
 dependencies {
-    // import Kotlin API client BOM
+    // import Kotlin API client BOM (artifact coordinates are release-owned)
     implementation platform('com.algolia:algoliasearch-client-kotlin-bom:{{{{packageVersion}}}}')
 
     // define dependencies without versions

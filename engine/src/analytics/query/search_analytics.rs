@@ -9,15 +9,34 @@ impl super::AnalyticsQueryEngine {
         click_analytics: bool,
         country: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let dir = self.config.searches_dir(params.index_name);
-        if !dir.exists() {
-            return Ok(serde_json::json!({"searches": []}));
-        }
-        let ctx = self.create_session_with_searches(params.index_name).await?;
-
         let start_ms = date_to_start_ms(params.start_date)?;
         let end_ms = date_to_end_ms(params.end_date)?;
 
+        let has_raw_only_filters = click_analytics || country.is_some() || params.tags.is_some();
+        if !has_raw_only_filters {
+            if let Some(tier) = self.select_uniform_certified_tier(
+                params.index_name,
+                params.start_date,
+                params.end_date,
+            ) {
+                let sql = format!(
+                    "SELECT query as search, SUM(count) as count, \
+                     CAST(SUM(nb_hits_sum) / NULLIF(SUM(nb_hits_count), 0) AS INTEGER) as \"nbHits\" \
+                     FROM rollups \
+                     WHERE window_start_ms >= {} AND window_start_ms <= {} \
+                     GROUP BY query \
+                     ORDER BY SUM(count) DESC \
+                     LIMIT {}",
+                    start_ms, end_ms, params.limit
+                );
+                let rows = self
+                    .query_rollup_parquet(params.index_name, &tier, &sql)
+                    .await?;
+                return Ok(serde_json::json!({"searches": rows}));
+            }
+        }
+
+        let ctx = self.create_session_with_searches(params.index_name).await?;
         let mut where_clause = format!(
             "timestamp_ms >= {} AND timestamp_ms <= {}",
             start_ms, end_ms
@@ -71,10 +90,51 @@ impl super::AnalyticsQueryEngine {
         start_date: &str,
         end_date: &str,
     ) -> Result<serde_json::Value, String> {
-        let ctx = self.create_session_with_searches(index_name).await?;
         let start_ms = date_to_start_ms(start_date)?;
         let end_ms = date_to_end_ms(end_date)?;
 
+        if let Some(tier) = self.select_uniform_certified_tier(index_name, start_date, end_date) {
+            let total_sql = format!(
+                "SELECT SUM(count) as count FROM rollups \
+                 WHERE window_start_ms >= {} AND window_start_ms <= {}",
+                start_ms, end_ms
+            );
+            let total_rows = self
+                .query_rollup_parquet(index_name, &tier, &total_sql)
+                .await?;
+            let total = total_rows
+                .first()
+                .and_then(|r| r.get("count"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+
+            let daily_sql = format!(
+                "SELECT CAST(window_start_ms / 86400000 * 86400000 AS BIGINT) as day_ms, SUM(count) as count \
+                 FROM rollups \
+                 WHERE window_start_ms >= {} AND window_start_ms <= {} \
+                 GROUP BY day_ms \
+                 ORDER BY day_ms",
+                start_ms, end_ms
+            );
+            let daily_rows = self
+                .query_rollup_parquet(index_name, &tier, &daily_sql)
+                .await?;
+            let dates: Vec<serde_json::Value> = daily_rows
+                .into_iter()
+                .filter_map(|row| {
+                    let ms = row.get("day_ms")?.as_i64()?;
+                    let count = row.get("count")?.as_i64()?;
+                    Some(serde_json::json!({"date": ms_to_date_string(ms), "count": count}))
+                })
+                .collect();
+
+            return Ok(serde_json::json!({
+                "count": total,
+                "dates": dates
+            }));
+        }
+
+        let ctx = self.create_session_with_searches(index_name).await?;
         // Total count
         let total_sql = format!(
             "SELECT COUNT(*) as count FROM searches \

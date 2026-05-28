@@ -5,7 +5,7 @@
     "description": "Drop-in replacement for Algolia search. Provides full-text search with filters, facets, geo-search, and more.",
     "contact": {
       "name": "Flapjack",
-      "url": "https://github.com/gridl-hq/flapjack"
+      "url": "https://github.com/flapjackhq/flapjack"
     },
     "license": {
       "name": "MIT OR Apache-2.0"

@@ -1,0 +1,9 @@
+[package]
+name = "a06_vulnerable_fixture"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+atty = "0.2.14"

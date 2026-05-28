@@ -84,9 +84,16 @@ impl<T: TokenStream> TokenStream for EdgeNgramTokenStream<T> {
             self.current_token = Some(self.inner.token().clone());
 
             let char_count = self.current_token.as_ref().unwrap().text.chars().count();
-            if char_count >= self.min_gram {
+            if char_count < self.min_gram {
+                // Tokens shorter than min_gram are passed through unchanged.
+                // Matches the prior fork-tantivy EdgeNgramFilter behavior so single-char
+                // tokens (e.g. CJK character splits, separators_to_index emissions) still
+                // make it into the _json_search field.
+                self.ngram_token = self.current_token.take().unwrap();
                 self.current_ngram_index = 0;
+                return true;
             }
+            self.current_ngram_index = 0;
         }
     }
 
@@ -128,10 +135,12 @@ mod tests {
     }
 
     #[test]
-    fn ngram_short_word_below_min() {
-        // "ab" with min_gram=3 → no tokens (word too short)
+    fn ngram_short_word_below_min_passes_through() {
+        // "ab" with min_gram=3 → no n-grams of length 3+ are possible, but the
+        // original token is emitted unchanged so single-character CJK splits and
+        // separators_to_index emissions ("+", "#") still reach _json_search.
         let tokens = collect_ngrams("ab", 3, 5);
-        assert!(tokens.is_empty());
+        assert_eq!(tokens, vec!["ab"]);
     }
 
     #[test]

@@ -22,10 +22,22 @@
 
 mod common;
 
+use common::state::make_test_app_state;
 use flapjack::types::Document;
 use flapjack::IndexManager;
 use std::sync::Arc;
 use tempfile::TempDir;
+
+#[test]
+fn test_replication_uses_shared_app_state_constructor_only() {
+    let source = include_str!("test_replication.rs");
+    let pattern = ["Arc::new(", "flapjack_http::handlers::AppState", " {"].concat();
+    let inline_literal_count = source.matches(&pattern).count();
+    assert_eq!(
+        inline_literal_count, 0,
+        "test_replication.rs still contains {inline_literal_count} inline AppState literals; use make_test_app_state instead"
+    );
+}
 
 // ============================================================
 // From test_replication_internal.rs
@@ -46,27 +58,15 @@ async fn test_internal_replicate_no_auth_required() {
     let temp_dir = TempDir::new().unwrap();
     let manager = IndexManager::new(temp_dir.path());
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager,
-        key_store: None,
-        replication_manager: None,
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp_dir.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp_dir.path(),
+        Some(manager.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let internal = Router::new()
         .route(
@@ -112,27 +112,15 @@ async fn test_internal_get_ops_no_auth_required() {
     let doc = Document::from_json(&serde_json::json!({"_id": "1", "title": "Test"})).unwrap();
     manager.add_documents_sync("test", vec![doc]).await.unwrap();
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager,
-        key_store: None,
-        replication_manager: None,
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp_dir.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp_dir.path(),
+        Some(manager.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let internal = Router::new()
         .route(
@@ -174,27 +162,15 @@ async fn test_internal_tenants_no_auth_required() {
     std::fs::create_dir_all(temp_dir.path().join(".hidden-tenant")).unwrap();
     std::fs::write(temp_dir.path().join("not-a-directory.txt"), "ignore-me").unwrap();
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager,
-        key_store: None,
-        replication_manager: None,
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp_dir.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp_dir.path(),
+        Some(manager.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let internal = Router::new()
         .route(
@@ -251,27 +227,15 @@ async fn test_internal_tenant_isolation() {
         .await
         .unwrap();
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager,
-        key_store: None,
-        replication_manager: None,
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp_dir.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp_dir.path(),
+        Some(manager.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let internal = Router::new()
         .route(
@@ -532,27 +496,15 @@ async fn test_replicate_ops_handler_applies_correctly() {
     let temp_dir = TempDir::new().unwrap();
     let manager = IndexManager::new(temp_dir.path());
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager.clone(),
-        key_store: None,
-        replication_manager: None,
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp_dir.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp_dir.path(),
+        Some(manager.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let internal = Router::new()
         .route(
@@ -621,27 +573,15 @@ async fn test_apply_ops_to_manager_upsert() {
     let temp = TempDir::new().unwrap();
     let manager = IndexManager::new(temp.path());
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager.clone(),
-        key_store: None,
-        replication_manager: None,
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp.path(),
+        Some(manager.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let router = Router::new()
         .route(
@@ -716,27 +656,15 @@ async fn test_cluster_status_no_replication() {
     let temp = TempDir::new().unwrap();
     let manager = IndexManager::new(temp.path());
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager.clone(),
-        key_store: None,
-        replication_manager: None,
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp.path(),
+        Some(manager.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let router = Router::new()
         .route(
@@ -795,27 +723,15 @@ async fn test_cluster_status_with_peers() {
         None,
     );
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager.clone(),
-        key_store: None,
-        replication_manager: Some(repl_mgr),
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp.path(),
+        Some(manager.clone()),
+        None,
+        Some(repl_mgr),
+        None,
+        None,
+        None,
+    );
 
     let router = Router::new()
         .route(
@@ -870,27 +786,15 @@ async fn test_startup_catchup_noop_without_replication() {
         .await
         .unwrap();
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager.clone(),
-        key_store: None,
-        replication_manager: None, // No replication configured
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp.path(),
+        Some(manager.clone()),
+        None,
+        None, // No replication configured
+        None,
+        None,
+        None,
+    );
 
     // Both the legacy and pre-serve paths should complete without error
     // and not corrupt existing data when replication is not configured.
@@ -922,27 +826,15 @@ async fn test_apply_ops_upsert_then_delete_ordering() {
     let temp = TempDir::new().unwrap();
     let manager = IndexManager::new(temp.path());
 
-    let state = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager.clone(),
-        key_store: None,
-        replication_manager: None,
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            temp.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state = make_test_app_state(
+        temp.path(),
+        Some(manager.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 
     let router = Router::new()
         .route(
@@ -1800,8 +1692,23 @@ async fn test_two_node_startup_catchup_via_get_ops() {
         .expect("catch_up_from_peer should succeed: node-a is reachable");
 
     assert!(
-        !ops.is_empty(),
-        "Should have received oplog entries from node-a"
+        ops.len() >= 2,
+        "expected at least two oplog entries from node-a, got {}",
+        ops.len()
+    );
+    let unique_seq_count = ops
+        .iter()
+        .map(|op| op.seq)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    assert_eq!(
+        unique_seq_count,
+        ops.len(),
+        "startup catch-up oplog entries must have unique sequence ids"
+    );
+    assert!(
+        ops.iter().all(|op| op.tenant_id == "catchup"),
+        "startup catch-up should only return ops for tenant catchup"
     );
 
     flapjack_http::handlers::internal::apply_ops_to_manager(&manager_b, "catchup", &ops)
@@ -1947,6 +1854,21 @@ async fn test_restart_catches_up_before_serving() {
         hits, 20,
         "Restarted node B should have all 20 docs immediately after health check; got {}",
         hits
+    );
+    let object_ids: std::collections::BTreeSet<String> = search_result["hits"]
+        .as_array()
+        .expect("search response should include hits array")
+        .iter()
+        .filter_map(|hit| hit["objectID"].as_str().map(|value| value.to_string()))
+        .collect();
+    assert_eq!(
+        object_ids.len(),
+        20,
+        "restarted node should expose all expected objectIDs after catch-up"
+    );
+    assert!(
+        (1..=20).all(|i| object_ids.contains(&format!("doc-{i}"))),
+        "restarted node should include full doc-1..doc-20 range after catch-up"
     );
 
     // Cleanup: stop both nodes.
@@ -2557,27 +2479,15 @@ async fn test_periodic_sync_pulls_missed_ops_from_peer() {
         None,
     );
 
-    let state_b = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager_b.clone(),
-        key_store: None,
-        replication_manager: Some(repl_mgr_b),
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            tmp_b.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state_b = make_test_app_state(
+        tmp_b.path(),
+        Some(manager_b.clone()),
+        None,
+        Some(repl_mgr_b),
+        None,
+        None,
+        None,
+    );
 
     // 4. Run periodic catchup — should pull missed ops from node-a
     flapjack_http::startup_catchup::run_periodic_catchup(Arc::clone(&state_b)).await;
@@ -2667,27 +2577,15 @@ async fn test_periodic_sync_catches_up_multiple_tenants() {
         None,
     );
 
-    let state_b = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager_b.clone(),
-        key_store: None,
-        replication_manager: Some(repl_mgr_b),
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            tmp_b.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state_b = make_test_app_state(
+        tmp_b.path(),
+        Some(manager_b.clone()),
+        None,
+        Some(repl_mgr_b),
+        None,
+        None,
+        None,
+    );
 
     flapjack_http::startup_catchup::run_periodic_catchup(Arc::clone(&state_b)).await;
 
@@ -2762,27 +2660,15 @@ async fn test_periodic_sync_discovers_peer_only_tenant() {
         None,
     );
 
-    let state_b = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager_b.clone(),
-        key_store: None,
-        replication_manager: Some(repl_mgr_b),
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            tmp_b.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state_b = make_test_app_state(
+        tmp_b.path(),
+        Some(manager_b.clone()),
+        None,
+        Some(repl_mgr_b),
+        None,
+        None,
+        None,
+    );
 
     flapjack_http::startup_catchup::run_periodic_catchup(Arc::clone(&state_b)).await;
 
@@ -2849,27 +2735,15 @@ async fn test_spawn_periodic_sync_fires_within_interval() {
         None,
     );
 
-    let state_b = Arc::new(flapjack_http::handlers::AppState {
-        manager: manager_b.clone(),
-        key_store: None,
-        replication_manager: Some(repl_mgr_b),
-        ssl_manager: None,
-        analytics_engine: None,
-        recommend_config: Default::default(),
-        dictionary_manager: Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
-            tmp_b.path(),
-        )),
-        metrics_state: None,
-        usage_counters: std::sync::Arc::new(dashmap::DashMap::new()),
-        paused_indexes: flapjack_http::pause_registry::PausedIndexes::new(),
-        usage_persistence: None,
-        geoip_reader: None,
-        notification_service: None,
-        start_time: std::time::Instant::now(),
-        conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
-        experiment_store: None,
-        embedder_store: std::sync::Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
-    });
+    let state_b = make_test_app_state(
+        tmp_b.path(),
+        Some(manager_b.clone()),
+        None,
+        Some(repl_mgr_b),
+        None,
+        None,
+        None,
+    );
 
     // Spawn periodic sync with 1s interval
     flapjack_http::startup_catchup::spawn_periodic_sync(Arc::clone(&state_b), 1);

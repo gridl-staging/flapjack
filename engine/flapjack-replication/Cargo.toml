@@ -1,10 +1,10 @@
 [package]
 name = "flapjack-replication"
-version = "1.0.0"
+version = "1.0.2"
 edition = "2021"
 
 [dependencies]
-flapjack = { path = ".." }
+flapjack = { path = "..", default-features = false }
 dashmap = "6.0"
 tokio = { version = "1.35", features = ["macros", "rt-multi-thread", "sync", "time"] }
 serde = { version = "1.0", features = ["derive"] }

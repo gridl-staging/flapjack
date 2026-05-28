@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 API="${FJ_API_BASE:-http://localhost:7700}"
-KEY="${FLAPJACK_ADMIN_KEY:-fj_devtestadminkey000000}"
+KEY="${FLAPJACK_ADMIN_KEY:-}"
 HDR=(-H "Content-Type: application/json" -H "x-algolia-api-key: $KEY" -H "x-algolia-application-id: flapjack")
 IDX="cli_smoke_$$_$(date +%s)"
 
@@ -29,7 +29,18 @@ FJ_TMP=""
 pass() { echo "  ✅ $1"; PASSED=$((PASSED + 1)); }
 fail() { echo "  ❌ $1: $2"; FAILED=$((FAILED + 1)); }
 
+generate_admin_key() {
+  local random_hex=""
+  random_hex="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [ -n "$random_hex" ] || {
+    echo "ERROR: failed to generate a random admin key from /dev/urandom" >&2
+    exit 1
+  }
+  printf 'fj_cli_smoke_%s\n' "$random_hex"
+}
+
 cleanup() {
+  local script_exit_code=$?
   # Delete test index
   curl -sf -X DELETE "$API/1/indexes/$IDX" "${HDR[@]}" > /dev/null 2>&1 || true
   # Stop server if we started it
@@ -38,7 +49,13 @@ cleanup() {
     wait "$FJ_PID" 2>/dev/null || true
   fi
   if [ -n "$FJ_TMP" ]; then
-    rm -rf "$FJ_TMP"
+    if [ "$FAILED" -gt 0 ] || [ "$script_exit_code" -ne 0 ]; then
+      local failure_snapshot="/tmp/flapjack_cli_smoke_failure_${$}_$(date +%s)"
+      cp -R "$FJ_TMP" "$failure_snapshot"
+      echo "INFO: preserved cli smoke failure data at $failure_snapshot"
+    else
+      rm -rf "$FJ_TMP"
+    fi
   fi
 }
 trap cleanup EXIT
@@ -46,6 +63,10 @@ trap cleanup EXIT
 # ── Start server (unless already running) ─────────────────────────────────────
 
 if [ "${FJ_ALREADY_RUNNING:-}" != "true" ]; then
+  if [ -z "$KEY" ]; then
+    KEY="$(generate_admin_key)"
+    HDR=(-H "Content-Type: application/json" -H "x-algolia-api-key: $KEY" -H "x-algolia-application-id: flapjack")
+  fi
   echo "=== Building flapjack binary ==="
   cd "$ENGINE_DIR"
   mkdir -p dashboard/dist && [ -f dashboard/dist/index.html ] || echo '<html></html>' > dashboard/dist/index.html

@@ -1,25 +1,20 @@
 <p align="center">
-  <a href="https://www.flapjack.com">
-    <img alt="Flapjack for JavaScript" src="https://raw.githubusercontent.com/flapjackhq/flapjack-search-client-common/master/banners/javascript.png" >
-  </a>
-
-  <h4 align="center">The perfect starting point to integrate <a href="https://flapjack.com" target="_blank">Flapjack</a> within your JavaScript project</h4>
+  <h4 align="center">The perfect starting point to integrate <a href=https://flapjack.com target="_blank">Flapjack</a> within your JavaScript project</h4>
 
   <p align="center">
-    <a href="https://npmjs.com/package/flapjack-search"><img src="https://img.shields.io/npm/v/flapjack-search.svg?style=flat-square" alt="NPM version"></img></a>
-    <a href="http://npm-stat.com/charts.html?package=flapjack-search"><img src="https://img.shields.io/npm/dm/flapjack-search.svg?style=flat-square" alt="NPM downloads"></a>
-    <a href="https://www.jsdelivr.com/package/npm/flapjack-search"><img src="https://data.jsdelivr.com/v1/package/npm/flapjack-search/badge" alt="jsDelivr Downloads"></img></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License"></a>
+    <a href=https://registry.npmjs.org/flapjack-search/latest><img src=https://img.shields.io/npm/v/flapjack-search.svg?style=flat-square alt="NPM version"></img></a>
+    <a href=https://npm-stat.com/charts.html?package=flapjack-search><img src=https://img.shields.io/npm/dm/flapjack-search.svg?style=flat-square alt="NPM downloads"></a>
+    <a href=https://www.jsdelivr.com/package/npm/flapjack-search><img src=https://data.jsdelivr.com/v1/package/npm/flapjack-search/badge alt="jsDelivr Downloads"></img></a>
+    <a href="LICENSE"><img src=https://img.shields.io/badge/license-MIT-green.svg?style=flat-square alt="License"></a>
   </p>
 </p>
 
 <p align="center">
-  <a href="https://www.flapjack.com/doc/libraries/sdk/install#javascript" target="_blank">Documentation</a>  •
-  <a href="https://www.flapjack.com/doc/guides/building-search-ui/what-is-instantsearch/js/" target="_blank">InstantSearch</a>  •
-  <a href="https://discourse.flapjack.com" target="_blank">Community Forum</a>  •
-  <a href="http://stackoverflow.com/questions/tagged/flapjack" target="_blank">Stack Overflow</a>  •
-  <a href="https://github.com/flapjackhq/flapjack-search-client-javascript/issues" target="_blank">Report a bug</a>  •
-  <a href="https://flapjack.com/support" target="_blank">Support</a>
+  <a href=https://github.com/gridl-staging/flapjack-search-javascript#readme target="_blank">Documentation</a>  •
+  <a href=https://github.com/gridl-staging/flapjack-search-javascript/blob/main/MIGRATION.md target="_blank">Migration Guide</a>  •
+  <a href=https://github.com/gridl-staging/flapjack-search-javascript/issues target="_blank">Support</a>  •
+  <a href=https://github.com/gridl-staging/flapjack-search-javascript/issues/new target="_blank">Open an issue</a>  •
+  <a href=https://github.com/gridl-staging/flapjack-search-javascript/issues target="_blank">Report a bug</a>
 </p>
 
 ## ✨ Features
@@ -49,7 +44,7 @@ pnpm add flapjack-search@beta
 Add the following JavaScript snippet to the <head> of your website:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/flapjack-search@beta/dist/flapjack-search.umd.js"></script>
+<script src=https://cdn.jsdelivr.net/npm/flapjack-search/dist/browser.min.js></script>
 ```
 
 ### Usage
@@ -87,7 +82,7 @@ search.addWidgets([searchBox({ container: '#search' }), hits({ container: '#hits
 search.start();
 ```
 
-Works with React InstantSearch, Vue InstantSearch, and Autocomplete.js too. See the [migration guide](https://github.com/flapjackhq/flapjack-search-javascript/blob/main/MIGRATION.md) for details.
+Works with React InstantSearch, Vue InstantSearch, and Autocomplete.js too. See the [migration guide](https://github.com/gridl-staging/flapjack-search-javascript/blob/main/MIGRATION.md) for details.
 
 ### Migrating from Algolia?
 
@@ -100,7 +95,7 @@ Switching takes about 5 minutes:
 
 ## ❓ Troubleshooting
 
-Encountering an issue? [Open a GitHub issue](https://github.com/flapjackhq/flapjack-search-javascript/issues/new) and we'll help.
+Encountering an issue? [Open a GitHub issue](https://github.com/gridl-staging/flapjack-search-javascript/issues/new) and we'll help.
 
 ## 📄 License
 

@@ -114,6 +114,24 @@ mod tests {
     }
 
     #[test]
+    fn classify_task_poll_response_rejects_malformed_payloads() {
+        let outcome = classify_task_poll_response(
+            7,
+            &json!({
+                "error": "missing task fields"
+            }),
+        );
+
+        match outcome {
+            TaskPollOutcome::TerminalFailure(message) => {
+                assert!(message.contains("malformed task payload"));
+                assert!(message.contains("missing task fields"));
+            }
+            other => panic!("expected malformed payload failure, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn transient_task_poll_transport_errors_are_retryable() {
         assert!(is_transient_task_poll_transport_error(
             "failed reading response from 127.0.0.1:44051: Resource temporarily unavailable (os error 11)"
@@ -276,6 +294,24 @@ impl Drop for RunningServer {
     }
 }
 
+/// Boot the auth-enabled server on an auto-assigned port, wait until it is
+/// serving `/health`, then stop it. Extra env vars let startup-path tests
+/// exercise one-shot boot behavior without relying on fixed sleep/timeout
+/// windows.
+pub(crate) fn run_auth_auto_port_startup_once(data_dir: &str, extra_env: &[(&str, &str)]) {
+    let mut child = spawn_flapjack_auto_port_process_with_env(
+        data_dir,
+        false,
+        extra_env,
+        Stdio::piped(),
+        Stdio::piped(),
+    );
+    let bind_addr = wait_for_startup_bind_addr(&mut child, AUTO_PORT_STARTUP_TIMEOUT);
+    wait_for_health(&bind_addr, AUTO_PORT_HEALTH_TIMEOUT);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub(crate) struct HttpResponse {
     pub(crate) status: u16,
     pub(crate) body: String,
@@ -287,7 +323,17 @@ pub(crate) fn spawn_flapjack_auto_port_process(
     stdout: Stdio,
     stderr: Stdio,
 ) -> Child {
-    spawn_flapjack_process(data_dir, no_auth, None, stdout, stderr)
+    spawn_flapjack_auto_port_process_with_env(data_dir, no_auth, &[], stdout, stderr)
+}
+
+fn spawn_flapjack_auto_port_process_with_env(
+    data_dir: &str,
+    no_auth: bool,
+    extra_env: &[(&str, &str)],
+    stdout: Stdio,
+    stderr: Stdio,
+) -> Child {
+    spawn_flapjack_process_with_env(data_dir, no_auth, None, extra_env, stdout, stderr)
 }
 
 pub(crate) fn add_documents_batch_at(bind_addr: &str, index_name: &str, payload: Value) -> i64 {
@@ -362,6 +408,17 @@ fn spawn_flapjack_process(
     stdout: Stdio,
     stderr: Stdio,
 ) -> Child {
+    spawn_flapjack_process_with_env(data_dir, no_auth, bind_addr, &[], stdout, stderr)
+}
+
+fn spawn_flapjack_process_with_env(
+    data_dir: &str,
+    no_auth: bool,
+    bind_addr: Option<&str>,
+    extra_env: &[(&str, &str)],
+    stdout: Stdio,
+    stderr: Stdio,
+) -> Child {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_flapjack"));
     if no_auth {
         command.arg("--no-auth");
@@ -375,6 +432,7 @@ fn spawn_flapjack_process(
     command
         .arg("--data-dir")
         .arg(data_dir)
+        .envs(extra_env.iter().copied())
         .stdout(stdout)
         .stderr(stderr)
         .spawn()
@@ -534,6 +592,12 @@ fn classify_task_poll_response(task_id: i64, body: &Value) -> TaskPollOutcome {
 
     if status == Some("published") && pending_task == Some(false) {
         return TaskPollOutcome::Published;
+    }
+
+    if status.is_none() || pending_task.is_none() {
+        return TaskPollOutcome::TerminalFailure(format!(
+            "task {task_id} returned malformed task payload: {body}"
+        ));
     }
 
     let terminal_status = matches!(status, Some("failed" | "canceled" | "cancelled"));

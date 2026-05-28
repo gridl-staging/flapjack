@@ -1,6 +1,6 @@
 # Flapjack Search Dart Client
 
-Official Dart/Flutter client for the [Flapjack Search API](https://github.com/flapjackhq).
+Official Dart/Flutter client for the [Flapjack Search API](https://github.com/gridl-staging).
 
 Drop-in replacement for `algoliasearch` Dart package. Algolia-compatible REST API with Flapjack-native host routing.
 

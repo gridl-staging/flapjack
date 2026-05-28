@@ -56,6 +56,9 @@ _dev/demo-dualclient/public/openapi.json
 # Logs
 logs
 *.log
+!tests/results/security_audit_a06_red_baseline.log
+!tests/results/security_audit_a07_red_baseline.log
+!tests/results/security_audit_a08_red_baseline.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -102,12 +105,16 @@ docs2/3_IMPLEMENTATION/*
 !docs2/3_IMPLEMENTATION/OPERATIONS.md
 !docs2/3_IMPLEMENTATION/OPS_CONFIGURATION.md
 !docs2/3_IMPLEMENTATION/SECURITY_BASELINE.md
+!docs2/3_IMPLEMENTATION/DISASTER_RECOVERY.md
 !docs2/3_IMPLEMENTATION/VECTOR_SEARCH_QUICKSTART.md
 !docs2/3_IMPLEMENTATION/decisions/
 docs2/3_IMPLEMENTATION/decisions/*
 !docs2/3_IMPLEMENTATION/decisions/active/
 docs2/3_IMPLEMENTATION/decisions/active/*
 !docs2/3_IMPLEMENTATION/decisions/active/0002_memory_safety_enforced.md
+!docs2/3_IMPLEMENTATION/decisions/active/0003_search_ha_ownership_freshness.md
+!docs2/3_IMPLEMENTATION/decisions/active/0004_ha_convergence_reversal.md
+!docs2/3_IMPLEMENTATION/decisions/active/0005_nginx_restart_window_write_recovery.md
 docs2/6_TODO/
 docs2/Checklists/
 docs2/integrations/handoffs/

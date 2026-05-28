@@ -1,5 +1,6 @@
 use flapjack::index::oplog::OpLogEntry;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Request to replicate operations to a peer
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +31,8 @@ pub struct GetOpsResponse {
     pub current_seq: u64, // Latest sequence number on this node
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oldest_retained_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub node_current_seqs: BTreeMap<String, u64>,
 }
 
 /// Response containing tenant IDs available on a peer node.

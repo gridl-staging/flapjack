@@ -85,7 +85,7 @@ fn build_test_router_with_state_for_data_dir(
         key_store,
         analytics_collector,
         trusted_proxy_matcher,
-        CorsMode::Permissive,
+        CorsMode::LoopbackOnly,
         data_dir,
     );
 
@@ -257,7 +257,7 @@ async fn build_router_does_not_log_trusted_proxy_initialization() {
     );
 }
 #[tokio::test]
-async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_permissive_modes() {
+async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_loopback_modes() {
     let restricted_router = Router::new()
         .route("/cors", post(|| async { axum::http::StatusCode::OK }))
         .layer(build_cors_layer(&CorsMode::Restricted(vec![
@@ -283,15 +283,15 @@ async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_permiss
         .and_then(|value| value.to_str().ok());
     assert_eq!(restricted_origin, Some("https://allowed.example"));
 
-    let permissive_router = Router::new()
+    let loopback_router = Router::new()
         .route("/cors", post(|| async { axum::http::StatusCode::OK }))
-        .layer(build_cors_layer(&CorsMode::Permissive));
-    let permissive_response = permissive_router
+        .layer(build_cors_layer(&CorsMode::LoopbackOnly));
+    let loopback_response = loopback_router
         .oneshot(
             Request::builder()
                 .method(Method::OPTIONS)
                 .uri("/cors")
-                .header("origin", "https://allowed.example")
+                .header("origin", "http://127.0.0.1:5173")
                 .header("access-control-request-method", "POST")
                 .header("access-control-request-headers", "content-type")
                 .body(Body::empty())
@@ -299,11 +299,40 @@ async fn cors_preflight_returns_expected_allow_origin_for_restricted_and_permiss
         )
         .await
         .unwrap();
-    let permissive_origin = permissive_response
+    let loopback_origin = loopback_response
         .headers()
         .get("access-control-allow-origin")
         .and_then(|value| value.to_str().ok());
-    assert_eq!(permissive_origin, Some("https://allowed.example"));
+    assert_eq!(loopback_origin, Some("http://127.0.0.1:5173"));
+}
+
+#[tokio::test]
+async fn cors_preflight_blocks_non_loopback_origins_in_loopback_mode() {
+    let app = Router::new()
+        .route("/cors", post(|| async { axum::http::StatusCode::OK }))
+        .layer(build_cors_layer(&CorsMode::LoopbackOnly));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/cors")
+                .header("origin", "https://app.example.com")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none(),
+        "non-loopback origin should not receive access-control-allow-origin in default mode"
+    );
 }
 #[tokio::test]
 async fn cors_preflight_rejects_blocked_origins_in_restricted_mode() {

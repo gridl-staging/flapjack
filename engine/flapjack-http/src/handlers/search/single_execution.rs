@@ -89,8 +89,8 @@ fn prepare_search_params(
     effective_index: &str,
     req: &mut SearchRequest,
     has_personalization: bool,
-) -> PreparedSearchParams {
-    let filter = req.build_combined_filter();
+) -> Result<PreparedSearchParams, FlapjackError> {
+    let filter = req.build_combined_filter()?;
     let sort = resolve_search_sort(req);
     let loaded_settings = state.manager.get_settings(effective_index);
     let facet_requests = build_facet_requests(req, loaded_settings.as_deref());
@@ -115,7 +115,7 @@ fn prepare_search_params(
     let all_query_words_optional = apply_similar_query_override(req);
     normalize_query_languages(req);
 
-    PreparedSearchParams {
+    Ok(PreparedSearchParams {
         filter,
         sort,
         loaded_settings,
@@ -136,7 +136,7 @@ fn prepare_search_params(
         all_query_words_optional,
         should_window_for_personalization: search_window.should_window_for_personalization,
         is_hybrid_active: false, // set by execute_core_search
-    }
+    })
 }
 
 /// Carries all state needed to run the synchronous search pipeline on a blocking
@@ -188,7 +188,7 @@ fn search_single_sync(
         &effective_index,
         &mut req,
         personalization_ctx.is_some(),
-    );
+    )?;
 
     let (mut result, experiment_ctx, is_interleaving) = execute_core_search(CoreSearchContext {
         state: &state,

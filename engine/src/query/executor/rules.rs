@@ -66,7 +66,7 @@ impl QueryExecutor {
                     };
                 let top_docs = searcher.search(
                     lookup_query.as_ref(),
-                    &tantivy::collector::TopDocs::with_limit(1),
+                    &tantivy::collector::TopDocs::with_limit(1).order_by_score(),
                 )?;
 
                 if !top_docs.is_empty() {

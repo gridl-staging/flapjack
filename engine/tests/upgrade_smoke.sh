@@ -30,6 +30,7 @@ OLD_LOG=""
 NEW_LOG=""
 OLD_PID=""
 NEW_PID=""
+INTERRUPTED_EXIT_CODE=0
 
 pass() {
   printf 'PASS: %s\n' "$1"
@@ -49,6 +50,11 @@ fail() {
 }
 
 cleanup() {
+  local script_exit_code=$?
+  local effective_exit_code="$script_exit_code"
+  if [ "$INTERRUPTED_EXIT_CODE" -ne 0 ]; then
+    effective_exit_code="$INTERRUPTED_EXIT_CODE"
+  fi
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
     kill "$OLD_PID" 2>/dev/null || true
     wait "$OLD_PID" 2>/dev/null || true
@@ -58,7 +64,13 @@ cleanup() {
     wait "$NEW_PID" 2>/dev/null || true
   fi
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
-    rm -rf "$TMP_DIR"
+    if [ "$effective_exit_code" -ne 0 ]; then
+      local failure_snapshot="/tmp/flapjack_upgrade_smoke_failure_${$}_$(date +%s)"
+      cp -R "$TMP_DIR" "$failure_snapshot"
+      printf 'INFO: preserved upgrade smoke data at %s\n' "$failure_snapshot"
+    else
+      rm -rf "$TMP_DIR"
+    fi
   fi
 }
 
@@ -245,7 +257,7 @@ main() {
 }
 
 trap cleanup EXIT
-trap 'cleanup; exit 130' INT
-trap 'cleanup; exit 143' TERM
+trap 'INTERRUPTED_EXIT_CODE=130; cleanup; exit 130' INT
+trap 'INTERRUPTED_EXIT_CODE=143; cleanup; exit 143' TERM
 
 main "$@"

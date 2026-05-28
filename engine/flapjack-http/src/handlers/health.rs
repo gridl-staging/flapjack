@@ -12,29 +12,28 @@ use super::AppState;
         (status = 200, description = "Server is healthy", body = serde_json::Value)
     )
 )]
-pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+pub async fn health(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let budget = flapjack::get_global_budget();
     let observer = flapjack::MemoryObserver::global();
     let mem_stats = observer.stats();
 
     Json(serde_json::json!({
         "status": "ok",
-        "active_writers": budget.active_writers(),
-        "max_concurrent_writers": budget.max_concurrent_writers(),
-        "facet_cache_entries": state.manager.facet_cache.len(),
-        "facet_cache_cap": state.manager.facet_cache_cap.load(std::sync::atomic::Ordering::Relaxed),
-        "heap_allocated_mb": mem_stats.heap_allocated_bytes / (1024 * 1024),
-        "system_limit_mb": mem_stats.system_limit_bytes / (1024 * 1024),
-        "pressure_level": mem_stats.pressure_level.to_string(),
-        "allocator": mem_stats.allocator,
-        "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_secs": _state.start_time.elapsed().as_secs(),
         "capabilities": {
             "vectorSearch": cfg!(feature = "vector-search"),
             "vectorSearchLocal": cfg!(feature = "vector-search-local"),
         },
-        "tenants_loaded": state.manager.loaded_count(),
-        "uptime_secs": state.start_time.elapsed().as_secs(),
-        "version": env!("CARGO_PKG_VERSION"),
+        "active_writers": budget.active_writers(),
+        "max_concurrent_writers": budget.max_concurrent_writers(),
+        "facet_cache_entries": _state.manager.facet_cache.len(),
+        "facet_cache_cap": _state.manager.facet_cache_cap.load(std::sync::atomic::Ordering::Relaxed),
+        "heap_allocated_mb": mem_stats.heap_allocated_bytes / (1024 * 1024),
+        "system_limit_mb": mem_stats.system_limit_bytes / (1024 * 1024),
+        "pressure_level": mem_stats.pressure_level.to_string(),
+        "allocator": mem_stats.allocator,
+        "tenants_loaded": _state.manager.loaded_count(),
     }))
 }
 
@@ -46,6 +45,7 @@ mod tests {
     use axum::http::Request;
     use axum::routing::get;
     use axum::Router;
+    use std::collections::HashSet;
     use tempfile::TempDir;
     use tower::ServiceExt;
 
@@ -72,9 +72,9 @@ mod tests {
         serde_json::from_slice(&body).unwrap()
     }
 
-    /// Verify the health endpoint reflects the correct `tenants_loaded` count after creating tenants.
+    /// Verify the public health contract keeps required compatibility fields.
     #[tokio::test]
-    async fn health_includes_tenants_loaded() {
+    async fn health_keeps_required_compatibility_fields() {
         let tmp = TempDir::new().unwrap();
         let state = TestStateBuilder::new(&tmp).build_shared();
         state.manager.create_tenant("t1").unwrap();
@@ -82,73 +82,68 @@ mod tests {
 
         let json = request_health_json(state).await;
 
-        assert_eq!(json["tenants_loaded"].as_u64().unwrap(), 2);
-    }
-
-    /// Verify the health endpoint returns an `uptime_secs` field.
-    #[tokio::test]
-    async fn health_includes_uptime_secs() {
-        let tmp = TempDir::new().unwrap();
-        let state = TestStateBuilder::new(&tmp).build_shared();
-
-        let json = request_health_json(state).await;
-
-        assert!(
-            json["uptime_secs"].as_u64().is_some(),
-            "should have uptime_secs field"
-        );
-    }
-    #[tokio::test]
-    async fn health_capabilities_schema_stable() {
-        let tmp = TempDir::new().unwrap();
-        let state = TestStateBuilder::new(&tmp).build_shared();
-
-        let json = request_health_json(state).await;
-
-        let caps = &json["capabilities"];
-        assert!(caps.is_object(), "capabilities must be a JSON object");
-        assert!(
-            caps["vectorSearch"].is_boolean(),
-            "capabilities.vectorSearch must be a bool"
-        );
-        assert!(
-            caps["vectorSearchLocal"].is_boolean(),
-            "capabilities.vectorSearchLocal must be a bool"
-        );
-    }
-    #[tokio::test]
-    async fn health_capabilities_vector_search_matches_feature() {
-        let tmp = TempDir::new().unwrap();
-        let state = TestStateBuilder::new(&tmp).build_shared();
-
-        let json = request_health_json(state).await;
-
-        let caps = &json["capabilities"];
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+        assert!(json["active_writers"].is_number());
+        assert!(json["max_concurrent_writers"].is_number());
+        assert!(json["facet_cache_entries"].is_number());
+        assert!(json["facet_cache_cap"].is_number());
+        assert!(json["heap_allocated_mb"].is_number());
+        assert!(json["system_limit_mb"].is_number());
+        assert!(json["pressure_level"].is_string());
+        assert!(json["allocator"].is_string());
+        assert!(json["uptime_secs"].is_number());
         assert_eq!(
-            caps["vectorSearch"].as_bool().unwrap(),
-            cfg!(feature = "vector-search"),
-            "vectorSearch must match cfg!(feature = \"vector-search\")"
+            json["capabilities"],
+            serde_json::json!({
+                "vectorSearch": cfg!(feature = "vector-search"),
+                "vectorSearchLocal": cfg!(feature = "vector-search-local"),
+            })
         );
-        assert_eq!(
-            caps["vectorSearchLocal"].as_bool().unwrap(),
-            cfg!(feature = "vector-search-local"),
-            "vectorSearchLocal must match cfg!(feature = \"vector-search-local\")"
-        );
+        assert_eq!(json["tenants_loaded"], serde_json::json!(2));
     }
 
-    /// Verify the health endpoint returns a `version` field matching `CARGO_PKG_VERSION`.
+    /// Verify public /health does not expose build/debug internals.
     #[tokio::test]
-    async fn health_includes_version() {
+    async fn health_hides_build_and_debug_fields() {
         let tmp = TempDir::new().unwrap();
         let state = TestStateBuilder::new(&tmp).build_shared();
 
         let json = request_health_json(state).await;
-
-        let version = json["version"].as_str().unwrap();
+        let actual_keys: HashSet<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected_keys: HashSet<&str> = [
+            "status",
+            "version",
+            "uptime_secs",
+            "capabilities",
+            "active_writers",
+            "max_concurrent_writers",
+            "facet_cache_entries",
+            "facet_cache_cap",
+            "heap_allocated_mb",
+            "system_limit_mb",
+            "pressure_level",
+            "allocator",
+            "tenants_loaded",
+        ]
+        .into_iter()
+        .collect();
         assert_eq!(
-            version,
-            env!("CARGO_PKG_VERSION"),
-            "version should match CARGO_PKG_VERSION"
+            actual_keys, expected_keys,
+            "public /health must keep an exact allowlist contract"
         );
+
+        let disallowed_fields = ["build_profile"];
+        for field in disallowed_fields {
+            assert!(
+                json.get(field).is_none(),
+                "public /health must not expose operational field: {field}"
+            );
+        }
     }
 }

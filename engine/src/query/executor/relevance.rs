@@ -38,8 +38,10 @@ impl QueryExecutor {
             limit + offset
         };
 
-        let (total, mut top_docs) =
-            searcher.search(query.as_ref(), &(Count, TopDocs::with_limit(prelim_limit)))?;
+        let (total, mut top_docs) = searcher.search(
+            query.as_ref(),
+            &(Count, TopDocs::with_limit(prelim_limit).order_by_score()),
+        )?;
         let tr1 = tr0.elapsed();
 
         let query_terms: Vec<String> = self

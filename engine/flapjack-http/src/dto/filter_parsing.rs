@@ -1,4 +1,5 @@
 //! Algolia-compatible filter AST conversion for facet, numeric, and tag filter arrays.
+use flapjack::error::FlapjackError;
 use flapjack::types::{FieldValue, Filter};
 
 /// Parse a single Algolia facet filter expression (e.g. `"brand:Nike"` or `"-brand:Nike"`) into a `Filter` AST node.
@@ -193,15 +194,18 @@ pub(crate) fn tag_filters_to_ast(value: &serde_json::Value) -> Option<Filter> {
 impl super::SearchRequest {
     /// Merge `filters`, `facet_filters`, `numeric_filters`, and `tag_filters` into a single `Filter` AST.
     ///
-    /// Each source is parsed independently; results are AND-ed together. Invalid or unparseable
-    /// sources are silently skipped. Returns `None` when no valid filters are present.
-    pub fn build_combined_filter(&self) -> Option<Filter> {
+    /// Each source is parsed independently; results are AND-ed together. The raw
+    /// `filters` string is fail-closed: malformed input returns `InvalidQuery`
+    /// instead of being silently dropped into an unfiltered search. Returns
+    /// `Ok(None)` when no valid filters are present.
+    pub fn build_combined_filter(&self) -> Result<Option<Filter>, FlapjackError> {
         let mut parts: Vec<Filter> = Vec::new();
 
         if let Some(ref filter_str) = self.filters {
-            if let Ok(f) = crate::filter_parser::parse_filter(filter_str) {
-                parts.push(f);
-            }
+            let parsed = crate::filter_parser::parse_filter(filter_str).map_err(|error| {
+                FlapjackError::InvalidQuery(format!("Filter parse error: {error}"))
+            })?;
+            parts.push(parsed);
         }
 
         if let Some(ref ff) = self.facet_filters {
@@ -223,9 +227,9 @@ impl super::SearchRequest {
         }
 
         match parts.len() {
-            0 => None,
-            1 => Some(parts.remove(0)),
-            _ => Some(Filter::And(parts)),
+            0 => Ok(None),
+            1 => Ok(Some(parts.remove(0))),
+            _ => Ok(Some(Filter::And(parts))),
         }
     }
 }

@@ -12,6 +12,13 @@ Self-hosted, Algolia-compatible search engine. Drop-in replacement for Algolia's
 - Maintains Algolia-compatible route semantics and REST wire format.
 - Works with existing `algoliasearch` SDKs and InstantSearch.js clients without API shape changes.
 
+## Workspace ownership
+
+- `src/` (`flapjack` crate): core index/query/analytics/vector library logic.
+- `flapjack-http/` (`flapjack-http` crate): Axum router, middleware, and handler modules (`handlers/mod.rs` owns `AppState` shared request state).
+- `flapjack-server/` (`flapjack-server` crate): `flapjack` binary bootstrap (`src/main.rs`) and startup wiring into HTTP `server::serve()`.
+- Detailed architecture boundaries remain canonical in [`docs2/3_IMPLEMENTATION/ARCHITECTURE.md`](docs2/3_IMPLEMENTATION/ARCHITECTURE.md).
+
 ---
 
 ## Documentation
@@ -43,14 +50,20 @@ Self-hosted, Algolia-compatible search engine. Drop-in replacement for Algolia's
 ## Quick reference
 
 ```bash
+# Run from repo root:
+cd engine
+
 # Build
 cargo build -p flapjack-server
 
 # Canonical test runner
-./s/test                 # unit + integ + server
+./s/test                 # default: unit + integ + server
 ./s/test --unit          # Rust lib tests
 ./s/test --integ         # Rust integration tests
 ./s/test --server        # flapjack-server tests
+./s/test --smoke         # Rust smoke profile
+./s/test --sdk           # JS SDK contract tests
+./s/test --e2e           # binary + HTTP API smoke flow
 ./s/test --dashboard     # dashboard unit + smoke browser tests
 ./s/test --dashboard-full # dashboard unit + smoke + full browser suite
 ./s/test --all           # full non-Algolia suite
@@ -66,6 +79,9 @@ cd dashboard && npm run test:unit:run
 cd dashboard && npm run test:e2e-ui:smoke
 cd dashboard && npm run test:e2e-ui:full
 ```
+
+For full flag coverage and current command contract, use `./s/test --list` and
+[`docs2/1_STRATEGY/TESTING.md`](docs2/1_STRATEGY/TESTING.md).
 
 ---
 

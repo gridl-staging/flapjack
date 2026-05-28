@@ -146,15 +146,22 @@ fn default_trusted_proxy_matcher() -> Arc<flapjack_http::middleware::TrustedProx
     )
 }
 
-fn build_test_state(
+/// Build canonical integration-test `AppState` with shared defaults.
+///
+/// Callers must keep the backing `TempDir`/`data_dir` alive for the full lifetime of the
+/// returned state because `IndexManager`, dictionary files, and analytics paths are rooted there.
+/// This helper owns `AppState` field assembly; if a caller injects an existing manager, this
+/// constructor still wires it with a dictionary manager via `set_dictionary_manager(...)`.
+pub fn make_test_app_state(
     data_dir: &Path,
+    manager_override: Option<Arc<flapjack::IndexManager>>,
     key_store: Option<Arc<flapjack_http::auth::KeyStore>>,
     replication_manager: Option<Arc<flapjack_replication::manager::ReplicationManager>>,
     analytics_engine: Option<Arc<flapjack::analytics::AnalyticsQueryEngine>>,
     experiment_store: Option<Arc<flapjack::experiments::store::ExperimentStore>>,
     metrics_state: Option<flapjack_http::handlers::metrics::MetricsState>,
 ) -> Arc<flapjack_http::handlers::AppState> {
-    let manager = flapjack::IndexManager::new(data_dir);
+    let manager = manager_override.unwrap_or_else(|| flapjack::IndexManager::new(data_dir));
     let dictionary_manager = Arc::new(flapjack::dictionaries::manager::DictionaryManager::new(
         data_dir,
     ));
@@ -178,6 +185,9 @@ fn build_test_state(
         start_time: std::time::Instant::now(),
         conversation_store: flapjack_http::conversation_store::ConversationStore::default_shared(),
         embedder_store: Arc::new(flapjack_http::embedder_store::EmbedderStore::new()),
+        idempotency_cache: Arc::new(flapjack_http::idempotency::IdempotencyCache::new(
+            std::time::Duration::from_secs(300),
+        )),
     })
 }
 
@@ -294,8 +304,9 @@ fn build_test_app_for_data_dir(data_dir: &Path, admin_key: Option<&str>) -> Rout
         ks
     });
 
-    let state = build_test_state(
+    let state = make_test_app_state(
         data_dir,
+        None,
         key_store.clone(),
         None,
         Some(Arc::clone(&analytics_engine)),
@@ -310,7 +321,7 @@ fn build_test_app_for_data_dir(data_dir: &Path, admin_key: Option<&str>) -> Rout
         key_store,
         analytics_collector,
         default_trusted_proxy_matcher(),
-        CorsMode::Permissive,
+        CorsMode::LoopbackOnly,
         data_dir,
     )
 }
@@ -333,8 +344,9 @@ pub async fn spawn_server_with_qs_analytics(source_index_name: &str) -> (String,
 
     let (analytics_collector, analytics_engine) = build_analytics_runtime(analytics_config);
 
-    let state = build_test_state(
+    let state = make_test_app_state(
         temp_dir.path(),
+        None,
         None,
         None,
         Some(Arc::clone(&analytics_engine)),
@@ -394,13 +406,48 @@ pub async fn spawn_server_with_qs_analytics(source_index_name: &str) -> (String,
 /// validate graceful behavior when `AppState.analytics_engine` is `None`.
 pub async fn spawn_server_without_analytics() -> (String, TempDir) {
     let mut temp_dir = TempDir::new().unwrap();
-    let state = build_test_state(temp_dir.path(), None, None, None, None, None);
+    let state = make_test_app_state(temp_dir.path(), None, None, None, None, None, None);
 
     let app = apply_standard_test_http_layers(build_query_suggestions_test_routes(state));
 
     let addr = spawn_router(app, &mut temp_dir).await;
 
     (addr, temp_dir)
+}
+
+/// Poll until a document exists in the target tenant.
+pub async fn wait_for_document_exists(
+    manager: &flapjack::IndexManager,
+    tenant: &str,
+    doc_id: &str,
+) {
+    for _ in 0..200 {
+        if manager.get_document(tenant, doc_id).unwrap().is_some() {
+            return;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for {tenant}/{doc_id} to exist");
+}
+
+/// Poll until a text field reaches the expected value.
+pub async fn wait_for_document_text_field(
+    manager: &flapjack::IndexManager,
+    tenant: &str,
+    doc_id: &str,
+    field: &str,
+    expected: &str,
+) {
+    for _ in 0..200 {
+        if let Ok(Some(doc)) = manager.get_document(tenant, doc_id) {
+            if matches!(doc.fields.get(field), Some(flapjack::types::FieldValue::Text(value)) if value == expected)
+            {
+                return;
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for {tenant}/{doc_id} field {field}={expected}");
 }
 
 // ── Replication test helpers ──────────────────────────────────────────────────
@@ -510,6 +557,38 @@ fn build_node_router(state: Arc<flapjack_http::handlers::AppState>) -> Router {
         .merge(docs)
 }
 
+fn replication_manager_for_peers(
+    node_id: &str,
+    peers: Vec<(String, String)>,
+    admin_key: Option<&str>,
+) -> Arc<ReplicationManager> {
+    let peer_configs = peers
+        .into_iter()
+        .map(|(peer_id, addr)| PeerConfig {
+            node_id: peer_id,
+            addr,
+        })
+        .collect();
+    ReplicationManager::new(
+        NodeConfig {
+            node_id: node_id.to_string(),
+            bind_addr: "127.0.0.1:0".to_string(),
+            peers: peer_configs,
+        },
+        admin_key.map(|value| value.to_string()),
+    )
+}
+
+/// Build replication-aware AppState for direct catch-up tests without binding a server.
+pub fn build_replication_state_for_existing_dir_with_peers(
+    data_dir: &Path,
+    node_id: &str,
+    peers: Vec<(String, String)>,
+) -> Arc<flapjack_http::handlers::AppState> {
+    let repl_mgr = replication_manager_for_peers(node_id, peers, None);
+    make_test_app_state(data_dir, None, None, Some(repl_mgr), None, None, None)
+}
+
 /// Spawn a standalone server with all write endpoints + internal replication
 /// endpoints. The replication_manager is None (standalone mode), but /internal/ops
 /// still serves oplog entries — used for startup catch-up testing.
@@ -517,7 +596,7 @@ fn build_node_router(state: Arc<flapjack_http::handlers::AppState>) -> Router {
 /// The `_node_id` parameter is unused for now but makes call-sites self-documenting.
 pub async fn spawn_server_with_internal(_node_id: &str) -> (String, TempDir) {
     let mut temp_dir = TempDir::new().unwrap();
-    let state = build_test_state(temp_dir.path(), None, None, None, None, None);
+    let state = make_test_app_state(temp_dir.path(), None, None, None, None, None, None);
 
     let app = build_node_router(state);
     let addr = spawn_router(app, &mut temp_dir).await;
@@ -598,16 +677,18 @@ pub async fn spawn_authenticated_replication_pair(
     let (collector_b, analytics_engine_b) =
         build_analytics_runtime(analytics_config(tmp_b.path(), 10_000));
 
-    let state_a = build_test_state(
+    let state_a = make_test_app_state(
         tmp_a.path(),
+        None,
         Some(key_store_a.clone()),
         Some(repl_a),
         Some(analytics_engine_a),
         None,
         None,
     );
-    let state_b = build_test_state(
+    let state_b = make_test_app_state(
         tmp_b.path(),
+        None,
         Some(key_store_b.clone()),
         Some(repl_b),
         Some(analytics_engine_b),
@@ -622,7 +703,7 @@ pub async fn spawn_authenticated_replication_pair(
         Some(key_store_a),
         collector_a,
         trusted.clone(),
-        CorsMode::Permissive,
+        CorsMode::LoopbackOnly,
         tmp_a.path(),
     );
     let app_b = flapjack_http::router::build_router(
@@ -630,7 +711,7 @@ pub async fn spawn_authenticated_replication_pair(
         Some(key_store_b),
         collector_b,
         trusted,
-        CorsMode::Permissive,
+        CorsMode::LoopbackOnly,
         tmp_b.path(),
     );
 
@@ -678,8 +759,8 @@ pub async fn spawn_stoppable_replication_pair(
     let tmp_a = TempDir::new().unwrap();
     let tmp_b = TempDir::new().unwrap();
 
-    let state_a = build_test_state(tmp_a.path(), None, Some(repl_a), None, None, None);
-    let state_b = build_test_state(tmp_b.path(), None, Some(repl_b), None, None, None);
+    let state_a = make_test_app_state(tmp_a.path(), None, None, Some(repl_a), None, None, None);
+    let state_b = make_test_app_state(tmp_b.path(), None, None, Some(repl_b), None, None, None);
 
     let app_a = build_node_router(state_a);
     let app_b = build_node_router(state_b);
@@ -710,19 +791,23 @@ pub async fn try_spawn_replication_node_on_existing_dir(
     peer_url: &str,
     peer_id: &str,
 ) -> Result<TestNode, String> {
-    let repl_mgr = ReplicationManager::new(
-        NodeConfig {
-            node_id: node_id.to_string(),
-            bind_addr: "127.0.0.1:0".to_string(),
-            peers: vec![PeerConfig {
-                node_id: peer_id.to_string(),
-                addr: peer_url.to_string(),
-            }],
-        },
-        None,
-    );
+    try_spawn_replication_node_on_existing_dir_with_peers(
+        data_dir,
+        node_id,
+        vec![(peer_id.to_string(), peer_url.to_string())],
+    )
+    .await
+}
 
-    let state = build_test_state(data_dir, None, Some(repl_mgr), None, None, None);
+/// Spawn a replication node on an existing data directory with multiple peers.
+pub async fn try_spawn_replication_node_on_existing_dir_with_peers(
+    data_dir: &Path,
+    node_id: &str,
+    peers: Vec<(String, String)>,
+) -> Result<TestNode, String> {
+    let repl_mgr = replication_manager_for_peers(node_id, peers, None);
+
+    let state = make_test_app_state(data_dir, None, None, Some(repl_mgr), None, None, None);
 
     // Run pre-serve catch-up: fetch missed ops from peers before accepting traffic.
     flapjack_http::startup_catchup::run_pre_serve_catchup(&state).await?;
@@ -736,7 +821,48 @@ pub async fn try_spawn_replication_node_on_existing_dir(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_test_app_for_local_requests, spawn_router};
+    use super::{build_test_app_for_local_requests, make_test_app_state, spawn_router};
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn make_test_app_state_wires_manager_dictionary_and_defaults() {
+        let tmp = tempdir().expect("tempdir");
+        let state = make_test_app_state(tmp.path(), None, None, None, None, None, None);
+
+        let manager_dm = state
+            .manager
+            .dictionary_manager()
+            .expect("manager dictionary should be wired");
+        assert!(Arc::ptr_eq(&manager_dm, &state.dictionary_manager));
+        assert!(state.key_store.is_none());
+        assert!(state.replication_manager.is_none());
+        assert!(state.analytics_engine.is_none());
+        assert!(state.experiment_store.is_none());
+    }
+
+    #[tokio::test]
+    async fn make_test_app_state_preserves_manager_override_and_rewires_dictionary() {
+        let tmp = tempdir().expect("tempdir");
+        let manager_override = Arc::new(flapjack::IndexManager::new(tmp.path()));
+
+        let state = make_test_app_state(
+            tmp.path(),
+            Some(Arc::clone(&manager_override)),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert!(Arc::ptr_eq(&state.manager, &manager_override));
+        let manager_dm = state
+            .manager
+            .dictionary_manager()
+            .expect("manager dictionary should be wired");
+        assert!(Arc::ptr_eq(&manager_dm, &state.dictionary_manager));
+    }
 
     #[tokio::test]
     async fn dropping_temp_dir_stops_attached_server() {

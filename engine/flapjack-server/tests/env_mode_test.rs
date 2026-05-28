@@ -10,6 +10,11 @@ use support::{
     flapjack_cmd, http_request, unique_suffix, RunningServer, TempDir,
 };
 
+// Startup assertions depend on the banner/error text being emitted before the
+// helper timeout kills the child process. Keep this comfortably above observed
+// startup jitter so parallel test execution does not produce false negatives.
+const STARTUP_ASSERT_TIMEOUT: Duration = Duration::from_secs(8);
+
 // ===== Production mode guards ==============================================
 
 #[test]
@@ -44,7 +49,7 @@ fn production_mode_accepts_valid_key() {
         .env("FLAPJACK_ADMIN_KEY", "abcdef0123456789")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -83,7 +88,7 @@ fn development_mode_auto_generates_key() {
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -142,7 +147,7 @@ fn development_mode_banner_quotes_spaced_data_dir_reset_hint() {
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", &data_dir)
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -168,7 +173,7 @@ fn blank_admin_key_file_prints_explicit_reset_hint() {
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
 
@@ -211,7 +216,7 @@ fn blank_admin_key_file_quotes_spaced_data_dir_reset_hint() {
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", &data_dir)
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
 
@@ -243,7 +248,7 @@ fn key_persists_across_restarts() {
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     let stdout1 = String::from_utf8_lossy(&output1.stdout);
@@ -258,7 +263,7 @@ fn key_persists_across_restarts() {
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     let stdout2 = String::from_utf8_lossy(&output2.stdout);
@@ -287,7 +292,7 @@ fn key_persists_across_restarts() {
         .env("FLAPJACK_ENV", "development")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     drop(output3); // just ensuring it starts again
@@ -316,7 +321,7 @@ fn development_mode_with_custom_key() {
         .env("FLAPJACK_ADMIN_KEY", custom_key)
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -351,7 +356,7 @@ fn no_auth_env_var_disables_auth() {
         .env("FLAPJACK_NO_AUTH", "1")
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -383,7 +388,7 @@ fn no_auth_cli_flag_disables_auth() {
         .env("FLAPJACK_BIND_ADDR", "127.0.0.1:0")
         .env("FLAPJACK_DATA_DIR", tmp.path())
         .arg("--no-auth")
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -410,7 +415,7 @@ fn cli_port_flag_overrides_env_bind_addr() {
         .arg("0")
         .arg("--data-dir")
         .arg(tmp.path())
-        .timeout(Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
 
@@ -480,7 +485,7 @@ fn instance_flag_derives_isolated_data_dir() {
         .arg("--instance")
         .arg(&instance)
         .arg("--auto-port")
-        .timeout(Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
 
@@ -545,7 +550,7 @@ fn auto_port_overrides_env_bind_addr_and_port() {
         .arg("--auto-port")
         .arg("--data-dir")
         .arg(tmp.path())
-        .timeout(Duration::from_secs(3))
+        .timeout(STARTUP_ASSERT_TIMEOUT)
         .output()
         .expect("failed to run");
 

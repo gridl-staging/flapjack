@@ -357,11 +357,11 @@ impl Index {
             Some(lang) => tantivy::tokenizer::TextAnalyzer::builder(base_tokenizer.clone())
                 .filter(tantivy::tokenizer::LowerCaser)
                 .filter(tantivy::tokenizer::Stemmer::new(lang))
-                .filter(tantivy::tokenizer::EdgeNgramFilter::new(2, 20).unwrap())
+                .filter(crate::tokenizer::EdgeNgramTokenFilter::new(2, 20))
                 .build(),
             None => tantivy::tokenizer::TextAnalyzer::builder(base_tokenizer.clone())
                 .filter(tantivy::tokenizer::LowerCaser)
-                .filter(tantivy::tokenizer::EdgeNgramFilter::new(2, 20).unwrap())
+                .filter(crate::tokenizer::EdgeNgramTokenFilter::new(2, 20))
                 .build(),
         };
 

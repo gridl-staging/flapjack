@@ -1,7 +1,9 @@
 use super::*;
 use crate::dto::HybridSearchParams;
 use flapjack::index::settings::IndexSettings;
+use flapjack::security::test_helpers::AllowLocalUrlsGuard;
 use flapjack::types::{Document, FieldValue};
+use serial_test::serial;
 use std::collections::HashMap;
 use tempfile::TempDir;
 use wiremock::matchers::{body_string_contains, method};
@@ -42,7 +44,14 @@ fn rest_embedder_settings(server_uri: &str) -> IndexSettings {
 
 /// Full pipeline: add documents → auto-embed via REST → hybrid search finds them.
 #[tokio::test]
+#[serial(flapjack_outbound_url_policy)]
 async fn test_add_documents_and_hybrid_search() {
+    // Hybrid-search integration goes through IndexSettings::load, which
+    // now runs the SSOT outbound-URL safety check at the disk-load trust
+    // boundary (Plan B SoC split). wiremock binds loopback, so this test
+    // simulates an operator opt-in via the same env var an operator would
+    // set to run a local model server. See flapjack::security::test_helpers.
+    let _allow_local = AllowLocalUrlsGuard::enable();
     let server = MockServer::start().await;
 
     // Return different vectors based on document content
@@ -225,7 +234,14 @@ async fn test_add_documents_with_vectors_field_and_search() {
 
 /// Delete removes document from vector index — no longer found by hybrid search.
 #[tokio::test]
+#[serial(flapjack_outbound_url_policy)]
 async fn test_delete_document_removes_from_hybrid_search() {
+    // Hybrid-search integration goes through IndexSettings::load, which
+    // now runs the SSOT outbound-URL safety check at the disk-load trust
+    // boundary (Plan B SoC split). wiremock binds loopback, so this test
+    // simulates an operator opt-in via the same env var an operator would
+    // set to run a local model server. See flapjack::security::test_helpers.
+    let _allow_local = AllowLocalUrlsGuard::enable();
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(
@@ -295,7 +311,14 @@ async fn test_delete_document_removes_from_hybrid_search() {
 
 /// Upsert replaces the vector — hybrid search results change accordingly.
 #[tokio::test]
+#[serial(flapjack_outbound_url_policy)]
 async fn test_upsert_document_updates_vector() {
+    // Hybrid-search integration goes through IndexSettings::load, which
+    // now runs the SSOT outbound-URL safety check at the disk-load trust
+    // boundary (Plan B SoC split). wiremock binds loopback, so this test
+    // simulates an operator opt-in via the same env var an operator would
+    // set to run a local model server. See flapjack::security::test_helpers.
+    let _allow_local = AllowLocalUrlsGuard::enable();
     let server = MockServer::start().await;
 
     // Different vectors based on content

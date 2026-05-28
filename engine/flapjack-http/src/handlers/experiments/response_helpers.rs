@@ -131,6 +131,22 @@ pub struct ConcludedExperimentResponse {
 /// The store contract says a concluded experiment should always carry a conclusion payload.
 /// If that invariant is broken, we return a sanitized 500 response instead of serializing
 /// an impossible shape to clients.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
 #[allow(clippy::result_large_err)] // Response is inherently large in axum; boxing adds indirection without benefit at a single call site
 pub(super) fn concluded_experiment_response(
     experiment: Experiment,
@@ -154,6 +170,18 @@ pub(super) fn concluded_experiment_response(
         interleaving,
     } = experiment;
 
+    if status != ExperimentStatus::Concluded {
+        tracing::error!(
+            experiment_id = %id,
+            experiment_status = ?status,
+            "concluded experiment response received non-concluded experiment"
+        );
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error",
+        ));
+    }
+
     let conclusion = match conclusion {
         Some(conclusion) => conclusion,
         None => {
@@ -164,7 +192,7 @@ pub(super) fn concluded_experiment_response(
             );
             return Err(json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "concluded experiment missing conclusion",
+                "Internal server error",
             ));
         }
     };
@@ -207,6 +235,79 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
 
+    fn sample_experiment(
+        status: ExperimentStatus,
+        conclusion: Option<ExperimentConclusion>,
+    ) -> Experiment {
+        Experiment {
+            id: "exp-123".into(),
+            name: "Homepage ranking".into(),
+            index_name: "products".into(),
+            status,
+            traffic_split: 0.5,
+            control: ExperimentArm {
+                name: "control".into(),
+                query_overrides: None,
+                index_name: None,
+            },
+            variant: ExperimentArm {
+                name: "variant".into(),
+                query_overrides: None,
+                index_name: Some("products_variant".into()),
+            },
+            primary_metric: PrimaryMetric::Ctr,
+            created_at: 1_700_000_000,
+            started_at: Some(1_700_000_100),
+            ended_at: Some(1_700_000_200),
+            stopped_at: None,
+            minimum_days: 14,
+            winsorization_cap: Some(0.99),
+            conclusion,
+            interleaving: Some(false),
+        }
+    }
+
+    fn experiment_arm(name: &str) -> ExperimentArm {
+        ExperimentArm {
+            name: name.to_string(),
+            query_overrides: None,
+            index_name: None,
+        }
+    }
+
+    fn experiment_conclusion() -> ExperimentConclusion {
+        ExperimentConclusion {
+            winner: Some("variant".to_string()),
+            reason: "variant beat control".to_string(),
+            control_metric: 0.12,
+            variant_metric: 0.18,
+            confidence: 0.97,
+            significant: true,
+            promoted: true,
+        }
+    }
+
+    fn concluded_experiment_fixture(conclusion: Option<ExperimentConclusion>) -> Experiment {
+        Experiment {
+            id: "exp_123".to_string(),
+            name: "Homepage test".to_string(),
+            index_name: "products".to_string(),
+            status: ExperimentStatus::Concluded,
+            traffic_split: 0.5,
+            control: experiment_arm("control"),
+            variant: experiment_arm("variant"),
+            primary_metric: PrimaryMetric::Ctr,
+            created_at: 1700000000000,
+            started_at: Some(1700000001000),
+            ended_at: Some(1700000002000),
+            stopped_at: None,
+            minimum_days: 14,
+            winsorization_cap: Some(0.95),
+            conclusion,
+            interleaving: Some(false),
+        }
+    }
+
     async fn response_json(resp: Response) -> (StatusCode, serde_json::Value) {
         let status = resp.status();
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -235,5 +336,125 @@ mod tests {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["message"], "bad traffic split");
+    }
+
+    #[tokio::test]
+    async fn experiment_client_error_variants_preserve_status_and_message() {
+        let cases = vec![
+            (
+                ExperimentError::NotFound("experiment missing".into()),
+                StatusCode::NOT_FOUND,
+                "experiment missing",
+            ),
+            (
+                ExperimentError::InvalidStatus("experiment already running".into()),
+                StatusCode::CONFLICT,
+                "experiment already running",
+            ),
+            (
+                ExperimentError::AlreadyExists("experiment already exists".into()),
+                StatusCode::CONFLICT,
+                "experiment already exists",
+            ),
+        ];
+
+        for (error, expected_status, expected_message) in cases {
+            let response = experiment_error_to_response(error);
+            let (status, json) = response_json(response).await;
+
+            assert_eq!(status, expected_status);
+            assert_eq!(json["message"], expected_message);
+        }
+    }
+
+    #[test]
+    fn concluded_experiment_response_keeps_required_conclusion_payload() {
+        let response = concluded_experiment_response(sample_experiment(
+            ExperimentStatus::Concluded,
+            Some(ExperimentConclusion {
+                winner: Some("variant".into()),
+                reason: "ctr improved".into(),
+                control_metric: 0.12,
+                variant_metric: 0.18,
+                confidence: 0.97,
+                significant: true,
+                promoted: true,
+            }),
+        ))
+        .unwrap();
+
+        assert_eq!(response.id, "exp-123");
+        assert_eq!(response.status, ExperimentStatus::Concluded);
+        assert_eq!(response.conclusion.winner.as_deref(), Some("variant"));
+        assert!(response.conclusion.significant);
+    }
+
+    #[test]
+    fn concluded_experiment_response_preserves_conclusion_payload() {
+        let expected_conclusion = experiment_conclusion();
+        let response = concluded_experiment_response(concluded_experiment_fixture(Some(
+            expected_conclusion.clone(),
+        )))
+        .expect("concluded experiments with a conclusion should serialize");
+
+        assert_eq!(response.id, "exp_123");
+        assert_eq!(response.status, ExperimentStatus::Concluded);
+        assert_eq!(response.primary_metric, PrimaryMetric::Ctr);
+        assert_eq!(response.conclusion.winner, expected_conclusion.winner);
+        assert_eq!(response.conclusion.reason, expected_conclusion.reason);
+        assert_eq!(
+            response.conclusion.confidence,
+            expected_conclusion.confidence
+        );
+        assert_eq!(response.conclusion.promoted, expected_conclusion.promoted);
+    }
+
+    #[tokio::test]
+    async fn concluded_experiment_response_rejects_missing_conclusion_payload() {
+        let error_response =
+            concluded_experiment_response(sample_experiment(ExperimentStatus::Concluded, None))
+                .unwrap_err();
+        let (status, json) = response_json(error_response).await;
+
+        // Lane E (may22_5pm_6) sanitized the 500 payload so internal invariant
+        // descriptions no longer leak to clients. The structured error stays
+        // in tracing logs; the wire shape is the generic message.
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["message"], "Internal server error");
+    }
+
+    #[tokio::test]
+    async fn concluded_experiment_response_rejects_missing_conclusion_payload_with_status_field() {
+        let response = concluded_experiment_response(concluded_experiment_fixture(None))
+            .expect_err("missing conclusion must be surfaced as a 500 response");
+        let (status, json) = response_json(response).await;
+
+        // See note above — sanitized message after Lane E merge.
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["status"], 500);
+        assert_eq!(json["message"], "Internal server error");
+    }
+
+    #[tokio::test]
+    async fn experiment_json_errors_are_sanitized() {
+        let parse_error = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        let response = experiment_error_to_response(ExperimentError::Json(parse_error));
+        let (status, json) = response_json(response).await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["message"], "Internal server error");
+    }
+
+    #[tokio::test]
+    async fn concluded_experiment_response_rejects_non_concluded_status() {
+        let response = concluded_experiment_response(sample_experiment(
+            ExperimentStatus::Running,
+            Some(experiment_conclusion()),
+        ))
+        .expect_err("non-concluded experiments should not serialize as concluded responses");
+        let (status, json) = response_json(response).await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["message"], "Internal server error");
     }
 }

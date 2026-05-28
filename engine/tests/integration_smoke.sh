@@ -46,12 +46,19 @@ section() {
 }
 
 cleanup() {
+  local script_exit_code=$?
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
   if [ -n "$TMP_DATA" ] && [ -d "$TMP_DATA" ]; then
-    rm -rf "$TMP_DATA"
+    if [ "$TESTS_FAILED" -gt 0 ] || [ "$script_exit_code" -ne 0 ]; then
+      local failure_snapshot="/tmp/flapjack_integration_smoke_failure_${$}_$(date +%s)"
+      cp -R "$TMP_DATA" "$failure_snapshot"
+      printf 'INFO: preserved integration smoke data at %s\n' "$failure_snapshot"
+    else
+      rm -rf "$TMP_DATA"
+    fi
   fi
   if [ -n "$BUILD_LOG" ] && [ -f "$BUILD_LOG" ]; then
     rm -f "$BUILD_LOG"

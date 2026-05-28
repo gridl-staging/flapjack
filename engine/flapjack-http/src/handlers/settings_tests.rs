@@ -53,6 +53,34 @@ async fn get_settings_json(app: &Router) -> serde_json::Value {
     serde_json::from_slice(&body).unwrap()
 }
 
+async fn post_search_json(
+    app: &Router,
+    index_name: &str,
+    body: serde_json::Value,
+) -> serde_json::Value {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/1/indexes/{index_name}/query"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "search request should succeed"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
 #[tokio::test]
 async fn test_get_settings_corrupt_settings_file_returns_sanitized_500() {
     let tmp = TempDir::new().unwrap();
@@ -374,6 +402,128 @@ async fn test_set_settings_pagination_limited_to_roundtrip() {
 
     let json = get_settings_json(&app).await;
     assert_eq!(json["paginationLimitedTo"], serde_json::json!(50));
+}
+
+#[tokio::test]
+async fn test_set_settings_reindexes_existing_documents_for_facets() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = replica_sync_router(Arc::clone(&state));
+    let index_name = "facet_reindex_idx";
+
+    state.manager.create_tenant(index_name).unwrap();
+    let docs = vec![
+        flapjack::Document {
+            id: "1".to_string(),
+            fields: HashMap::from([
+                (
+                    "title".to_string(),
+                    flapjack::FieldValue::Text("pancake recipes".to_string()),
+                ),
+                (
+                    "tags".to_string(),
+                    flapjack::FieldValue::Text("breakfast".to_string()),
+                ),
+            ]),
+        },
+        flapjack::Document {
+            id: "2".to_string(),
+            fields: HashMap::from([
+                (
+                    "title".to_string(),
+                    flapjack::FieldValue::Text("waffle guide".to_string()),
+                ),
+                (
+                    "tags".to_string(),
+                    flapjack::FieldValue::Text("breakfast".to_string()),
+                ),
+            ]),
+        },
+        flapjack::Document {
+            id: "3".to_string(),
+            fields: HashMap::from([
+                (
+                    "title".to_string(),
+                    flapjack::FieldValue::Text("omelette handbook".to_string()),
+                ),
+                (
+                    "tags".to_string(),
+                    flapjack::FieldValue::Text("breakfast".to_string()),
+                ),
+            ]),
+        },
+    ];
+    state
+        .manager
+        .add_documents_sync(index_name, docs)
+        .await
+        .unwrap();
+
+    let response =
+        post_settings_for(&app, index_name, r#"{"attributesForFaceting":["tags"]}"#).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let search = post_search_json(
+        &app,
+        index_name,
+        serde_json::json!({
+            "query": "",
+            "facets": ["tags"]
+        }),
+    )
+    .await;
+
+    assert_eq!(search["nbHits"], 3);
+    assert_eq!(search["facets"]["tags"]["breakfast"], 3);
+}
+
+/// Verify that the faceting rebuild path works across multiple scan pages and
+/// bounded write batches without buffering every full document at once.
+#[tokio::test]
+async fn test_set_settings_reindexes_existing_documents_for_facets_across_batches() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    let app = replica_sync_router(Arc::clone(&state));
+    let index_name = "facet_reindex_batches_idx";
+
+    state.manager.create_tenant(index_name).unwrap();
+    let docs = (0..1001)
+        .map(|i| flapjack::Document {
+            id: format!("{i}"),
+            fields: HashMap::from([
+                (
+                    "title".to_string(),
+                    flapjack::FieldValue::Text(format!("breakfast doc {i}")),
+                ),
+                (
+                    "tags".to_string(),
+                    flapjack::FieldValue::Text("breakfast".to_string()),
+                ),
+            ]),
+        })
+        .collect();
+    state
+        .manager
+        .add_documents_sync(index_name, docs)
+        .await
+        .unwrap();
+
+    let response =
+        post_settings_for(&app, index_name, r#"{"attributesForFaceting":["tags"]}"#).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let search = post_search_json(
+        &app,
+        index_name,
+        serde_json::json!({
+            "query": "",
+            "facets": ["tags"]
+        }),
+    )
+    .await;
+
+    assert_eq!(search["nbHits"], 1001);
+    assert_eq!(search["facets"]["tags"]["breakfast"], 1001);
 }
 
 /// Verify that embedder configuration is persisted to `settings.json` on disk.

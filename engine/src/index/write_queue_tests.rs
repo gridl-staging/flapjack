@@ -1,5 +1,6 @@
 use super::*;
 use crate::index::memory::{MemoryBudget, MemoryBudgetConfig};
+use prometheus::{Encoder, TextEncoder};
 use std::{collections::HashMap, time::Duration};
 
 /// Core helper: create a write queue wired to the given index.
@@ -83,6 +84,19 @@ fn assert_task_succeeded(
     assert_eq!(final_task.indexed_documents, indexed_documents);
 }
 
+fn assert_task_failed(tasks: &dashmap::DashMap<String, TaskInfo>, task_id: &str) {
+    let final_task = tasks.get(task_id).unwrap();
+    assert!(
+        matches!(final_task.status, crate::types::TaskStatus::Failed(_)),
+        "task should fail, got: {:?}",
+        final_task.status
+    );
+    assert_eq!(
+        final_task.indexed_documents, 0,
+        "failed tasks should not report committed documents"
+    );
+}
+
 fn register_task(
     tasks: &dashmap::DashMap<String, TaskInfo>,
     task_id: &str,
@@ -101,6 +115,14 @@ async fn enqueue_write(tx: &WriteQueue, task_id: String, actions: Vec<WriteActio
     tx.send(WriteOp { task_id, actions }).await.unwrap();
 }
 
+fn enqueue_write_without_draining_burst(
+    tx: &WriteQueue,
+    task_id: String,
+    actions: Vec<WriteAction>,
+) {
+    tx.try_send(WriteOp { task_id, actions }).unwrap();
+}
+
 fn indexed_document_count(index: &crate::index::Index) -> usize {
     index
         .reader()
@@ -111,8 +133,20 @@ fn indexed_document_count(index: &crate::index::Index) -> usize {
         .sum()
 }
 
+fn searchable_segment_count(index: &crate::index::Index) -> usize {
+    index.reader().searcher().segment_readers().len()
+}
+
 async fn wait_for_write_queue_settle() {
     tokio::time::sleep(Duration::from_millis(200)).await;
+}
+
+fn write_queue_phase_metrics_text() -> String {
+    let mut encoded = Vec::new();
+    TextEncoder::new()
+        .encode(&gather_write_queue_phase_metric_families(), &mut encoded)
+        .unwrap();
+    String::from_utf8(encoded).unwrap()
 }
 
 #[tokio::test]
@@ -189,6 +223,194 @@ async fn test_multiple_queues_progress_under_tight_writer_budget() {
 
     let count_b = indexed_document_count(index_b.as_ref());
     assert_eq!(count_b, 1, "index_b should contain 1 committed document");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_write_queue_absorbs_1500_op_burst_without_queue_full() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (tx, handle, tasks) = setup_write_queue(&tmp, "burst_tenant");
+
+    // Warm up the queue using shared helpers so this regression stays on the
+    // same lifecycle path as existing write-queue tests.
+    let warmup_task = register_task(tasks.as_ref(), "burst_warmup", 1, 1);
+    enqueue_write(
+        &tx,
+        warmup_task.clone(),
+        vec![WriteAction::Add(text_document("warmup", "name", "warmup"))],
+    )
+    .await;
+    wait_for_write_queue_settle().await;
+    assert_task_succeeded(tasks.as_ref(), &warmup_task, 1);
+
+    // current_thread + tight try_send loop intentionally prevents the queue
+    // task from draining during this burst, so capacity behavior is deterministic.
+    const REQUIRED_BURST_OPS: usize = 1_200;
+    let mut burst_task_ids = Vec::with_capacity(REQUIRED_BURST_OPS);
+    for i in 0..REQUIRED_BURST_OPS {
+        let task_id = register_task(tasks.as_ref(), &format!("burst_task_{i}"), i as i64 + 2, 1);
+        burst_task_ids.push(task_id.clone());
+        let send_result = tx.try_send(WriteOp {
+            task_id: task_id.clone(),
+            actions: vec![WriteAction::Delete(format!("burst_missing_doc_{i}"))],
+        });
+        assert!(
+            send_result.is_ok(),
+            "queue filled too early at burst op {i}; expected to admit at least {REQUIRED_BURST_OPS} ops"
+        );
+    }
+
+    drop(tx);
+    handle.await.unwrap().unwrap();
+
+    for task_id in burst_task_ids {
+        assert_task_succeeded(tasks.as_ref(), &task_id, 1);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_write_queue_close_flush_commits_once() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_path = tmp.path().join("batch_commit_tenant");
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    let schema = crate::index::schema::Schema::builder().build();
+    let index = Arc::new(crate::index::Index::create(&tenant_path, schema).unwrap());
+    let (tx, handle, tasks) =
+        setup_write_queue_with_index(&tmp, "batch_commit_tenant", Arc::clone(&index));
+
+    // This pushes a sub-threshold batch (10 ops < WRITE_QUEUE_BATCH_SIZE = 32)
+    // and relies on channel-close flush to drain it: the regression is that the
+    // close-triggered flush still produces a single searchable commit, not one
+    // segment per queued op.
+    for batch_number in 0..10 {
+        let task_id = register_task(
+            tasks.as_ref(),
+            &format!("batch_commit_task_{batch_number}"),
+            batch_number + 1,
+            1,
+        );
+        enqueue_write(
+            &tx,
+            task_id,
+            vec![WriteAction::Add(text_document(
+                &format!("doc_{batch_number}"),
+                "name",
+                "batched",
+            ))],
+        )
+        .await;
+    }
+
+    drop(tx);
+    handle.await.unwrap().unwrap();
+
+    index.reader().reload().unwrap();
+    assert_eq!(
+        indexed_document_count(index.as_ref()),
+        10,
+        "all queued writes should still be committed"
+    );
+    assert_eq!(
+        searchable_segment_count(index.as_ref()),
+        1,
+        "a channel-close flush of a sub-threshold batch should commit once instead of producing one segment per queued op"
+    );
+}
+
+/// Regression gate for PL-10v2 commit-amortization tuning.
+///
+/// Pushing 63 ops faster than the 100 ms flush deadline through a single queue
+/// must coalesce into ≤ 2 Tantivy commits (and thus ≤ 2 searchable segments).
+/// With the legacy `WRITE_QUEUE_BATCH_SIZE = 10`, the same workload would
+/// produce 7 size-triggered batches plus 1 close-triggered batch (≥ 7
+/// segments), surfacing the multi_phase commit-pipeline saturation observed in
+/// `docs/research/pl10_write_bottleneck_20260528T033040Z_classification.md`
+/// (commit_writer_with_panic_guard at 30.37% of total phase seconds, nested
+/// inside commit_batch at 33.54%).
+#[tokio::test(flavor = "current_thread")]
+async fn test_write_queue_amortizes_commits_under_fast_push() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_path = tmp.path().join("amortization_tenant");
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    let schema = crate::index::schema::Schema::builder().build();
+    let index = Arc::new(crate::index::Index::create(&tenant_path, schema).unwrap());
+    let (tx, handle, tasks) =
+        setup_write_queue_with_index(&tmp, "amortization_tenant", Arc::clone(&index));
+
+    // current_thread + tight try_send loop intentionally keeps control in this
+    // task until all ops are enqueued, so timeout-driven queue draining cannot
+    // interleave with this burst.
+    //
+    // 63 sits below Tantivy's LogMergePolicy min_merge threshold so per-batch
+    // segments stay observable post-drain.
+    const FAST_PUSH_OPS: usize = 63;
+    for i in 0..FAST_PUSH_OPS {
+        let task_id = register_task(
+            tasks.as_ref(),
+            &format!("amortization_task_{i}"),
+            i as i64 + 1,
+            1,
+        );
+        enqueue_write_without_draining_burst(
+            &tx,
+            task_id,
+            vec![WriteAction::Add(text_document(
+                &format!("doc_{i}"),
+                "name",
+                "amortization",
+            ))],
+        );
+    }
+
+    drop(tx);
+    handle.await.unwrap().unwrap();
+
+    index.reader().reload().unwrap();
+    assert_eq!(
+        indexed_document_count(index.as_ref()),
+        FAST_PUSH_OPS,
+        "every queued document should still be committed and searchable"
+    );
+
+    let segments = searchable_segment_count(index.as_ref());
+    assert!(
+        segments <= 2,
+        "expected ≤ 2 segments after {FAST_PUSH_OPS} fast-pushed ops to amortize Tantivy commit cost; got {segments}"
+    );
+}
+
+#[tokio::test]
+async fn test_batch_settings_load_failure_marks_all_tasks_failed() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_id = "invalid_settings_tenant";
+    let tenant_path = tmp.path().join(tenant_id);
+    let (tx, handle, tasks) = setup_write_queue(&tmp, tenant_id);
+
+    std::fs::write(tenant_path.join("settings.json"), "{ invalid json").unwrap();
+
+    let task_1 = register_task(tasks.as_ref(), "invalid_settings_task_1", 1, 1);
+    let task_2 = register_task(tasks.as_ref(), "invalid_settings_task_2", 2, 1);
+    enqueue_write(
+        &tx,
+        task_1.clone(),
+        vec![WriteAction::Add(text_document("doc1", "name", "Alice"))],
+    )
+    .await;
+    enqueue_write(
+        &tx,
+        task_2.clone(),
+        vec![WriteAction::Add(text_document("doc2", "name", "Bob"))],
+    )
+    .await;
+
+    drop(tx);
+    let queue_result = handle.await.unwrap();
+    assert!(
+        queue_result.is_err(),
+        "invalid tenant settings should fail the batch flush"
+    );
+
+    assert_task_failed(tasks.as_ref(), &task_1);
+    assert_task_failed(tasks.as_ref(), &task_2);
 }
 
 #[tokio::test]
@@ -272,6 +494,45 @@ async fn test_commit_batch_delete() {
     assert_task_succeeded(tasks.as_ref(), &task_id_2, 1);
 }
 
+#[tokio::test]
+async fn test_write_queue_phase_metrics_records_batch_lifecycle_series() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (tx, handle, tasks) = setup_write_queue(&tmp, "phase_metrics_tenant");
+
+    let task_id = register_task(tasks.as_ref(), "phase_metrics_task_1", 1, 1);
+    enqueue_write(
+        &tx,
+        task_id.clone(),
+        vec![WriteAction::Add(text_document(
+            "doc1",
+            "name",
+            "Phase Metric",
+        ))],
+    )
+    .await;
+
+    drop(tx);
+    handle.await.unwrap().unwrap();
+    assert_task_succeeded(tasks.as_ref(), &task_id, 1);
+
+    let metrics_text = write_queue_phase_metrics_text();
+    for phase in [
+        "process_writes",
+        "flush_pending_batch",
+        "commit_batch",
+        "commit_writer_with_panic_guard",
+        "finalize_committed_batch",
+    ] {
+        assert!(
+            metrics_text.lines().any(|line| {
+                line.starts_with("flapjack_write_queue_phase_seconds_count")
+                    && line.contains(&format!("phase=\"{phase}\""))
+            }),
+            "expected phase histogram sample for {phase}, got:\n{metrics_text}"
+        );
+    }
+}
+
 /// Verify that `VectorWriteContext` shares the same `DashMap` instance via `Arc`, so mutations through the map are visible through the context.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
@@ -350,10 +611,26 @@ async fn test_create_write_queue_with_vector_indices() {
 #[cfg(feature = "vector-search")]
 mod auto_embed_tests {
     use super::*;
+    use crate::security::test_helpers::AllowLocalUrlsGuard;
     use crate::types::FieldValue;
     use serial_test::serial;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // These tests exercise the FULL production hydration path: write a
+    // settings.json with a loopback wiremock URL, then load + create
+    // embedders through the write queue exactly as a tenant would at
+    // runtime. `IndexSettings::load` now runs the SSOT SSRF check at the
+    // disk-load trust boundary, so these tests must opt in via the same
+    // FLAPJACK_AI_ALLOW_LOCAL_URLS env var an operator would set to run a
+    // local model server. The `#[serial]` annotation (already present on
+    // some tests in this module) is extended to the shared
+    // `flapjack_outbound_url_policy` key so the env-coupled tests across
+    // vector::config, security, write_queue, and manager don't race.
+    //
+    // Tests that construct EmbedderConfig literals and call constructors
+    // directly (see vector::embedder_tests) do NOT need this guard —
+    // constructors skip URL safety by design.
 
     type VectorIndicesMap =
         Arc<dashmap::DashMap<String, Arc<std::sync::RwLock<crate::vector::index::VectorIndex>>>>;
@@ -446,7 +723,9 @@ mod auto_embed_tests {
     // ── Add/Upsert tests ──
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_auto_embed_on_add() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -505,7 +784,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_auto_embed_on_upsert_replaces_vector() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         use wiremock::matchers::body_string_contains;
 
         let server = MockServer::start().await;
@@ -600,7 +881,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_batch_embed_multiple_docs() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -656,7 +939,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_vector_index_auto_created() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -885,7 +1170,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_embed_failure_does_not_block_tantivy() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         // Server returns 500 — embedding fails
         Mock::given(method("POST"))
@@ -992,7 +1279,9 @@ mod auto_embed_tests {
     // ── Delete tests ──
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_delete_removes_from_vector_index() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1172,7 +1461,7 @@ mod auto_embed_tests {
         let top_docs = searcher
             .search(
                 &tantivy::query::AllQuery,
-                &tantivy::collector::TopDocs::with_limit(10),
+                &tantivy::collector::TopDocs::with_limit(10).order_by_score(),
             )
             .unwrap();
         assert_eq!(top_docs.len(), 1, "should have 1 document in Tantivy");
@@ -1191,7 +1480,9 @@ mod auto_embed_tests {
     // ── Vector index disk persistence tests (8.1) ──
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_vector_index_saved_after_commit() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1260,7 +1551,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_vector_index_save_reflects_deletes() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1362,7 +1655,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_vector_index_save_reflects_upserts() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         let call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let call_count_clone = call_count.clone();
@@ -1479,7 +1774,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_computed_vectors_stored_in_oplog() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1576,7 +1873,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_oplog_vectors_contain_all_embedder_results() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1627,7 +1926,9 @@ mod auto_embed_tests {
     }
 
     #[tokio::test]
+    #[serial(flapjack_outbound_url_policy)]
     async fn test_fingerprint_saved_alongside_vector_index() {
+        let _allow_local = AllowLocalUrlsGuard::enable();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

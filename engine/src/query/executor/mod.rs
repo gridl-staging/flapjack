@@ -220,11 +220,13 @@ impl QueryExecutor {
             let inv_index = segment.inverted_index(marker.field)?;
 
             // Limit searchable paths and terms-per-path for short queries to
-            // keep the resulting BooleanQuery manageable.  With edge_ngram
-            // indexing, 1-char terms like "m" exist for every word starting
-            // with 'm' — extremely high document frequency.  Use tighter caps
-            // for 1-char queries (3 paths × 20 terms = 60 clauses) vs 2-char
-            // (5 paths × 50 terms = 250 clauses).
+            // keep the resulting BooleanQuery manageable. EdgeNgramTokenFilter
+            // passes tokens shorter than min_gram through unchanged, so short
+            // query tokens are not guaranteed to have universal 1-char edge
+            // n-gram coverage across all indexed words. These tighter caps
+            // bound Boolean clause growth for 1-char queries (3 paths × 20
+            // terms = 60 clauses) vs 2-char queries (5 paths × 50 terms =
+            // 250 clauses).
             let is_single_char = marker.token.chars().count() == 1;
             let max_paths = if is_single_char { 3 } else { 5 }.min(marker.paths.len());
             let max_terms_per_path: usize = if is_single_char { 20 } else { 50 };

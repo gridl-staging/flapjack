@@ -6,20 +6,43 @@ use super::types::{
 };
 use dashmap::DashMap;
 use flapjack::index::oplog::OpLogEntry;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 
+/// Canonical per-peer delivery status tracked by the replication owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerCursor {
+    pub last_acked_seq: Option<u64>,
+    pub last_delivery_error: Option<String>,
+}
+
+impl PeerCursor {
+    fn acknowledged(acked_seq: u64) -> Self {
+        Self {
+            last_acked_seq: Some(acked_seq),
+            last_delivery_error: None,
+        }
+    }
+
+    fn failed(error: String, last_acked_seq: Option<u64>) -> Self {
+        Self {
+            last_acked_seq,
+            last_delivery_error: Some(error),
+        }
+    }
+}
+
 /// Orchestrates replication to all peers and tracks their acknowledgment status
 pub struct ReplicationManager {
     node_config: NodeConfig,
     peers: Vec<Arc<PeerClient>>,
-    /// Tracks what sequence each peer has acknowledged for each tenant
+    /// Tracks delivery status for each configured peer and tenant
     /// Outer map: tenant_id -> inner map
-    /// Inner map: peer_id -> last_acked_seq
-    peer_cursors: Arc<DashMap<String, DashMap<String, u64>>>,
+    /// Inner map: peer_id -> last delivery cursor/error
+    peer_cursors: Arc<DashMap<String, DashMap<String, PeerCursor>>>,
     /// Handle to the background health probe task (if running)
     health_probe_handle: Mutex<Option<JoinHandle<()>>>,
 }
@@ -81,6 +104,110 @@ impl ReplicationManager {
             .collect()
     }
 
+    fn set_peer_cursor(
+        peer_cursors: &DashMap<String, DashMap<String, PeerCursor>>,
+        tenant_id: &str,
+        peer_id: &str,
+        cursor: PeerCursor,
+    ) {
+        let tenant_cursors = peer_cursors.entry(tenant_id.to_string()).or_default();
+        tenant_cursors.insert(peer_id.to_string(), cursor);
+    }
+
+    fn existing_acked_seq(
+        peer_cursors: &DashMap<String, DashMap<String, PeerCursor>>,
+        tenant_id: &str,
+        peer_id: &str,
+    ) -> Option<u64> {
+        peer_cursors
+            .get(tenant_id)
+            .and_then(|tenant| tenant.get(peer_id).and_then(|cursor| cursor.last_acked_seq))
+    }
+
+    async fn replicate_to_peer_with_retry(
+        peer: &Arc<PeerClient>,
+        tenant_id: &str,
+        ops: Vec<OpLogEntry>,
+    ) -> Result<u64, String> {
+        let req = ReplicateOpsRequest {
+            tenant_id: tenant_id.to_string(),
+            ops,
+        };
+        let result = peer.replicate_ops(req.clone()).await;
+        let result = match result {
+            Ok(resp) => Ok(resp),
+            Err(error) => {
+                tracing::warn!(
+                    "[REPL {}] peer {} failed (will retry in 2s): {}",
+                    tenant_id,
+                    peer.peer_id(),
+                    error
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                peer.replicate_ops(req).await
+            }
+        };
+        result.map(|resp| resp.acked_seq)
+    }
+
+    async fn replicate_to_single_peer(
+        peer: Arc<PeerClient>,
+        peer_cursors: Arc<DashMap<String, DashMap<String, PeerCursor>>>,
+        tenant_id: String,
+        peer_id: String,
+        ops: Vec<OpLogEntry>,
+    ) -> Result<u64, String> {
+        if !peer.is_available() {
+            let previous_ack = Self::existing_acked_seq(&peer_cursors, &tenant_id, &peer_id);
+            Self::set_peer_cursor(
+                &peer_cursors,
+                &tenant_id,
+                &peer_id,
+                PeerCursor::failed("circuit breaker open".to_string(), previous_ack),
+            );
+            tracing::debug!(
+                "[REPL {}] skipping peer {} (circuit breaker open)",
+                tenant_id,
+                peer_id
+            );
+            return Err("circuit breaker open".to_string());
+        }
+
+        match Self::replicate_to_peer_with_retry(&peer, &tenant_id, ops).await {
+            Ok(acked_seq) => {
+                Self::set_peer_cursor(
+                    &peer_cursors,
+                    &tenant_id,
+                    &peer_id,
+                    PeerCursor::acknowledged(acked_seq),
+                );
+                tracing::info!(
+                    "[REPL {}] peer {} acked seq {}",
+                    tenant_id,
+                    peer_id,
+                    acked_seq
+                );
+                Ok(acked_seq)
+            }
+            Err(error) => {
+                let previous_ack = Self::existing_acked_seq(&peer_cursors, &tenant_id, &peer_id);
+                Self::set_peer_cursor(
+                    &peer_cursors,
+                    &tenant_id,
+                    &peer_id,
+                    PeerCursor::failed(error.clone(), previous_ack),
+                );
+                tracing::warn!(
+                    "[REPL {}] peer {} failed after retry, ops dropped: {}",
+                    tenant_id,
+                    peer_id,
+                    error
+                );
+                Err(error)
+            }
+        }
+    }
+
     /// Replicate operations to all available peers (fire-and-forget).
     /// Skips peers with tripped circuit breakers.
     pub async fn replicate_ops(&self, tenant_id: &str, ops: Vec<OpLogEntry>) {
@@ -91,65 +218,47 @@ impl ReplicationManager {
         let tenant_id = tenant_id.to_string();
 
         for peer in &self.peers {
-            if !peer.is_available() {
-                tracing::debug!(
-                    "[REPL {}] skipping peer {} (circuit breaker open)",
-                    tenant_id,
-                    peer.peer_id()
-                );
-                continue;
-            }
-
+            let peer_id = peer.peer_id().to_string();
             let peer = Arc::clone(peer);
             let tenant_id = tenant_id.clone();
             let ops = ops.clone();
             let peer_cursors = Arc::clone(&self.peer_cursors);
+            let peer_id = peer_id.clone();
 
             // Fire-and-forget: spawn task and don't await
             tokio::spawn(async move {
-                let req = ReplicateOpsRequest {
-                    tenant_id: tenant_id.clone(),
-                    ops: ops.clone(),
-                };
-
-                // Attempt replication, retry once after 2s on failure
-                let result = peer.replicate_ops(req.clone()).await;
-                let result = match result {
-                    Ok(resp) => Ok(resp),
-                    Err(e) => {
-                        tracing::warn!(
-                            "[REPL {}] peer {} failed (will retry in 2s): {}",
-                            tenant_id,
-                            peer.peer_id(),
-                            e
-                        );
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                        peer.replicate_ops(req).await
-                    }
-                };
-
-                match result {
-                    Ok(resp) => {
-                        let tenant_cursors = peer_cursors.entry(tenant_id.clone()).or_default();
-                        tenant_cursors.insert(peer.peer_id().to_string(), resp.acked_seq);
-                        tracing::info!(
-                            "[REPL {}] peer {} acked seq {}",
-                            tenant_id,
-                            peer.peer_id(),
-                            resp.acked_seq
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "[REPL {}] peer {} failed after retry, ops dropped: {}",
-                            tenant_id,
-                            peer.peer_id(),
-                            e
-                        );
-                    }
-                }
+                let _ = Self::replicate_to_single_peer(peer, peer_cursors, tenant_id, peer_id, ops)
+                    .await;
             });
         }
+    }
+
+    /// Replicate operations to one specific peer and update canonical delivery cursor state.
+    pub async fn replicate_ops_to_peer(
+        &self,
+        tenant_id: &str,
+        peer_id: &str,
+        ops: Vec<OpLogEntry>,
+    ) -> Result<u64, String> {
+        if ops.is_empty() {
+            return Ok(0);
+        }
+
+        let peer = self
+            .peers
+            .iter()
+            .find(|peer| peer.peer_id() == peer_id)
+            .cloned()
+            .ok_or_else(|| format!("Unknown peer '{}'", peer_id))?;
+
+        Self::replicate_to_single_peer(
+            peer,
+            Arc::clone(&self.peer_cursors),
+            tenant_id.to_string(),
+            peer_id.to_string(),
+            ops,
+        )
+        .await
     }
 
     /// Catch up from peers — tries all available peers until one succeeds.
@@ -164,11 +273,32 @@ impl ReplicationManager {
             .map(|resp| resp.ops)
     }
 
-    /// Catch up from peers and return full wire metadata from the selected peer.
+    /// Catch up from all available peers, merging operations and metadata.
     pub async fn catch_up_from_peer_with_metadata(
         &self,
         tenant_id: &str,
         local_seq: u64,
+    ) -> Result<GetOpsResponse, String> {
+        self.catch_up_from_peer_with_metadata_internal(tenant_id, local_seq, false)
+            .await
+    }
+
+    /// Strict catch-up used by pre-serve bootstrap. Every configured peer must
+    /// answer successfully so the node never starts from partial replication state.
+    pub async fn catch_up_from_peer_with_metadata_strict(
+        &self,
+        tenant_id: &str,
+        local_seq: u64,
+    ) -> Result<GetOpsResponse, String> {
+        self.catch_up_from_peer_with_metadata_internal(tenant_id, local_seq, true)
+            .await
+    }
+
+    async fn catch_up_from_peer_with_metadata_internal(
+        &self,
+        tenant_id: &str,
+        local_seq: u64,
+        require_all_peers: bool,
     ) -> Result<GetOpsResponse, String> {
         if self.peers.is_empty() {
             return Err("No peers available for catch-up".to_string());
@@ -180,23 +310,82 @@ impl ReplicationManager {
         };
 
         let mut last_error = String::from("All peers have tripped circuit breakers");
+        let mut any_success = false;
+        let mut merged_current_seq = 0_u64;
+        let mut merged_oldest_retained_seq: Option<u64> = None;
+        let mut merged_node_current_seqs = BTreeMap::new();
+        let mut merged_ops: HashMap<(String, u64), OpLogEntry> = HashMap::new();
+        for peer in &self.peers {
+            if !peer.is_available() {
+                let error = format!("peer {} unavailable (circuit breaker open)", peer.peer_id());
+                if require_all_peers {
+                    return Err(error);
+                }
+                last_error = error;
+                continue;
+            }
 
-        for peer in self.peers.iter().filter(|p| p.is_available()) {
             match peer.get_ops(query.clone()).await {
                 Ok(resp) => {
+                    any_success = true;
+                    merged_current_seq = merged_current_seq.max(resp.current_seq);
+                    merged_oldest_retained_seq =
+                        match (merged_oldest_retained_seq, resp.oldest_retained_seq) {
+                            (Some(existing), Some(incoming)) => Some(existing.min(incoming)),
+                            (None, Some(incoming)) => Some(incoming),
+                            (existing, None) => existing,
+                        };
+                    if resp.node_current_seqs.is_empty() {
+                        merged_node_current_seqs
+                            .insert(peer.peer_id().to_string(), resp.current_seq);
+                    } else {
+                        for (node_id, node_seq) in resp.node_current_seqs {
+                            merged_node_current_seqs
+                                .entry(node_id)
+                                .and_modify(|existing| *existing = (*existing).max(node_seq))
+                                .or_insert(node_seq);
+                        }
+                    }
+
+                    for op in resp.ops {
+                        let key = (op.node_id.clone(), op.seq);
+                        if let Some(existing) = merged_ops.get(&key) {
+                            if existing.timestamp_ms != op.timestamp_ms
+                                || existing.op_type != op.op_type
+                                || existing.tenant_id != op.tenant_id
+                                || existing.payload != op.payload
+                            {
+                                tracing::warn!(
+                                    "[REPL {}] conflicting payload for key ({}, {}) across peers; keeping first seen op",
+                                    tenant_id,
+                                    key.0,
+                                    key.1
+                                );
+                            }
+                            continue;
+                        }
+                        merged_ops.insert(key, op);
+                    }
+
                     tracing::info!(
-                        "[REPL {}] caught up from peer {}: {} ops (local_seq={}, peer_seq={})",
+                        "[REPL {}] merged catch-up from peer {}: local_seq={}, peer_seq={}",
                         tenant_id,
                         peer.peer_id(),
-                        resp.ops.len(),
                         local_seq,
                         resp.current_seq
                     );
-                    return Ok(resp);
                 }
                 Err(e) => {
+                    if require_all_peers {
+                        return Err(format!(
+                            "peer {} failed catch-up for tenant '{}': {}",
+                            peer.peer_id(),
+                            tenant_id,
+                            e
+                        ));
+                    }
                     tracing::warn!(
-                        "[REPL {}] catch-up from peer {} failed, trying next: {}",
+                        "[REPL {}] catch-up from peer {} failed, continuing merge: {}",
                         tenant_id,
                         peer.peer_id(),
                         e
@@ -206,7 +395,25 @@ impl ReplicationManager {
             }
         }
 
-        Err(last_error)
+        if !any_success {
+            return Err(last_error);
+        }
+
+        let mut merged_ops: Vec<OpLogEntry> = merged_ops.into_values().collect();
+        merged_ops.sort_by(|left, right| {
+            left.seq
+                .cmp(&right.seq)
+                .then_with(|| left.node_id.cmp(&right.node_id))
+                .then_with(|| left.timestamp_ms.cmp(&right.timestamp_ms))
+        });
+
+        Ok(GetOpsResponse {
+            tenant_id: tenant_id.to_string(),
+            ops: merged_ops,
+            current_seq: merged_current_seq,
+            oldest_retained_seq: merged_oldest_retained_seq,
+            node_current_seqs: merged_node_current_seqs,
+        })
     }
 
     /// Discover visible tenant IDs from currently available peers.
@@ -225,7 +432,7 @@ impl ReplicationManager {
     /// Merge unique tenant IDs from available peers and optionally require one successful response.
     async fn discover_tenants_from_peers_internal(
         &self,
-        require_success: bool,
+        require_all_peers: bool,
     ) -> Result<Vec<String>, String> {
         if self.peers.is_empty() {
             return Ok(Vec::new());
@@ -234,7 +441,16 @@ impl ReplicationManager {
         let mut tenants = BTreeSet::new();
         let mut any_success = false;
         let mut last_error = String::from("All peers have tripped circuit breakers");
-        for peer in self.peers.iter().filter(|p| p.is_available()) {
+        for peer in &self.peers {
+            if !peer.is_available() {
+                let error = format!("peer {} unavailable (circuit breaker open)", peer.peer_id());
+                if require_all_peers {
+                    return Err(error);
+                }
+                last_error = error;
+                continue;
+            }
+
             match peer.list_tenants().await {
                 Ok(ListTenantsResponse {
                     tenants: peer_tenants,
@@ -243,6 +459,13 @@ impl ReplicationManager {
                     tenants.extend(peer_tenants);
                 }
                 Err(error) => {
+                    if require_all_peers {
+                        return Err(format!(
+                            "peer {} tenant discovery failed: {}",
+                            peer.peer_id(),
+                            error
+                        ));
+                    }
                     tracing::debug!(
                         "[REPL] tenant discovery from peer {} failed: {}",
                         peer.peer_id(),
@@ -253,7 +476,7 @@ impl ReplicationManager {
             }
         }
 
-        if require_success && !any_success {
+        if require_all_peers && !any_success {
             return Err(last_error);
         }
 
@@ -294,7 +517,7 @@ impl ReplicationManager {
     }
 
     /// Get peer acknowledgment status for a tenant
-    pub fn get_peer_cursors(&self, tenant_id: &str) -> Option<DashMap<String, u64>> {
+    pub fn get_peer_cursors(&self, tenant_id: &str) -> Option<DashMap<String, PeerCursor>> {
         self.peer_cursors.get(tenant_id).map(|entry| entry.clone())
     }
 
@@ -382,6 +605,34 @@ impl ReplicationManager {
 mod tests {
     use super::super::config::{NodeConfig, PeerConfig};
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn spawn_single_response_peer(
+        response: GetOpsResponse,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::to_string(&response).unwrap();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+
+        let handle = tokio::spawn(async move {
+            if let Ok(Ok((mut socket, _))) =
+                tokio::time::timeout(tokio::time::Duration::from_secs(3), listener.accept()).await
+            {
+                let mut request_buf = [0u8; 2048];
+                let _ = socket.read(&mut request_buf).await;
+                socket.write_all(header.as_bytes()).await.unwrap();
+                socket.write_all(body.as_bytes()).await.unwrap();
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (format!("http://{}", addr), handle)
+    }
 
     #[test]
     fn test_manager_creation() {
@@ -561,5 +812,230 @@ mod tests {
         let result = manager.catch_up_from_peer("test-tenant", 0).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("No peers available"));
+    }
+
+    #[tokio::test]
+    async fn test_catch_up_from_peer_merges_ops_from_all_available_peers() {
+        let peer_a_response = GetOpsResponse {
+            tenant_id: "tenant-red".to_string(),
+            ops: vec![OpLogEntry {
+                seq: 1,
+                timestamp_ms: 100,
+                node_id: "node-a".to_string(),
+                tenant_id: "tenant-red".to_string(),
+                op_type: "upsert".to_string(),
+                payload: serde_json::json!({"objectID": "a1", "body": {"_id": "a1", "title": "A"}}),
+            }],
+            current_seq: 1,
+            oldest_retained_seq: Some(1),
+            node_current_seqs: BTreeMap::from([(String::from("node-a"), 1)]),
+        };
+        let peer_c_response = GetOpsResponse {
+            tenant_id: "tenant-red".to_string(),
+            ops: vec![OpLogEntry {
+                seq: 1,
+                timestamp_ms: 200,
+                node_id: "node-c".to_string(),
+                tenant_id: "tenant-red".to_string(),
+                op_type: "upsert".to_string(),
+                payload: serde_json::json!({"objectID": "c1", "body": {"_id": "c1", "title": "C"}}),
+            }],
+            current_seq: 1,
+            oldest_retained_seq: Some(1),
+            node_current_seqs: BTreeMap::from([(String::from("node-c"), 1)]),
+        };
+
+        let (peer_a_url, peer_a_handle) = spawn_single_response_peer(peer_a_response).await;
+        let (peer_c_url, peer_c_handle) = spawn_single_response_peer(peer_c_response).await;
+
+        let manager = ReplicationManager::new(
+            NodeConfig {
+                node_id: "node-b".to_string(),
+                bind_addr: "127.0.0.1:0".to_string(),
+                peers: vec![
+                    PeerConfig {
+                        node_id: "node-a".to_string(),
+                        addr: peer_a_url,
+                    },
+                    PeerConfig {
+                        node_id: "node-c".to_string(),
+                        addr: peer_c_url,
+                    },
+                ],
+            },
+            None,
+        );
+
+        let merged = manager
+            .catch_up_from_peer_with_metadata("tenant-red", 0)
+            .await
+            .expect("at least one available peer should answer");
+
+        let _ = peer_a_handle.await;
+        let _ = peer_c_handle.await;
+
+        assert_eq!(merged.ops.len(), 2);
+        assert_eq!(merged.node_current_seqs.get("node-a"), Some(&1));
+        assert_eq!(merged.node_current_seqs.get("node-c"), Some(&1));
+        assert!(merged
+            .ops
+            .iter()
+            .any(|entry| entry.node_id == "node-a" && entry.seq == 1));
+        assert!(merged
+            .ops
+            .iter()
+            .any(|entry| entry.node_id == "node-c" && entry.seq == 1));
+    }
+
+    #[tokio::test]
+    async fn test_catch_up_from_peer_with_metadata_strict_rejects_partial_peer_success() {
+        let peer_a_response = GetOpsResponse {
+            tenant_id: "tenant-red".to_string(),
+            ops: vec![OpLogEntry {
+                seq: 1,
+                timestamp_ms: 100,
+                node_id: "node-a".to_string(),
+                tenant_id: "tenant-red".to_string(),
+                op_type: "upsert".to_string(),
+                payload: serde_json::json!({"objectID": "a1", "body": {"_id": "a1", "title": "A"}}),
+            }],
+            current_seq: 1,
+            oldest_retained_seq: Some(1),
+            node_current_seqs: BTreeMap::from([(String::from("node-a"), 1)]),
+        };
+
+        let (peer_a_url, peer_a_handle) = spawn_single_response_peer(peer_a_response).await;
+        let manager = ReplicationManager::new(
+            NodeConfig {
+                node_id: "node-b".to_string(),
+                bind_addr: "127.0.0.1:0".to_string(),
+                peers: vec![
+                    PeerConfig {
+                        node_id: "node-a".to_string(),
+                        addr: peer_a_url,
+                    },
+                    PeerConfig {
+                        node_id: "node-c".to_string(),
+                        addr: "http://127.0.0.1:1".to_string(),
+                    },
+                ],
+            },
+            None,
+        );
+
+        let error = manager
+            .catch_up_from_peer_with_metadata_strict("tenant-red", 0)
+            .await
+            .expect_err("strict catch-up must fail when any configured peer is unreachable");
+        let _ = peer_a_handle.await;
+
+        assert!(
+            error.contains("peer node-c failed catch-up"),
+            "strict failure should identify the unreachable peer, got: {}",
+            error
+        );
+    }
+
+    #[tokio::test]
+    async fn test_discover_tenants_from_peers_strict_rejects_partial_peer_success() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::to_string(&ListTenantsResponse {
+            tenants: vec!["tenant-red".to_string()],
+        })
+        .unwrap();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        let handle = tokio::spawn(async move {
+            if let Ok(Ok((mut socket, _))) =
+                tokio::time::timeout(tokio::time::Duration::from_secs(3), listener.accept()).await
+            {
+                let mut request_buf = [0u8; 2048];
+                let _ = socket.read(&mut request_buf).await;
+                socket.write_all(header.as_bytes()).await.unwrap();
+                socket.write_all(body.as_bytes()).await.unwrap();
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        let manager = ReplicationManager::new(
+            NodeConfig {
+                node_id: "node-b".to_string(),
+                bind_addr: "127.0.0.1:0".to_string(),
+                peers: vec![
+                    PeerConfig {
+                        node_id: "node-a".to_string(),
+                        addr: format!("http://{}", addr),
+                    },
+                    PeerConfig {
+                        node_id: "node-c".to_string(),
+                        addr: "http://127.0.0.1:1".to_string(),
+                    },
+                ],
+            },
+            None,
+        );
+
+        let error = manager
+            .discover_tenants_from_peers_strict()
+            .await
+            .expect_err(
+                "strict tenant discovery must fail when any configured peer is unreachable",
+            );
+        let _ = handle.await;
+
+        assert!(
+            error.contains("peer node-c tenant discovery failed"),
+            "strict tenant discovery failure should identify the unreachable peer, got: {}",
+            error
+        );
+    }
+
+    /// Regresses C1 ownership gap locally: both configured unreachable peers
+    /// must still be represented after retry exhaustion.
+    #[tokio::test]
+    async fn test_replicate_ops_tracks_unreachable_peers_after_retry_exhaustion() {
+        let config = NodeConfig {
+            node_id: "node-a".to_string(),
+            bind_addr: "0.0.0.0:7700".to_string(),
+            peers: vec![
+                PeerConfig {
+                    node_id: "node-b".to_string(),
+                    addr: "http://127.0.0.1:1".to_string(),
+                },
+                PeerConfig {
+                    node_id: "node-c".to_string(),
+                    addr: "http://127.0.0.1:2".to_string(),
+                },
+            ],
+        };
+
+        let manager = ReplicationManager::new(config, None);
+        let op = OpLogEntry {
+            seq: 1,
+            timestamp_ms: 1,
+            node_id: "node-a".to_string(),
+            tenant_id: "tenant-red".to_string(),
+            op_type: "upsert".to_string(),
+            payload: serde_json::json!({"objectID": "doc-1", "body": {"_id": "doc-1", "name": "Alpha"}}),
+        };
+
+        manager.replicate_ops("tenant-red", vec![op]).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(2300)).await;
+
+        let tracked_peers = manager
+            .get_peer_cursors("tenant-red")
+            .expect("tenant cursor map should exist after retry exhaustion");
+        assert_eq!(tracked_peers.len(), 2);
+        assert!(tracked_peers.contains_key("node-b"));
+        assert!(tracked_peers.contains_key("node-c"));
+        assert!(tracked_peers
+            .iter()
+            .all(|entry| entry.value().last_acked_seq.is_none()));
+        assert!(tracked_peers
+            .iter()
+            .all(|entry| entry.value().last_delivery_error.is_some()));
     }
 }

@@ -29,23 +29,33 @@ Open a GitHub Issue describing:
 4. Run the required checks locally.
 5. Open a PR with a clear description, rationale, and validation notes.
 
+## Build Prerequisites
+
+- Current stable Rust toolchain installed (`cargo`, `rustfmt`, `clippy`).
+- Run contributor checks from `engine/`, where the Rust workspace and maintained test runner live.
+
 ## Code Style
 
 - Follow existing Rust conventions and module patterns in the codebase.
 - Keep changes focused and avoid unrelated refactors.
-- Run and pass formatting and linting before opening a PR:
+- Run and pass formatting and linting from `engine/` before opening a PR:
   - `cargo fmt --check`
-  - `cargo clippy -p <crate>`
+  - `cargo clippy -p flapjack --all-targets -- -D warnings`
+  - `cargo clippy -p flapjack-http --all-targets -- -D warnings`
 
 ## Testing Expectations
 
-Run the project test entry point before opening a PR:
+`engine/s/test` is the maintained project test entrypoint.
 
-- `engine/s/test`
+Use focused checks first from `engine/`, then broaden as needed:
 
-When possible, run focused crate or file-level tests first for fast feedback, then run broader checks as needed.
+- `./s/test --unit`
+- `./s/test --integ`
+- `./s/test --server`
+- `./s/test`
 
 ## Architecture and Testing References
 
+- [Workspace guide](engine/README.md)
 - [Architecture](engine/docs2/3_IMPLEMENTATION/ARCHITECTURE.md)
 - [Testing](engine/docs2/1_STRATEGY/TESTING.md)

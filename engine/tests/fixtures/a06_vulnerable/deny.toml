@@ -1,0 +1,4 @@
+[advisories]
+unmaintained = "all"
+yanked = "deny"
+ignore = []

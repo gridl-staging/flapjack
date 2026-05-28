@@ -1,6 +1,6 @@
 # Flapjack Search C# Client
 
-Official C#/.NET client for the [Flapjack Search API](https://github.com/flapjackhq).
+Official C#/.NET client for the [Flapjack Search API](https://github.com/gridl-staging).
 
 Drop-in replacement for `Algolia.Search` NuGet package. Algolia-compatible REST API with Flapjack-native host routing.
 

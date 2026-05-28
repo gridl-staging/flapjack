@@ -1,6 +1,6 @@
 # Flapjack Search Ruby SDK
 
-A fully-featured Ruby API client for [Flapjack Search](https://github.com/flapjackhq/flapjack). Drop-in replacement for the `algolia` gem.
+A fully-featured Ruby API client for [Flapjack Search](https://github.com/gridl-hq/flapjack). Drop-in replacement for the `algolia` gem.
 
 ## Installation
 
@@ -28,7 +28,7 @@ client = Flapjack::SearchClient.create('YOUR_APP_ID', 'YOUR_API_KEY')
 hosts = [
   Flapjack::Transport::StatefulHost.new(
     'localhost',
-    protocol: 'http://',
+    protocol: 'http',
     port: 7700,
     accept: CallType::READ | CallType::WRITE
   )
