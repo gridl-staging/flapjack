@@ -19,9 +19,12 @@ release or engine status:
   `gridl-staging/flapjack` → prod `flapjackhq/flapjack` (the public face).
   `debbie sync` (see `.debbie.toml`) curates files along that chain; CI runs free
   on the staging and prod mirrors. The **prod mirror's `release.yml` is the
-  authoritative release CI** — git tags, GitHub Releases, and GHCR images exist
-  only on the prod mirror, never on the dev repo (`git tag -l` on dev is empty
-  even when a release shipped).
+  Authoritative CI for release closeout** — git tags, GitHub Releases, and GHCR
+  images exist only on the prod mirror, never on the dev repo (`git tag -l` on
+  dev is empty even when a release shipped). If GHCR package metadata is
+  unlinked (`repository:null`), the repo `GITHUB_TOKEN` cannot publish that
+  package, but recovery remains agent-doable with an org-admin PAT carrying
+  `write:packages` plus a re-dispatch of prod mirror `release.yml`.
 - **`/version.dev_sha` is the fjcloud control-plane SHA, not the engine
   version.** `api.{staging.}flapjack.foo/version.dev_sha` reports
   `FJCLOUD_DEV_SHA`, baked at fjcloud CI build time. The flapjack engine reaches

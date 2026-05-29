@@ -251,12 +251,21 @@ needed, restoring operator-controlled data taken before the upgrade.
 **Recovery:** Start the server once to initialize `keys.json`, then rerun `reset-admin-key`.
 **Test (where applicable):** `cargo test -p flapjack-server --test admin_key_test`
 
+### Scenario: Recover a partial GHCR release after Docker publish failure
+
+**Symptom:** release automation published tag/release assets but Docker publish failed with `denied: permission_denied: write_package`, often when GHCR package metadata shows `repository:null`.
+**Diagnosis:** In `.github/workflows/release.yml`, the `release` job can complete before Docker promotion jobs run; a package-authorization failure then leaves a partial release where `v<version>` exists but `ghcr.io/flapjackhq/flapjack:<version>` is missing.
+**Recovery:** Keep the existing tag/release and re-dispatch the same workflow with `gh workflow run release.yml -f version=<v>`; do not recreate the git tag. Ensure GHCR auth uses `${{ secrets.GITHUB_TOKEN }}` (the workflow's docker/login owner) so Docker jobs can publish.
+**Proof:** `docker run ghcr.io/flapjackhq/flapjack:<v> --version`
+**Test (where applicable):** N/A (operator runbook sourced from `.github/workflows/release.yml` release + docker_prepare ownership)
+
 ## Runbook behavioral reference
 
 - Security policy ownership for production admin-key floor and admin-only operational surfaces remains in [SECURITY_BASELINE.md](./SECURITY_BASELINE.md).
 - Deployment/readiness probe contracts remain in [DEPLOYMENT.md](./DEPLOYMENT.md), and runtime configuration ownership remains in [OPS_CONFIGURATION.md](./OPS_CONFIGURATION.md).
 - Under sustained rolling restarts with continuous writes, the nginx-routed example topology keeps availability while converging to a bounded per-node document-count spread; the residual reflects nginx restart-window write loss and is tracked as roadmap PL-8. Narrative seam is ADR [`0004`](decisions/active/0004_ha_convergence_reversal.md); canonical retained evidence is [`engine/loadtest/BENCHMARKS.md`](../../loadtest/BENCHMARKS.md).
 - For PL-10 write-path saturation revalidation, operators should use [`engine/loadtest/BENCHMARKS.md`](../../loadtest/BENCHMARKS.md) as the numeric SSOT and [`engine/docs/research/pl10_stage6_dual_scenario_classification.md`](../../docs/research/pl10_stage6_dual_scenario_classification.md) for Stage 6 dual-scenario verdict details.
+- Engine deploy-model fact mirror: flapjack reaches fjcloud via a `Packer AMI`, and `/version.dev_sha` is fjcloud control-plane SHA rather than engine version. Canonical owner remains [.scrai/rules.md](../../../.scrai/rules.md).
 
 ## Idempotency contract
 
@@ -272,6 +281,8 @@ and ADR [`0005`](decisions/active/0005_nginx_restart_window_write_recovery.md).
 | Scope | Per server process (in-memory). Each node in an HA cluster keeps its own cache. |
 | Hit semantics | Cache hit replays the original `2xx` response and adds `X-Flapjack-Idempotency-Replayed: true`. |
 | Restart | Cache is cleared. Client retries after a restart re-execute as fresh writes. |
+| Add durability | `add_documents_durable` waits for `await_task_terminal`/`wait_for_write_durable` before acking success, so accepted add writes are durable-commit acknowledgements rather than queue-only acceptance. |
+| Delete durability | `pending PL-14`: delete handlers currently call `delete_documents_sync` (`objects/batch.rs`, `objects/mod.rs`, and replica fanout in `replicas.rs`). Do not assume add/delete parity yet. |
 | 429 / 503 | Transient errors include `Retry-After: 1`; clients SHOULD retry with the same key. |
 
 ### Known limitations (paid-beta posture)
@@ -302,6 +313,9 @@ and ADR [`0005`](decisions/active/0005_nginx_restart_window_write_recovery.md).
 3. Honor `Retry-After` (currently always `1s` on transient errors).
 4. Treat `X-Flapjack-Idempotency-Replayed: true` as confirmation of a prior
    successful execution; do not re-emit the request.
+5. Do not treat queue admission as success: accepted add writes acknowledge only
+   after durable commit; on transient `429`/`503`, retry the same request with
+   the same idempotency key.
 
 ## Observability contract
 

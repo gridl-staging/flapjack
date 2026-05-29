@@ -22,6 +22,7 @@ May 22 OSS polish wave status facts (lanes A-F, including Lane F FAIL gaps) are 
 | Canonical dev source for this wave | `1a0f34c2dfe1b6b973c9359bef49fe7a098d0128` |
 | Staging publication | Commit `61f62b0cfa15d5d3926e4c39004f9764265ec40d` with CI run `24483181835` green |
 | Prod publication | Commit `cdbfc2fa229c18633fb15c58e3c89d6c1bc201d7` with CI run `24484835679` green |
+| Release closeout channels | `github_release`, `binaries`, `ghcr_VERSION`, `ghcr_latest`, `mirror_ci`, `nightlies` |
 | Preserved cleanup lineage in prod history | Commit `c1d46d5` preserved in the pushed prod range |
 | Non-pruned stale-file removals in public clones | Removed `.debbie.toml` from staging+prod, removed `AGENTS.md` from prod, removed `engine/.cargo/config.toml` from prod |
 | Tracked-file audit outcome | No blocker leaks. Accepted exceptions remain code-level `.secret` path strings and the deliberate `stuartcrobinson/tantivy` fork URL |
