@@ -223,6 +223,13 @@ needed, restoring operator-controlled data taken before the upgrade.
 **Recovery:** Restore peer reachability (address/auth/network) first, then restart the replica.
 **Test (where applicable):** `cargo test -p flapjack --test test_replication -- test_restart_refuses_to_serve_when_peer_is_unreachable`
 
+### Scenario: Peer-failed amplification exceeds acceptance bound
+
+**Symptom:** `engine/loadtest/tests/ha_peer_failed_amplification_acceptance.sh` reports `raw_peer_down_count` outside the absolute window `MIN_PEER_DOWN <= raw_peer_down_count <= MAX_PEER_DOWN` (calibrated `MAX_PEER_DOWN_LITERAL=94`) from the probe at `engine/_dev/s/manual-tests/ha-peer-failed-amp-probe.sh`.
+**Diagnosis:** The induced peer-down window emitted either too few or too many `Failed to send request to node-b` events for the calibrated bound. The PL-12 v2 contract uses an absolute peer-down count, not a ratio against baseline — see `docs/research/pl12_stage1_baseline.md` for the calibration formula (`CV > 0.30` high-variance fallback, `ceil(max(max_observed * 2, 50))`) and `docs/research/pl12v2_stage2_tune_plan.md` for why `DEFAULT_FAILURE_THRESHOLD=3` is intentionally retained rather than retuned in response to amplification deviations.
+**Recovery:** Re-run the probe against a stable emitter set with re-anchored windows; if deviation persists, recalibrate the bound from a fresh sample using the formula in `docs/research/pl12_stage1_baseline.md` before changing circuit-breaker defaults.
+**Test (where applicable):** `bash engine/loadtest/tests/ha_peer_failed_amplification_acceptance.sh`
+
 ### Scenario: Rotate admin key online
 
 **Symptom:** `POST /internal/rotate-admin-key` returns `{"key":"fj_admin_<32hex>","message":"Admin key rotated"}`, old key fails admin routes, and new key succeeds.

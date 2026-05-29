@@ -1,5 +1,21 @@
 # Flapjack Loadtest Evidence
 
+## PL-12 v2 HA Peer-Failed Amplification Contract (May 29, 2026)
+
+### Scenario Owner
+
+- Probe: [`engine/_dev/s/manual-tests/ha-peer-failed-amp-probe.sh`](../_dev/s/manual-tests/ha-peer-failed-amp-probe.sh)
+- Acceptance contract: [`engine/loadtest/tests/ha_peer_failed_amplification_acceptance.sh`](tests/ha_peer_failed_amplification_acceptance.sh)
+- Stage 1 calibration evidence: [`docs/research/pl12_stage1_baseline.md`](../../docs/research/pl12_stage1_baseline.md)
+- Stage 3 no-tune decision: [`docs/research/pl12v2_stage2_tune_plan.md`](../../docs/research/pl12v2_stage2_tune_plan.md)
+
+### Final Contract Posture
+
+- Ratio threshold retired as gate: the prior `(peer_down+1)/(baseline+1)` metric degenerates when the steady-state baseline is near zero, so it is no longer used to pass/fail the acceptance.
+- Absolute peer-down bound calibrated to `MAX_PEER_DOWN_LITERAL=94` via the high-variance fallback (`CV > 0.30`, `ceil(max(max_observed * 2, 50))`) from the Stage 2 post-read-index-fix sample (`max_observed=47`, `aggregate_cv_raw_peer_down_count=0.425083`).
+- Acceptance gate: `MIN_PEER_DOWN <= raw_peer_down_count <= MAX_PEER_DOWN`.
+- Circuit-breaker threshold kept at default (`DEFAULT_FAILURE_THRESHOLD=3`) per Stage-3 like-for-like cap-hit evidence — `raw_peer_down_count` is not a monotonic proxy for queue-cap pressure, so there is no causal basis to retune from this sample.
+
 ## PL-13 Single-doc Durable Write Throughput (May 28, 2026)
 
 ### Scenario Owner

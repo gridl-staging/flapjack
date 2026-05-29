@@ -151,6 +151,11 @@ pub struct ConcludedExperimentResponse {
 /// TODO: Document concluded_experiment_response.
 /// TODO: Document concluded_experiment_response.
 /// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
+/// TODO: Document concluded_experiment_response.
 #[allow(clippy::result_large_err)] // Response is inherently large in axum; boxing adds indirection without benefit at a single call site
 pub(super) fn concluded_experiment_response(
     experiment: Experiment,
@@ -237,7 +242,10 @@ pub(super) fn attach_experiment_warning_header(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::to_bytes;
+    use axum::{
+        body::{to_bytes, Body},
+        response::IntoResponse,
+    };
 
     fn sample_experiment(
         status: ExperimentStatus,
@@ -460,5 +468,44 @@ mod tests {
 
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(json["message"], "Internal server error");
+    }
+
+    #[test]
+    fn attach_experiment_warning_header_inserts_warning_header() {
+        let response =
+            attach_experiment_warning_header(StatusCode::ACCEPTED.into_response(), Some("warn"));
+
+        assert_eq!(
+            response
+                .headers()
+                .get(EXPERIMENT_WARNING_HEADER_NAME)
+                .expect("warning header should be present"),
+            "warn"
+        );
+    }
+
+    #[test]
+    fn attach_experiment_warning_header_preserves_existing_headers_when_warning_missing() {
+        let mut response = Response::new(Body::empty());
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-test-header"),
+            axum::http::HeaderValue::from_static("keep"),
+        );
+
+        let response = attach_experiment_warning_header(response, None);
+
+        assert!(
+            response
+                .headers()
+                .get(EXPERIMENT_WARNING_HEADER_NAME)
+                .is_none()
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-test-header")
+                .expect("existing headers should survive"),
+            "keep"
+        );
     }
 }
