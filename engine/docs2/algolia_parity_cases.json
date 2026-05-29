@@ -1,0 +1,74 @@
+[
+  {
+    "id": "keys.create",
+    "method": "POST",
+    "path": "/1/keys",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "keys.update",
+    "method": "PUT",
+    "path": "/1/keys/{key}",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "keys.delete",
+    "method": "DELETE",
+    "path": "/1/keys/{key}",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "keys.restore",
+    "method": "POST",
+    "path": "/1/keys/{key}/restore",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "abtests.create",
+    "method": "POST",
+    "path": "/2/abtests",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "abtests.delete",
+    "method": "DELETE",
+    "path": "/2/abtests/{id}",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "abtests.stop",
+    "method": "POST",
+    "path": "/2/abtests/{id}/stop",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "indexes.delete",
+    "method": "DELETE",
+    "path": "/1/indexes/{indexName}",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "objects.save_auto_id",
+    "method": "POST",
+    "path": "/1/indexes/{indexName}",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "objects.batch",
+    "method": "POST",
+    "path": "/1/indexes/{indexName}/batch",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "objects.delete",
+    "method": "DELETE",
+    "path": "/1/indexes/{indexName}/{objectID}",
+    "parity_kind": "Algolia parity"
+  },
+  {
+    "id": "objects.partial",
+    "method": "POST",
+    "path": "/1/indexes/{indexName}/{objectID}/partial",
+    "parity_kind": "Algolia parity"
+  }
+]
