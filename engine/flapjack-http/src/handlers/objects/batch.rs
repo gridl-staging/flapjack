@@ -5,11 +5,12 @@ use axum::extract::State;
 use axum::Json;
 
 use super::super::indices::clear_index_impl;
-use super::super::replicas::{
-    sync_add_documents_to_standard_replicas, sync_delete_documents_to_standard_replicas,
-};
+use super::super::replicas::sync_add_documents_to_standard_replicas;
 use super::super::AppState;
-use super::{check_record_size, merge_partial_update};
+use super::{
+    check_record_size, delete_documents_durable_task_aware, merge_partial_update,
+    sync_delete_documents_to_standard_replicas_task_aware, AddDocumentsError,
+};
 use crate::dto::{AddDocumentsRequest, AddDocumentsResponse, BatchOperation};
 use crate::pause_registry::check_not_paused;
 use flapjack::error::FlapjackError;
@@ -152,7 +153,7 @@ impl BatchExecutionState {
         &mut self,
         state: &Arc<AppState>,
         index_name: &str,
-    ) -> Result<(), FlapjackError> {
+    ) -> Result<(), AddDocumentsError> {
         self.flush_pending(state, index_name).await?;
         let index_name = index_name.to_string();
         self.last_task_id = Some(clear_index_impl(state, &index_name).await?);
@@ -165,7 +166,7 @@ impl BatchExecutionState {
         state: &Arc<AppState>,
         index_name: &str,
         operation: BatchOperation,
-    ) -> Result<(), FlapjackError> {
+    ) -> Result<(), AddDocumentsError> {
         let BatchOperation {
             action,
             index_name: _,
@@ -178,23 +179,25 @@ impl BatchExecutionState {
         validate_operation_body_size(&action, &body)?;
 
         match action.as_str() {
-            "deleteObject" | "delete" => self.queue_delete(&action, body),
-            "partialUpdateObject" => self.queue_partial_update(
-                state,
-                index_name,
-                body,
-                create_if_not_exists.unwrap_or(true),
-            ),
-            "partialUpdateObjectNoCreate" => {
-                self.queue_partial_update(state, index_name, body, false)
-            }
-            "updateObject" => self.queue_update(body),
-            "addObject" => self.queue_add(body),
+            "deleteObject" | "delete" => self.queue_delete(&action, body).map_err(Into::into),
+            "partialUpdateObject" => self
+                .queue_partial_update(
+                    state,
+                    index_name,
+                    body,
+                    create_if_not_exists.unwrap_or(true),
+                )
+                .map_err(Into::into),
+            "partialUpdateObjectNoCreate" => self
+                .queue_partial_update(state, index_name, body, false)
+                .map_err(Into::into),
+            "updateObject" => self.queue_update(body).map_err(Into::into),
+            "addObject" => self.queue_add(body).map_err(Into::into),
             "clear" => self.clear(state, index_name).await,
-            _ => Err(FlapjackError::InvalidQuery(format!(
+            _ => Err(Into::into(FlapjackError::InvalidQuery(format!(
                 "Unsupported batch action: {}",
                 action
-            ))),
+            )))),
         }
     }
 
@@ -202,7 +205,7 @@ impl BatchExecutionState {
         &mut self,
         state: &Arc<AppState>,
         index_name: &str,
-    ) -> Result<(), FlapjackError> {
+    ) -> Result<(), AddDocumentsError> {
         if let Some(task_id) =
             flush_pending_batch_operations(state, index_name, &mut self.pending).await?
         {
@@ -312,7 +315,7 @@ async fn flush_pending_batch_operations(
     state: &Arc<AppState>,
     index_name: &str,
     pending: &mut PendingBatchOperations,
-) -> Result<Option<i64>, FlapjackError> {
+) -> Result<Option<i64>, AddDocumentsError> {
     if pending.is_empty() {
         return Ok(None);
     }
@@ -332,26 +335,41 @@ async fn flush_pending_batch_operations(
         .unwrap_or(0);
 
     let task_id = if documents.is_empty() && !deletes.is_empty() {
-        state
-            .manager
-            .delete_documents_sync(index_name, deletes.clone())
-            .await?;
-        sync_delete_documents_to_standard_replicas(state, index_name, &deletes).await?;
+        let delete_task =
+            delete_documents_durable_task_aware(state, index_name, deletes.clone()).await?;
+        sync_delete_documents_to_standard_replicas_task_aware(
+            state,
+            index_name,
+            &deletes,
+            delete_task.numeric_id,
+        )
+        .await?;
         // Deletes committed synchronously — replicate immediately.
         trigger_replication(state, index_name, pre_seq, false);
-        state.manager.make_noop_task(index_name)?.numeric_id
-    } else if !deletes.is_empty() {
-        // Batch has explicit deletes (e.g. partialUpdateObject) — delete first, then add.
         state
             .manager
-            .delete_documents_sync(index_name, deletes.clone())
-            .await?;
-        sync_delete_documents_to_standard_replicas(state, index_name, &deletes).await?;
+            .make_noop_task(index_name)
+            .map_err(AddDocumentsError::from)?
+            .numeric_id
+    } else if !deletes.is_empty() {
+        // Batch has explicit deletes (e.g. partialUpdateObject) — delete first, then add.
+        let delete_task =
+            delete_documents_durable_task_aware(state, index_name, deletes.clone()).await?;
+        sync_delete_documents_to_standard_replicas_task_aware(
+            state,
+            index_name,
+            &deletes,
+            delete_task.numeric_id,
+        )
+        .await?;
         let task = state
             .manager
             .add_documents_durable(index_name, documents.clone())
-            .await?;
-        sync_add_documents_to_standard_replicas(state, index_name, &documents).await?;
+            .await
+            .map_err(AddDocumentsError::from)?;
+        sync_add_documents_to_standard_replicas(state, index_name, &documents)
+            .await
+            .map_err(AddDocumentsError::from)?;
         // Adds are durable — the write queue has committed before we read the oplog.
         trigger_replication(state, index_name, pre_seq, true);
         task.numeric_id
@@ -360,8 +378,11 @@ async fn flush_pending_batch_operations(
         let task = state
             .manager
             .add_documents_durable(index_name, documents.clone())
-            .await?;
-        sync_add_documents_to_standard_replicas(state, index_name, &documents).await?;
+            .await
+            .map_err(AddDocumentsError::from)?;
+        sync_add_documents_to_standard_replicas(state, index_name, &documents)
+            .await
+            .map_err(AddDocumentsError::from)?;
         trigger_replication(state, index_name, pre_seq, true);
         task.numeric_id
     };
@@ -392,11 +413,11 @@ async fn flush_pending_batch_operations(
 ///
 /// * `index_name` - Target index for all operations in this batch.
 /// * `req` - Batch or legacy add-documents request body.
-pub async fn add_documents_batch_impl(
+pub(super) async fn add_documents_batch_impl(
     State(state): State<Arc<AppState>>,
     index_name: String,
     req: AddDocumentsRequest,
-) -> Result<Json<AddDocumentsResponse>, FlapjackError> {
+) -> Result<Json<AddDocumentsResponse>, AddDocumentsError> {
     use super::super::replicas::reject_writes_to_virtual_replica;
 
     reject_writes_to_virtual_replica(&state, &index_name)?;
@@ -420,7 +441,7 @@ pub async fn add_documents_batch_impl(
 pub(super) async fn add_documents_multi_index_impl(
     State(state): State<Arc<AppState>>,
     req: AddDocumentsRequest,
-) -> Result<Json<AddDocumentsResponse>, FlapjackError> {
+) -> Result<Json<AddDocumentsResponse>, AddDocumentsError> {
     let operations = match req {
         AddDocumentsRequest::Batch { requests } => requests,
         AddDocumentsRequest::Legacy { documents: docs } => docs
@@ -477,14 +498,14 @@ pub(super) async fn add_documents_multi_index_impl(
                 task_ids.insert(target_index, task_id);
             }
             AddDocumentsResponse::MultiIndexAlgolia { .. } => {
-                return Err(FlapjackError::InvalidQuery(
+                return Err(AddDocumentsError::from(FlapjackError::InvalidQuery(
                     "Unexpected multi-index response while processing grouped batch".to_string(),
-                ));
+                )));
             }
             AddDocumentsResponse::Legacy { .. } => {
-                return Err(FlapjackError::InvalidQuery(
+                return Err(AddDocumentsError::from(FlapjackError::InvalidQuery(
                     "Unexpected legacy response while processing grouped batch".to_string(),
-                ));
+                )));
             }
         }
     }

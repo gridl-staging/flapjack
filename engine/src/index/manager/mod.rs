@@ -138,6 +138,10 @@ use ranking::*;
 use tokenization::*;
 
 impl IndexManager {
+    fn is_task_terminal(status: &TaskStatus) -> bool {
+        !matches!(status, TaskStatus::Enqueued | TaskStatus::Processing)
+    }
+
     /// Create a new IndexManager with the given base directory.
     ///
     /// Each tenant's index will be stored in `{base_path}/{tenant_id}/`.
@@ -236,11 +240,7 @@ impl IndexManager {
         self.tasks
             .iter()
             .filter(|entry| {
-                entry.key().starts_with(&prefix)
-                    && matches!(
-                        entry.value().status,
-                        TaskStatus::Enqueued | TaskStatus::Processing
-                    )
+                entry.key().starts_with(&prefix) && !Self::is_task_terminal(&entry.value().status)
             })
             .count()
     }
@@ -250,12 +250,10 @@ impl IndexManager {
     pub async fn wait_for_pending_tasks(&self, timeout: std::time::Duration) -> bool {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let has_pending = self.tasks.iter().any(|entry| {
-                matches!(
-                    entry.value().status,
-                    TaskStatus::Enqueued | TaskStatus::Processing
-                )
-            });
+            let has_pending = self
+                .tasks
+                .iter()
+                .any(|entry| !Self::is_task_terminal(&entry.value().status));
             if !has_pending {
                 return true;
             }
@@ -270,7 +268,7 @@ impl IndexManager {
     /// are sorted by creation time; both the string task ID and numeric ID alias are removed.
     pub fn evict_old_tasks(&self, tenant_id: &str, max_tasks: usize) {
         let prefix = format!("task_{}_{}", tenant_id, "");
-        let mut tenant_tasks: Vec<_> = self
+        let tenant_tasks: Vec<_> = self
             .tasks
             .iter()
             .filter(|entry| entry.key().starts_with(&prefix))
@@ -279,15 +277,23 @@ impl IndexManager {
                     entry.key().clone(),
                     entry.value().numeric_id,
                     entry.value().created_at,
+                    entry.value().status.clone(),
                 )
             })
             .collect();
 
         if tenant_tasks.len() >= max_tasks {
-            tenant_tasks.sort_by_key(|(_, _, created_at)| *created_at);
-            for (task_id, numeric_id, _) in
-                tenant_tasks.iter().take(tenant_tasks.len() - max_tasks + 1)
-            {
+            let target_removals = tenant_tasks.len() - max_tasks + 1;
+            // Keep in-flight tasks visible for wait loops even when over cap.
+            // If terminal tasks are insufficient, we temporarily run above cap
+            // until later sweeps after those tasks reach terminal state.
+            let mut terminal_tasks: Vec<_> = tenant_tasks
+                .into_iter()
+                .filter(|(_, _, _, status)| Self::is_task_terminal(status))
+                .map(|(task_id, numeric_id, created_at, _)| (task_id, numeric_id, created_at))
+                .collect();
+            terminal_tasks.sort_by_key(|(_, _, created_at)| *created_at);
+            for (task_id, numeric_id, _) in terminal_tasks.iter().take(target_removals) {
                 self.tasks.remove(task_id);
                 // Also remove the numeric_id alias key
                 self.tasks.remove(&numeric_id.to_string());

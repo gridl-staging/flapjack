@@ -1,6 +1,6 @@
-//! Helpers for managing replica indexes: resolving virtual-vs-physical search targets, persisting and clearing primary links, and mirroring document writes/deletes to standard replicas.
 use super::AppState;
 use flapjack::error::FlapjackError;
+use flapjack::index::manager::validate_index_name;
 use flapjack::index::replica::{parse_replica_entry, standard_replica_names, ReplicaEntry};
 use flapjack::index::settings::IndexSettings;
 use flapjack::types::Document;
@@ -12,6 +12,9 @@ pub(crate) fn standard_replicas_for_primary(
     state: &Arc<AppState>,
     primary_index_name: &str,
 ) -> Result<Vec<String>, FlapjackError> {
+    // Replica settings live under the tenant data tree, so reject invalid names
+    // before any filesystem join can escape the configured base path.
+    validate_index_name(primary_index_name)?;
     let settings_path = state
         .manager
         .base_path
@@ -30,6 +33,9 @@ pub(crate) fn standard_replicas_for_primary(
 }
 
 pub(crate) fn has_physical_index_data(state: &Arc<AppState>, index_name: &str) -> bool {
+    if validate_index_name(index_name).is_err() {
+        return false;
+    }
     state
         .manager
         .base_path
@@ -119,8 +125,10 @@ pub(crate) fn persist_replica_primary_links(
     primary_index_name: &str,
     replicas: &[ReplicaEntry],
 ) -> Result<(), FlapjackError> {
+    validate_index_name(primary_index_name)?;
     for replica in replicas {
         let replica_name = replica.name();
+        validate_index_name(replica_name)?;
         match replica {
             ReplicaEntry::Standard(_) => state.manager.create_tenant(replica_name)?,
             ReplicaEntry::Virtual(_) => {
@@ -153,6 +161,7 @@ pub(crate) fn clear_removed_replica_primary_links(
     previous_replicas: Option<&[String]>,
     next_replicas: &[ReplicaEntry],
 ) -> Result<(), FlapjackError> {
+    validate_index_name(primary_index_name)?;
     let previous = previous_replicas.unwrap_or(&[]);
     if previous.is_empty() {
         return Ok(());
@@ -228,8 +237,78 @@ pub(crate) async fn sync_delete_documents_to_standard_replicas(
         state.manager.create_tenant(&replica_name)?;
         state
             .manager
-            .delete_documents_sync(&replica_name, object_ids.to_vec())
+            .delete_documents_durable(&replica_name, object_ids.to_vec())
             .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dashmap::DashMap;
+    use flapjack::dictionaries::manager::DictionaryManager;
+    use flapjack::recommend::RecommendConfig;
+    use flapjack::IndexManager;
+    use tempfile::TempDir;
+
+    fn make_state(base: &std::path::Path) -> Arc<AppState> {
+        let manager = IndexManager::new(base);
+        let dictionary_manager = Arc::new(DictionaryManager::new(base));
+        manager.set_dictionary_manager(Arc::clone(&dictionary_manager));
+
+        Arc::new(AppState {
+            manager,
+            key_store: None,
+            replication_manager: None,
+            ssl_manager: None,
+            analytics_engine: None,
+            recommend_config: RecommendConfig::default(),
+            experiment_store: None,
+            dictionary_manager,
+            metrics_state: None,
+            usage_counters: Arc::new(DashMap::new()),
+            usage_persistence: None,
+            paused_indexes: crate::pause_registry::PausedIndexes::new(),
+            geoip_reader: None,
+            notification_service: None,
+            start_time: std::time::Instant::now(),
+            conversation_store: crate::conversation_store::ConversationStore::default_shared(),
+            embedder_store: Arc::new(crate::embedder_store::EmbedderStore::new()),
+            idempotency_cache: Arc::new(crate::idempotency::IdempotencyCache::new(
+                std::time::Duration::from_secs(300),
+            )),
+        })
+    }
+
+    #[tokio::test]
+    async fn standard_replicas_for_primary_rejects_path_traversal_name() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state = make_state(temp_dir.path());
+
+        let err = standard_replicas_for_primary(&state, "../escape").expect_err("must reject");
+
+        assert!(
+            matches!(err, FlapjackError::InvalidQuery(_)),
+            "expected invalid query error, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_replica_primary_links_rejects_path_traversal_primary() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let state = make_state(temp_dir.path());
+
+        let err = persist_replica_primary_links(
+            &state,
+            "../escape",
+            &[ReplicaEntry::Virtual("replica_virtual".to_string())],
+        )
+        .expect_err("must reject");
+
+        assert!(
+            matches!(err, FlapjackError::InvalidQuery(_)),
+            "expected invalid query error, got {err:?}"
+        );
+    }
 }

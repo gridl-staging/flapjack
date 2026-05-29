@@ -1,9 +1,8 @@
 mod batch;
 
-pub use batch::add_documents_batch_impl;
-
 use axum::{
     extract::{Path, Query, State},
+    response::IntoResponse,
     Json,
 };
 use std::sync::Arc;
@@ -22,7 +21,7 @@ use crate::filter_parser::parse_filter;
 use crate::pause_registry::check_not_paused;
 use flapjack::error::FlapjackError;
 use flapjack::index::SearchOptions;
-use flapjack::types::{Document, FieldValue};
+use flapjack::types::{Document, FieldValue, TaskInfo};
 
 use flapjack::types::field_value_to_json_value;
 
@@ -287,7 +286,6 @@ pub async fn add_documents(
     Json(req): Json<serde_json::Value>,
 ) -> Result<axum::response::Response, FlapjackError> {
     use crate::idempotency::{IdempotencyRecord, IDEMPOTENCY_HEADER};
-    use axum::response::IntoResponse;
 
     let idem_key = headers
         .get(IDEMPOTENCY_HEADER)
@@ -329,7 +327,7 @@ pub async fn add_documents(
 /// latter carries the enqueued `taskID` so the error response still reports it —
 /// preserving the Algolia write-response contract (every accepted write has a
 /// `taskID`) even when the durable commit fails or times out (PL-13 ack-on-durable).
-enum AddDocumentsError {
+pub(super) enum AddDocumentsError {
     /// Rejected before enqueue (validation, pause, parse, backpressure). No task id.
     Rejected(FlapjackError),
     /// Enqueued but the durable commit failed or timed out; reports the `taskID`.
@@ -339,6 +337,12 @@ enum AddDocumentsError {
 impl From<FlapjackError> for AddDocumentsError {
     fn from(err: FlapjackError) -> Self {
         AddDocumentsError::Rejected(err)
+    }
+}
+
+impl AddDocumentsError {
+    fn durable_commit_failed(task_id: i64, source: FlapjackError) -> Self {
+        AddDocumentsError::DurableCommitFailed { task_id, source }
     }
 }
 
@@ -357,11 +361,13 @@ impl axum::response::IntoResponse for AddDocumentsError {
                     })),
                 )
                     .into_response();
-                // Mirror the retriable-backpressure signal the default FlapjackError
-                // path attaches so clients retry an ack timeout rather than treating
-                // it as terminal. A commit failure (5xx) is not retriable, so only the
-                // timeout variant gets Retry-After.
-                if matches!(source, FlapjackError::WriteAckTimeout) {
+                // Mirror the retriable signal the default FlapjackError path
+                // attaches so task-aware responses preserve client retry behavior.
+                // WriteAckTimeout (503) and QueueFull (429) are both retryable.
+                if matches!(
+                    source,
+                    FlapjackError::WriteAckTimeout | FlapjackError::QueueFull
+                ) {
                     response
                         .headers_mut()
                         .insert("Retry-After", "1".parse().unwrap());
@@ -385,8 +391,7 @@ async fn run_add_documents(
         if index_name == "*" {
             return batch::add_documents_multi_index_impl(State(state.clone()), batch_req)
                 .await
-                .map(|json| json.0)
-                .map_err(AddDocumentsError::from);
+                .map(|json| json.0);
         }
 
         if let AddDocumentsRequest::Batch { requests } = &batch_req {
@@ -404,8 +409,7 @@ async fn run_add_documents(
             batch_req,
         )
         .await
-        .map(|json| json.0)
-        .map_err(AddDocumentsError::from);
+        .map(|json| json.0);
     }
 
     let mut doc_map = req
@@ -454,10 +458,10 @@ async fn run_add_documents(
         .manager
         .add_documents(index_name, vec![document.clone()])?;
     if let Err(source) = state.manager.wait_for_write_durable(&task.id).await {
-        return Err(AddDocumentsError::DurableCommitFailed {
-            task_id: task.numeric_id,
+        return Err(AddDocumentsError::durable_commit_failed(
+            task.numeric_id,
             source,
-        });
+        ));
     }
     sync_add_documents_to_standard_replicas(state, index_name, &[document]).await?;
 
@@ -465,6 +469,36 @@ async fn run_add_documents(
         task_id: task.numeric_id,
         object_ids: vec![id],
     })
+}
+
+/// Queue deletes and preserve the accepted-write task metadata on durable commit
+/// failures so handlers can return Algolia-compatible error payloads.
+pub(super) async fn delete_documents_durable_task_aware(
+    state: &Arc<AppState>,
+    index_name: &str,
+    object_ids: Vec<String>,
+) -> Result<TaskInfo, AddDocumentsError> {
+    let task = state.manager.delete_documents(index_name, object_ids)?;
+    if let Err(source) = state.manager.wait_for_write_durable(&task.id).await {
+        return Err(AddDocumentsError::durable_commit_failed(
+            task.numeric_id,
+            source,
+        ));
+    }
+    Ok(task)
+}
+
+/// Mirror accepted deletes to standard replicas while preserving the already
+/// accepted primary taskID in any durable-failure response.
+pub(super) async fn sync_delete_documents_to_standard_replicas_task_aware(
+    state: &Arc<AppState>,
+    primary_index_name: &str,
+    object_ids: &[String],
+    accepted_task_id: i64,
+) -> Result<(), AddDocumentsError> {
+    sync_delete_documents_to_standard_replicas(state, primary_index_name, object_ids)
+        .await
+        .map_err(|source| AddDocumentsError::durable_commit_failed(accepted_task_id, source))
 }
 
 /// Get a single object by ID
@@ -531,7 +565,7 @@ pub async fn get_object(
 pub async fn delete_object(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
-) -> Result<Json<DeleteObjectResponse>, FlapjackError> {
+) -> Result<axum::response::Response, FlapjackError> {
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     let delete_ids = vec![object_id];
@@ -540,11 +574,21 @@ pub async fn delete_object(
         .get_oplog(&index_name)
         .map(|ol| ol.current_seq())
         .unwrap_or(0);
-    state
-        .manager
-        .delete_documents_sync(&index_name, delete_ids.clone())
-        .await?;
-    sync_delete_documents_to_standard_replicas(&state, &index_name, &delete_ids).await?;
+    let delete_task =
+        match delete_documents_durable_task_aware(&state, &index_name, delete_ids.clone()).await {
+            Ok(task) => task,
+            Err(err) => return Ok(err.into_response()),
+        };
+    if let Err(err) = sync_delete_documents_to_standard_replicas_task_aware(
+        &state,
+        &index_name,
+        &delete_ids,
+        delete_task.numeric_id,
+    )
+    .await
+    {
+        return Ok(err.into_response());
+    }
     batch::trigger_replication(&state, &index_name, pre_seq, false);
 
     // Increment usage counter: 1 document deleted
@@ -559,7 +603,8 @@ pub async fn delete_object(
     Ok(Json(DeleteObjectResponse {
         task_id: task.numeric_id,
         deleted_at: chrono::Utc::now().to_rfc3339(),
-    }))
+    })
+    .into_response())
 }
 
 /// Add or replace a record in the specified index.
@@ -584,7 +629,7 @@ pub async fn put_object(
     State(state): State<Arc<AppState>>,
     Path((index_name, object_id)): Path<(String, String)>,
     Json(mut body): Json<serde_json::Map<String, serde_json::Value>>,
-) -> Result<Json<PutObjectResponse>, FlapjackError> {
+) -> Result<axum::response::Response, FlapjackError> {
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     state.manager.create_tenant(&index_name)?;
@@ -609,14 +654,24 @@ pub async fn put_object(
         .map(|ol| ol.current_seq())
         .unwrap_or(0);
     let delete_ids = vec![object_id.clone()];
+    let delete_task =
+        match delete_documents_durable_task_aware(&state, &index_name, delete_ids.clone()).await {
+            Ok(task) => task,
+            Err(err) => return Ok(err.into_response()),
+        };
+    if let Err(err) = sync_delete_documents_to_standard_replicas_task_aware(
+        &state,
+        &index_name,
+        &delete_ids,
+        delete_task.numeric_id,
+    )
+    .await
+    {
+        return Ok(err.into_response());
+    }
     state
         .manager
-        .delete_documents_sync(&index_name, delete_ids.clone())
-        .await?;
-    sync_delete_documents_to_standard_replicas(&state, &index_name, &delete_ids).await?;
-    state
-        .manager
-        .add_documents_sync(&index_name, vec![document.clone()])
+        .add_documents_durable(&index_name, vec![document.clone()])
         .await?;
     sync_add_documents_to_standard_replicas(&state, &index_name, &[document]).await?;
     batch::trigger_replication(&state, &index_name, pre_seq, false);
@@ -634,7 +689,8 @@ pub async fn put_object(
         task_id: task.numeric_id,
         object_id,
         updated_at: chrono::Utc::now().to_rfc3339(),
-    }))
+    })
+    .into_response())
 }
 
 /// Get multiple objects by ID in batch
@@ -715,7 +771,7 @@ pub async fn delete_by_query(
     State(state): State<Arc<AppState>>,
     Path(index_name): Path<String>,
     Json(req): Json<DeleteByQueryRequest>,
-) -> Result<Json<serde_json::Value>, FlapjackError> {
+) -> Result<axum::response::Response, FlapjackError> {
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     let filter = if let Some(filter_str) = &req.filters {
@@ -769,7 +825,8 @@ pub async fn delete_by_query(
         return Ok(Json(serde_json::json!({
             "taskID": task.numeric_id,
             "deletedAt": chrono::Utc::now().to_rfc3339()
-        })));
+        }))
+        .into_response());
     }
 
     let deleted_count = all_ids.len() as u64;
@@ -778,11 +835,21 @@ pub async fn delete_by_query(
         .get_oplog(&index_name)
         .map(|ol| ol.current_seq())
         .unwrap_or(0);
-    state
-        .manager
-        .delete_documents_sync(&index_name, all_ids.clone())
-        .await?;
-    sync_delete_documents_to_standard_replicas(&state, &index_name, &all_ids).await?;
+    let delete_task =
+        match delete_documents_durable_task_aware(&state, &index_name, all_ids.clone()).await {
+            Ok(task) => task,
+            Err(err) => return Ok(err.into_response()),
+        };
+    if let Err(err) = sync_delete_documents_to_standard_replicas_task_aware(
+        &state,
+        &index_name,
+        &all_ids,
+        delete_task.numeric_id,
+    )
+    .await
+    {
+        return Ok(err.into_response());
+    }
     batch::trigger_replication(&state, &index_name, pre_seq, false);
 
     // Increment usage counter: N documents deleted by query
@@ -797,7 +864,8 @@ pub async fn delete_by_query(
     Ok(Json(serde_json::json!({
         "taskID": task.numeric_id,
         "deletedAt": chrono::Utc::now().to_rfc3339()
-    })))
+    }))
+    .into_response())
 }
 
 /// Add a record to the specified index with an auto-generated object ID.
@@ -823,7 +891,6 @@ pub async fn add_record_auto_id(
     Json(mut body): Json<serde_json::Map<String, serde_json::Value>>,
 ) -> Result<axum::response::Response, FlapjackError> {
     use crate::idempotency::{IdempotencyRecord, IDEMPOTENCY_HEADER};
-    use axum::response::IntoResponse;
 
     let idem_key = headers
         .get(IDEMPOTENCY_HEADER)
@@ -917,7 +984,7 @@ pub async fn partial_update_object(
     Path((index_name, object_id)): Path<(String, String)>,
     Query(params): Query<PartialUpdateParams>,
     Json(body): Json<serde_json::Map<String, serde_json::Value>>,
-) -> Result<Json<PartialUpdateObjectResponse>, FlapjackError> {
+) -> Result<axum::response::Response, FlapjackError> {
     check_not_paused(&state.paused_indexes, &index_name)?;
     reject_writes_to_virtual_replica(&state, &index_name)?;
     state.manager.create_tenant(&index_name)?;
@@ -937,17 +1004,32 @@ pub async fn partial_update_object(
     let delete_ids = vec![object_id.clone()];
 
     if had_existing {
-        state
-            .manager
-            .delete_documents_sync(&index_name, delete_ids.clone())
-            .await?;
-        sync_delete_documents_to_standard_replicas(&state, &index_name, &delete_ids).await?;
+        let delete_task = match delete_documents_durable_task_aware(
+            &state,
+            &index_name,
+            delete_ids.clone(),
+        )
+        .await
+        {
+            Ok(task) => task,
+            Err(err) => return Ok(err.into_response()),
+        };
+        if let Err(err) = sync_delete_documents_to_standard_replicas_task_aware(
+            &state,
+            &index_name,
+            &delete_ids,
+            delete_task.numeric_id,
+        )
+        .await
+        {
+            return Ok(err.into_response());
+        }
     }
 
     if let Some(doc) = merge_partial_update(existing, &object_id, &body, create_if_not_exists)? {
         state
             .manager
-            .add_documents_sync(&index_name, vec![doc.clone()])
+            .add_documents_durable(&index_name, vec![doc.clone()])
             .await?;
         sync_add_documents_to_standard_replicas(&state, &index_name, &[doc]).await?;
     }
@@ -959,7 +1041,8 @@ pub async fn partial_update_object(
         task_id: task.numeric_id,
         object_id,
         updated_at: chrono::Utc::now().to_rfc3339(),
-    }))
+    })
+    .into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]

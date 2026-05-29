@@ -46,6 +46,169 @@ async fn make_noop_task_registers_numeric_alias_lookup() {
 }
 
 #[tokio::test]
+async fn evict_old_tasks_keeps_in_flight_tasks_and_reclaims_terminal_aliases_first() {
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+    let tenant_id = "eviction_retention";
+
+    let total_tasks = MAX_TASKS_PER_TENANT + 2;
+    let base_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+
+    for task_num in 0..total_tasks {
+        let numeric_id = 10_000 + task_num as i64;
+        let task_id = format!("task_{}_{}", tenant_id, task_num);
+        let mut task = TaskInfo::new(task_id.clone(), numeric_id, 0);
+        task.created_at = base_time + std::time::Duration::from_secs(task_num as u64);
+        task.status = match task_num {
+            0 => TaskStatus::Enqueued,
+            1 | 2 => TaskStatus::Succeeded,
+            _ => TaskStatus::Processing,
+        };
+
+        manager.tasks.insert(task_id, task.clone());
+        manager.tasks.insert(numeric_id.to_string(), task);
+    }
+
+    manager.evict_old_tasks(tenant_id, MAX_TASKS_PER_TENANT);
+
+    let oldest_in_flight = manager
+        .get_task("task_eviction_retention_0")
+        .expect("oldest in-flight task must not be evicted");
+    assert!(matches!(oldest_in_flight.status, TaskStatus::Enqueued));
+
+    for task_num in [1, 2] {
+        let task_key = format!("task_{}_{}", tenant_id, task_num);
+        let numeric_alias = (10_000 + task_num as i64).to_string();
+        assert!(
+            !manager.tasks.contains_key(&task_key),
+            "terminal canonical task key should be evicted first"
+        );
+        assert!(
+            !manager.tasks.contains_key(&numeric_alias),
+            "terminal numeric alias key should be evicted with canonical key"
+        );
+    }
+}
+
+#[tokio::test]
+async fn wait_for_write_durable_keeps_returned_taskid_resolvable_after_overflow_sweep() {
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+    let tenant_id = "durable_task_lookup";
+
+    let total_tasks = MAX_TASKS_PER_TENANT + 2;
+    let base_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+
+    for task_num in 0..total_tasks {
+        let numeric_id = 30_000 + task_num as i64;
+        let task_id = format!("task_{}_{}", tenant_id, task_num);
+        let mut task = TaskInfo::new(task_id.clone(), numeric_id, 0);
+        task.created_at = base_time + std::time::Duration::from_secs(task_num as u64);
+        task.status = match task_num {
+            0 => TaskStatus::Enqueued,
+            1 => TaskStatus::Succeeded,
+            _ => TaskStatus::Processing,
+        };
+        manager.tasks.insert(task_id, task.clone());
+        manager.tasks.insert(numeric_id.to_string(), task);
+    }
+
+    manager.evict_old_tasks(tenant_id, MAX_TASKS_PER_TENANT);
+
+    let completed_task_id = "task_durable_task_lookup_2";
+    let completed_numeric_id = "30002";
+    manager.tasks.alter(completed_task_id, |_, mut task| {
+        task.status = TaskStatus::Succeeded;
+        task
+    });
+    manager.tasks.alter(completed_numeric_id, |_, mut task| {
+        task.status = TaskStatus::Succeeded;
+        task
+    });
+
+    manager
+        .wait_for_write_durable(completed_task_id)
+        .await
+        .expect("wait must observe terminal status");
+
+    let by_numeric = manager
+        .get_task(completed_numeric_id)
+        .expect("durable write must leave returned numeric taskID resolvable");
+    assert_eq!(by_numeric.id, completed_task_id);
+    assert!(matches!(by_numeric.status, TaskStatus::Succeeded));
+}
+
+#[tokio::test]
+async fn wait_for_write_durable_reclaims_terminal_overflow_without_new_write() {
+    let temp_dir = TempDir::new().unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+    let tenant_id = "idle_tenant_reclaim";
+
+    let total_tasks = MAX_TASKS_PER_TENANT + 2;
+    let base_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+
+    for task_num in 0..total_tasks {
+        let numeric_id = 20_000 + task_num as i64;
+        let task_id = format!("task_{}_{}", tenant_id, task_num);
+        let mut task = TaskInfo::new(task_id.clone(), numeric_id, 0);
+        task.created_at = base_time + std::time::Duration::from_secs(task_num as u64);
+        task.status = match task_num {
+            0 => TaskStatus::Enqueued,
+            1 => TaskStatus::Succeeded,
+            _ => TaskStatus::Processing,
+        };
+        manager.tasks.insert(task_id, task.clone());
+        manager.tasks.insert(numeric_id.to_string(), task);
+    }
+
+    manager.evict_old_tasks(tenant_id, MAX_TASKS_PER_TENANT);
+
+    let becoming_terminal_id = "task_idle_tenant_reclaim_2";
+    let other_terminal_id = "task_idle_tenant_reclaim_4";
+    let other_terminal_numeric_id = "20004";
+    manager.tasks.alter(becoming_terminal_id, |_, mut task| {
+        task.status = TaskStatus::Succeeded;
+        task
+    });
+    manager.tasks.alter("20002", |_, mut task| {
+        task.status = TaskStatus::Succeeded;
+        task
+    });
+    manager.tasks.alter(other_terminal_id, |_, mut task| {
+        task.status = TaskStatus::Succeeded;
+        task
+    });
+    manager
+        .tasks
+        .alter(other_terminal_numeric_id, |_, mut task| {
+            task.status = TaskStatus::Succeeded;
+            task
+        });
+
+    manager
+        .wait_for_write_durable(becoming_terminal_id)
+        .await
+        .expect("wait must observe terminal status");
+
+    assert!(
+        manager.tasks.contains_key(becoming_terminal_id),
+        "durable wait must preserve the just-returned taskID for immediate lookup compatibility"
+    );
+    assert!(
+        manager.tasks.contains_key("20002"),
+        "numeric alias for just-returned taskID must remain resolvable immediately after success"
+    );
+    assert!(
+        !manager.tasks.contains_key(other_terminal_id),
+        "durable wait should still reclaim other terminal overflow tasks"
+    );
+    assert!(
+        !manager.tasks.contains_key(other_terminal_numeric_id),
+        "reclaimed terminal overflow task must remove numeric alias as well"
+    );
+}
+
+#[tokio::test]
 async fn recovery_phase_helpers_are_callable() {
     let temp_dir = TempDir::new().unwrap();
     let manager = IndexManager::new(temp_dir.path());

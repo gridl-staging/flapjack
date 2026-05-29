@@ -11,6 +11,19 @@ use std::time::{Duration, Instant};
 const DEFAULT_WRITE_DURABLE_TIMEOUT_MS: u64 = 30_000;
 
 impl super::IndexManager {
+    /// Parse a canonical task key (`task_<tenant>_<suffix>`) and return the tenant id.
+    ///
+    /// Numeric aliases and malformed IDs return `None`.
+    fn tenant_id_from_task_key(task_id: &str) -> Option<&str> {
+        let remainder = task_id.strip_prefix("task_")?;
+        let (tenant_id, _) = remainder.rsplit_once('_')?;
+        if tenant_id.is_empty() {
+            None
+        } else {
+            Some(tenant_id)
+        }
+    }
+
     /// Get or create a write queue for the given tenant.
     ///
     /// DRY helper — all write paths (add, delete, compact) go through this.
@@ -148,6 +161,35 @@ impl super::IndexManager {
         Ok(task)
     }
 
+    /// Test-only seam: abort a tenant's write task to simulate a restart after
+    /// enqueue and before durable commit acknowledgment.
+    ///
+    /// Returns `true` when a task handle existed and was aborted; `false` when no
+    /// active task handle was registered for the tenant.
+    pub fn abort_tenant_write_task_for_test(&self, tenant_id: &str) -> bool {
+        if let Some((_, handle)) = self.write_task_handles.remove(tenant_id) {
+            handle.abort();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Test-only seam: snapshot string-keyed write tasks for one tenant so
+    /// integration tests can synchronize on "task accepted and queued" before
+    /// inducing a write-task abort.
+    pub fn tenant_tasks_snapshot_for_test(&self, tenant_id: &str) -> Vec<TaskInfo> {
+        let prefix = format!("task_{}_", tenant_id);
+        let mut tasks: Vec<TaskInfo> = self
+            .tasks
+            .iter()
+            .filter(|entry| entry.key().starts_with(&prefix))
+            .map(|entry| entry.value().clone())
+            .collect();
+        tasks.sort_by_key(|task| task.created_at);
+        tasks
+    }
+
     /// Queue document deletions without updating the LWW map — the caller
     /// (replication) has already recorded the correct timestamps before queuing.
     pub fn delete_documents_for_replication(
@@ -244,7 +286,7 @@ impl super::IndexManager {
         let deadline = timeout.map(|d| Instant::now() + d);
         loop {
             let status = self.get_task(task_id)?;
-            match status.status {
+            match &status.status {
                 TaskStatus::Enqueued | TaskStatus::Processing => {
                     if let Some(deadline) = deadline {
                         if Instant::now() >= deadline {
@@ -253,8 +295,33 @@ impl super::IndexManager {
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                TaskStatus::Succeeded => return Ok(()),
-                TaskStatus::Failed(e) => return Err(FlapjackError::Tantivy(e)),
+                TaskStatus::Succeeded => {
+                    // Sweep terminal overflow as soon as a write reaches completion so
+                    // idle tenants do not stay above retention cap until another write.
+                    if let Some(tenant_id) = Self::tenant_id_from_task_key(task_id) {
+                        self.evict_old_tasks(tenant_id, MAX_TASKS_PER_TENANT);
+                        // Preserve the just-observed terminal task so the caller's
+                        // returned taskID remains immediately queryable via both
+                        // canonical and numeric alias lookup paths.
+                        if !self.tasks.contains_key(task_id) {
+                            self.tasks.insert(task_id.to_string(), status.clone());
+                            self.tasks
+                                .insert(status.numeric_id.to_string(), status.clone());
+                        }
+                    }
+                    return Ok(());
+                }
+                TaskStatus::Failed(e) => {
+                    if let Some(tenant_id) = Self::tenant_id_from_task_key(task_id) {
+                        self.evict_old_tasks(tenant_id, MAX_TASKS_PER_TENANT);
+                        if !self.tasks.contains_key(task_id) {
+                            self.tasks.insert(task_id.to_string(), status.clone());
+                            self.tasks
+                                .insert(status.numeric_id.to_string(), status.clone());
+                        }
+                    }
+                    return Err(FlapjackError::Tantivy(e.clone()));
+                }
             }
         }
     }
@@ -289,6 +356,21 @@ impl super::IndexManager {
         docs: Vec<Document>,
     ) -> Result<TaskInfo> {
         let task = self.add_documents(tenant_id, docs)?;
+        self.wait_for_write_durable(&task.id).await?;
+        Ok(task)
+    }
+
+    /// Delete documents and wait until the write queue has durably committed the
+    /// deletes to Tantivy, bounded by `FLAPJACK_WRITE_DURABLE_TIMEOUT_MS`.
+    ///
+    /// User-thread delete handlers use this so an accepting-node restart yields a
+    /// bounded retriable timeout instead of an unbounded hang.
+    pub async fn delete_documents_durable(
+        &self,
+        tenant_id: &str,
+        object_ids: Vec<String>,
+    ) -> Result<TaskInfo> {
+        let task = self.delete_documents(tenant_id, object_ids)?;
         self.wait_for_write_durable(&task.id).await?;
         Ok(task)
     }
