@@ -299,7 +299,16 @@ pub async fn add_documents(
         }
     }
 
-    let response = run_add_documents(&state, &index_name, req).await?;
+    // Render write errors into the response rather than propagating them as `Err`.
+    // With durable adds, run_add_documents now awaits the Tantivy commit, so a commit
+    // failure (5xx) or ack timeout (503) must surface as a real error status — never a
+    // false 200. The status is identical whether axum converts an `Err` or we return
+    // the rendered response here; returning it directly also lets callers that invoke
+    // the handler outside the router observe the mapped status (PL-13 contract).
+    let response = match run_add_documents(&state, &index_name, req).await {
+        Ok(response) => response,
+        Err(err) => return Ok(err.into_response()),
+    };
 
     if let Some(key) = idem_key {
         if let Ok(body_bytes) = serde_json::to_vec(&response) {
@@ -313,11 +322,61 @@ pub async fn add_documents(
     Ok(Json(response).into_response())
 }
 
+/// Failure outcome of the add-documents pipeline.
+///
+/// Distinguishes a request rejected before it was ever enqueued (no task exists)
+/// from a write that was accepted into the queue but failed to commit durably. The
+/// latter carries the enqueued `taskID` so the error response still reports it —
+/// preserving the Algolia write-response contract (every accepted write has a
+/// `taskID`) even when the durable commit fails or times out (PL-13 ack-on-durable).
+enum AddDocumentsError {
+    /// Rejected before enqueue (validation, pause, parse, backpressure). No task id.
+    Rejected(FlapjackError),
+    /// Enqueued but the durable commit failed or timed out; reports the `taskID`.
+    DurableCommitFailed { task_id: i64, source: FlapjackError },
+}
+
+impl From<FlapjackError> for AddDocumentsError {
+    fn from(err: FlapjackError) -> Self {
+        AddDocumentsError::Rejected(err)
+    }
+}
+
+impl axum::response::IntoResponse for AddDocumentsError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            AddDocumentsError::Rejected(err) => err.into_response(),
+            AddDocumentsError::DurableCommitFailed { task_id, source } => {
+                let status = source.status_code();
+                let mut response = (
+                    status,
+                    Json(serde_json::json!({
+                        "taskID": task_id,
+                        "message": source.api_message(),
+                        "status": status.as_u16(),
+                    })),
+                )
+                    .into_response();
+                // Mirror the retriable-backpressure signal the default FlapjackError
+                // path attaches so clients retry an ack timeout rather than treating
+                // it as terminal. A commit failure (5xx) is not retriable, so only the
+                // timeout variant gets Retry-After.
+                if matches!(source, FlapjackError::WriteAckTimeout) {
+                    response
+                        .headers_mut()
+                        .insert("Retry-After", "1".parse().unwrap());
+                }
+                response
+            }
+        }
+    }
+}
+
 async fn run_add_documents(
     state: &Arc<AppState>,
     index_name: &str,
     req: serde_json::Value,
-) -> Result<AddDocumentsResponse, FlapjackError> {
+) -> Result<AddDocumentsResponse, AddDocumentsError> {
     check_not_paused(&state.paused_indexes, index_name)?;
     if index_name != "*" {
         reject_writes_to_virtual_replica(state, index_name)?;
@@ -326,14 +385,16 @@ async fn run_add_documents(
         if index_name == "*" {
             return batch::add_documents_multi_index_impl(State(state.clone()), batch_req)
                 .await
-                .map(|json| json.0);
+                .map(|json| json.0)
+                .map_err(AddDocumentsError::from);
         }
 
         if let AddDocumentsRequest::Batch { requests } = &batch_req {
             if requests.iter().any(|op| op.index_name.is_some()) {
                 return Err(FlapjackError::InvalidQuery(
                     "The indexName attribute is only allowed on multiple indexes".to_string(),
-                ));
+                )
+                .into());
             }
         }
 
@@ -343,7 +404,8 @@ async fn run_add_documents(
             batch_req,
         )
         .await
-        .map(|json| json.0);
+        .map(|json| json.0)
+        .map_err(AddDocumentsError::from);
     }
 
     let mut doc_map = req
@@ -385,9 +447,18 @@ async fn run_add_documents(
         id: id.clone(),
         fields,
     };
+    // Enqueue, then wait for the durable commit while still holding the task so a
+    // commit failure can report the taskID (PL-13). QueueFull surfaces as a 429 with
+    // no task id, matching the pre-enqueue backpressure contract.
     let task = state
         .manager
         .add_documents(index_name, vec![document.clone()])?;
+    if let Err(source) = state.manager.wait_for_write_durable(&task.id).await {
+        return Err(AddDocumentsError::DurableCommitFailed {
+            task_id: task.numeric_id,
+            source,
+        });
+    }
     sync_add_documents_to_standard_replicas(state, index_name, &[document]).await?;
 
     Ok(AddDocumentsResponse::Algolia {
@@ -793,7 +864,8 @@ pub async fn add_record_auto_id(
         .unwrap_or(0);
     let task = state
         .manager
-        .add_documents(&index_name, vec![document.clone()])?;
+        .add_documents_durable(&index_name, vec![document.clone()])
+        .await?;
     sync_add_documents_to_standard_replicas(&state, &index_name, &[document]).await?;
     batch::trigger_replication(&state, &index_name, pre_seq, true);
 

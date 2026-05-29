@@ -834,7 +834,7 @@ mod tests {
             .manager
             .dictionary_manager()
             .expect("manager dictionary should be wired");
-        assert!(Arc::ptr_eq(&manager_dm, &state.dictionary_manager));
+        assert!(Arc::ptr_eq(manager_dm, &state.dictionary_manager));
         assert!(state.key_store.is_none());
         assert!(state.replication_manager.is_none());
         assert!(state.analytics_engine.is_none());
@@ -861,7 +861,7 @@ mod tests {
             .manager
             .dictionary_manager()
             .expect("manager dictionary should be wired");
-        assert!(Arc::ptr_eq(&manager_dm, &state.dictionary_manager));
+        assert!(Arc::ptr_eq(manager_dm, &state.dictionary_manager));
     }
 
     #[tokio::test]

@@ -1,5 +1,28 @@
 # Flapjack Loadtest Evidence
 
+## PL-13 Single-doc Durable Write Throughput (May 28, 2026)
+
+### Scenario Owner
+
+- Scenario: `engine/loadtest/scenarios/pl13_single_doc_durable.js`
+- Full method and command transcript: `engine/docs/research/pl13_stage3_throughput_delta.md`
+- Evidence directories:
+  - `engine/loadtest/results/20260528T205829Z-pl13-single-doc-baseline/`
+  - `engine/loadtest/results/20260528T205829Z-pl13-single-doc-durable/`
+
+### Measured Pre/Post Delta
+
+| Condition | Server SHA | http_reqs/s | write latency avg (ms) | write latency p90 (ms) | write latency p95 (ms) | write_http_4xx_rate | write_http_unexpected_4xx_rate | write_http_5xx_rate | WRITE_RESPONSE_CHECKS successes |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Pre-PL-13 baseline (`main`) | `2b44fa8a9292fc60673f1455212cadd5e88269fe` | `638.793141` | `1.492544` | `3.5925` | `3.7563` | `0.00%` | `0.00%` | `0.00%` | `250 / 250 / 250` |
+| PL-13 durable HEAD | `6a922a0a6be2e158fc670699ef0026533cce54ea` | `5.290291` | `188.638336` | `202.2203` | `203.4953` | `0.00%` | `0.00%` | `0.00%` | `250 / 250 / 250` |
+
+### Slowdown Classification
+
+- Throughput slowdown factor (`baseline / durable`): `120.7482x`.
+- This is greater than the Stage 3 alert threshold (`10x`), so this magnitude must be carried forward in the stage handoff.
+- Final direct HEAD closeout rerun evidence: `engine/loadtest/results/20260528T210217Z-pl13-single-doc-final-head/` (`http_reqs/s=5.427263`, `write_http_unexpected_4xx_rate=0.00%`, `write_http_5xx_rate=0.00%`).
+
 ## PL-10 Stage 6 Dual-Scenario Revalidation (May 28, 2026)
 
 ### Run Metadata

@@ -590,9 +590,12 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::oneshot;
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    // Async-aware mutex so the guard can be held across the `.await` points in
+    // these tests without tripping `clippy::await_holding_lock`. Serializes
+    // process-global env-var access across the catchup tests.
+    fn env_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
     }
 
     /// Non-strict pre-serve catchup must succeed even when peers are unreachable.
@@ -600,7 +603,7 @@ mod tests {
     /// the FLAPJACK_STARTUP_CATCHUP_STRICT=0 env var.
     #[tokio::test]
     async fn pre_serve_catchup_succeeds_with_unreachable_peers_when_not_strict() {
-        let _env_guard = env_lock().lock().unwrap();
+        let _env_guard = env_lock().lock().await;
         // SAFETY: env vars are process-global; this test must not run in parallel
         // with other tests that read these vars.
         unsafe {
@@ -643,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_serve_catchup_fails_with_unreachable_peer_when_strict() {
-        let _env_guard = env_lock().lock().unwrap();
+        let _env_guard = env_lock().lock().await;
         // SAFETY: env vars are process-global; this test synchronizes reads/writes
         // via `env_lock` and restores the strict-mode defaults explicitly.
         unsafe {

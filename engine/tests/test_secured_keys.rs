@@ -489,7 +489,30 @@ mod admin_key_bootstrap {
     }
 
     #[test]
-    fn test_reset_admin_key_generates_new_key() {
+    fn test_reset_admin_key_refused_with_encrypted_material() {
+        let temp_dir = TempDir::new().unwrap();
+        let initial_key = "initial_admin_key_123456789abc";
+
+        let _store = KeyStore::load_or_create(temp_dir.path(), initial_key);
+
+        let result = reset_admin_key(temp_dir.path());
+        assert!(
+            result.is_err(),
+            "offline reset must be refused when encrypted key material exists"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("Cannot reset admin key offline"),
+            "expected refusal message, got: {err}"
+        );
+        assert!(
+            err.contains("/internal/rotate-admin-key"),
+            "refusal must point at the online rotate endpoint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_reset_admin_key_succeeds_without_encrypted_material() {
         let temp_dir = TempDir::new().unwrap();
         let initial_key = "initial_admin_key_123456789abc";
 
@@ -498,7 +521,11 @@ mod admin_key_bootstrap {
         let admin_key_file = temp_dir.path().join(".admin_key");
         fs::write(&admin_key_file, initial_key).unwrap();
 
-        let new_key = reset_admin_key(temp_dir.path()).expect("Should reset admin key");
+        fs::remove_file(temp_dir.path().join("key_material.json"))
+            .expect("key_material.json should exist to remove");
+
+        let new_key = reset_admin_key(temp_dir.path())
+            .expect("Should reset admin key without encrypted material");
 
         assert_ne!(new_key, initial_key, "Should generate new key");
         assert!(

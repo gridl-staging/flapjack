@@ -3869,63 +3869,55 @@ async fn test_task_status_routes_return_algolia_shape_after_publish() {
     }
 }
 
+/// PL-13 ack-on-durable: an HTTP batch write does not return until the write is durably
+/// committed, so the task the write returns is already `published` the first time it is
+/// observed — there is no fire-and-forget `notPublished` window for HTTP writes. Before
+/// PL-13 this path was fire-and-forget, so the task could still be `notPublished` after
+/// the 200; this test now guards that the durable contract holds.
+///
+/// The `notPublished` / `pendingTask=true` shape itself (the Enqueued/Processing states)
+/// is covered by the `map_task_status_to_algolia` unit tests in `handlers/tasks.rs`, which
+/// remain the source of truth for that shape now that it is unreachable via the HTTP path.
 #[tokio::test]
-async fn test_task_status_pending_returns_not_published_shape() {
+async fn test_task_status_after_durable_http_write_is_published() {
     let (app, _dir) = build_test_app_for_local_requests(None);
 
-    // Create burst writes so at least one task remains pending while prior tasks process.
-    let mut last_task_id = None;
-    for batch in 0..8 {
-        let requests: Vec<serde_json::Value> = (0..150)
-            .map(|i| {
-                json!({
-                    "action": "addObject",
-                    "body": {
-                        "objectID": format!("pending-{}-{}", batch, i),
-                        "title": format!("Pending task payload {} {}", batch, i),
-                    }
-                })
+    // A large batch keeps the commit non-trivial; under the durable contract the POST still
+    // does not return until the write queue has committed it.
+    let requests: Vec<serde_json::Value> = (0..150)
+        .map(|i| {
+            json!({
+                "action": "addObject",
+                "body": {
+                    "objectID": format!("durable-{}", i),
+                    "title": format!("Durable task payload {}", i),
+                }
             })
-            .collect();
+        })
+        .collect();
 
-        let resp = local_json_request(
-            &app,
-            Method::POST,
-            "/1/indexes/products/batch",
-            Some(json!({ "requests": requests })),
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body: serde_json::Value = local_response_json(resp).await;
-        last_task_id = body["taskID"].as_i64();
-    }
+    let resp = local_json_request(
+        &app,
+        Method::POST,
+        "/1/indexes/products/batch",
+        Some(json!({ "requests": requests })),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = local_response_json(resp).await;
+    let task_id = body["taskID"]
+        .as_i64()
+        .expect("missing taskID from write response");
 
-    let task_id = last_task_id.expect("missing taskID from write response");
-    let mut saw_pending = false;
-    for _ in 0..250 {
-        let resp =
-            local_json_request(&app, Method::GET, &format!("/1/task/{}", task_id), None).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body: serde_json::Value = local_response_json(resp).await;
-
-        if body == json!({"status": "notPublished", "pendingTask": true}) {
-            saw_pending = true;
-            break;
-        }
-        if body == json!({"status": "published", "pendingTask": false}) {
-            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-            continue;
-        }
-
-        panic!("unexpected task payload shape: {}", body);
-    }
-
-    assert!(
-        saw_pending,
-        "expected at least one pending task response with notPublished/pendingTask=true"
+    // First observation must already be published: the write blocked until durable commit.
+    let resp = local_json_request(&app, Method::GET, &format!("/1/task/{}", task_id), None).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = local_response_json(resp).await;
+    assert_eq!(
+        body,
+        json!({"status": "published", "pendingTask": false}),
+        "PL-13: an HTTP batch write must be durable on return, so its task is published immediately"
     );
-
-    wait_for_local_task_published(&app, task_id).await;
 }
 
 #[tokio::test]

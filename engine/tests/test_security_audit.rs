@@ -84,11 +84,16 @@ async fn a10_set_neural_mode(app: &axum::Router, index_name: &str, user_data: se
         "settings update must succeed for a10 chat setup"
     );
     let settings_body = common::body_json(settings_response).await;
-    common::wait_for_task_local_with_key(&app, common::extract_task_id(&settings_body), ADMIN_KEY)
+    common::wait_for_task_local_with_key(app, common::extract_task_id(&settings_body), ADMIN_KEY)
         .await;
 }
 
 #[tokio::test]
+// The std-Mutex guard intentionally spans the awaits below: it serializes
+// process-global env-var access for the whole test, which mutates and then
+// awaits HTTP calls that read those vars. `a10_env_lock` is also used by a
+// synchronous `#[test]`, so it cannot be an async-aware mutex.
+#[allow(clippy::await_holding_lock)]
 async fn a10_chat_ai_provider_rejects_unsafe_base_urls_from_settings() {
     let _env_guard = a10_env_lock().lock().unwrap();
     let _env_restore = A10EnvRestore::capture(&[
@@ -160,6 +165,9 @@ async fn a10_chat_ai_provider_rejects_unsafe_base_urls_from_settings() {
 }
 
 #[tokio::test]
+// See the sibling test above: the guard intentionally spans awaits to serialize
+// process-global env-var access, and the lock is shared with a sync `#[test]`.
+#[allow(clippy::await_holding_lock)]
 async fn a10_chat_ai_provider_rejects_unsafe_base_urls_from_env() {
     let _env_guard = a10_env_lock().lock().unwrap();
     let _env_restore = A10EnvRestore::capture(&[
@@ -780,6 +788,10 @@ async fn a07_repeated_invalid_credentials_keep_canonical_403_and_do_not_consume_
 }
 
 #[tokio::test]
+// Deliberate N/A marker: the constant assertion documents that the current
+// auth surface has no session/JWT seam to attack, so this audit row stays a
+// recorded no-op rather than a live exploit test.
+#[allow(clippy::assertions_on_constants)]
 async fn a07_session_fixation_and_jwt_downgrade_are_not_applicable_to_current_auth_surface() {
     // Flapjack's HTTP auth model at HEAD is API-key only (direct keys + HMAC
     // secured keys). There is no session cookie state or JWT verifier seam in

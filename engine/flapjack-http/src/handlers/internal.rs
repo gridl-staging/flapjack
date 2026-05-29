@@ -482,10 +482,7 @@ pub async fn rotate_admin_key(
             )
                 .into_response()
         }
-        Err(e) => crate::error_response::json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to rotate admin key: {}", e),
-        ),
+        Err(e) => rotate_admin_key_error_response(&e),
     }
 }
 

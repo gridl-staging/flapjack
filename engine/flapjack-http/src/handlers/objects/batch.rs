@@ -347,14 +347,20 @@ async fn flush_pending_batch_operations(
             .delete_documents_sync(index_name, deletes.clone())
             .await?;
         sync_delete_documents_to_standard_replicas(state, index_name, &deletes).await?;
-        let task = state.manager.add_documents(index_name, documents.clone())?;
+        let task = state
+            .manager
+            .add_documents_durable(index_name, documents.clone())
+            .await?;
         sync_add_documents_to_standard_replicas(state, index_name, &documents).await?;
-        // Adds are async — wait for write queue flush before reading oplog.
+        // Adds are durable — the write queue has committed before we read the oplog.
         trigger_replication(state, index_name, pre_seq, true);
         task.numeric_id
     } else {
         // addObject/updateObject — always upsert (Algolia replaces if objectID exists).
-        let task = state.manager.add_documents(index_name, documents.clone())?;
+        let task = state
+            .manager
+            .add_documents_durable(index_name, documents.clone())
+            .await?;
         sync_add_documents_to_standard_replicas(state, index_name, &documents).await?;
         trigger_replication(state, index_name, pre_seq, true);
         task.numeric_id

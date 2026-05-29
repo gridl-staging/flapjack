@@ -134,12 +134,22 @@ fn rotate_admin_key_endpoint_rewrites_admin_key_file_and_invalidates_old_key() {
     );
 }
 
+// Hardened offline-reset contract (engine/flapjack-http/src/auth/key_store.rs):
+// once the server has persisted encrypted key material, offline
+// `reset-admin-key` is refused so existing search keys are not orphaned; the
+// operator must use the online `/internal/rotate-admin-key` endpoint instead.
 #[test]
-fn reset_admin_key_works() {
-    let tmp = TempDir::new("fj_test_reset_key");
+fn reset_admin_key_offline_refused_when_encrypted_key_material_present() {
+    let tmp = TempDir::new("fj_test_reset_refused");
 
     let bootstrap_server = RunningServer::spawn_auth_auto_port(tmp.path());
     drop(bootstrap_server);
+
+    // A normal server start persists encrypted HMAC material for the admin key.
+    assert!(
+        tmp.root().join("key_material.json").exists(),
+        "server start should persist key_material.json"
+    );
 
     let keys_before = std::fs::read_to_string(tmp.root().join("keys.json"))
         .expect("keys.json should exist after server start");
@@ -152,7 +162,62 @@ fn reset_admin_key_works() {
         .output()
         .expect("failed to run");
 
-    assert!(output.status.success(), "reset-admin-key should succeed");
+    assert!(
+        !output.status.success(),
+        "offline reset-admin-key must be refused while encrypted key material exists"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Cannot reset admin key offline"),
+        "expected offline-reset refusal message, got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("/internal/rotate-admin-key"),
+        "refusal must point operators at the online rotate endpoint, got: {}",
+        stderr
+    );
+
+    let keys_after = std::fs::read_to_string(tmp.root().join("keys.json"))
+        .expect("keys.json should still exist after refused reset");
+    let hash_after = extract_admin_key_hash_from_json(&keys_after);
+    assert_eq!(
+        hash_before, hash_after,
+        "refused offline reset must not rotate the admin key hash"
+    );
+}
+
+// Offline `reset-admin-key` still works in the supported scenario: a keys.json
+// with an admin entry but no encrypted search-key material, so rotating the
+// admin key orphans nothing.
+#[test]
+fn reset_admin_key_offline_succeeds_without_encrypted_key_material() {
+    let tmp = TempDir::new("fj_test_reset_no_material");
+
+    let bootstrap_server = RunningServer::spawn_auth_auto_port(tmp.path());
+    drop(bootstrap_server);
+
+    // Remove the encrypted key material so the offline-reset guard allows the
+    // rotation (no search keys would be orphaned).
+    std::fs::remove_file(tmp.root().join("key_material.json"))
+        .expect("key_material.json should exist to remove");
+
+    let keys_before = std::fs::read_to_string(tmp.root().join("keys.json"))
+        .expect("keys.json should exist after server start");
+    let hash_before = extract_admin_key_hash_from_json(&keys_before);
+
+    let output = flapjack_cmd()
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("reset-admin-key")
+        .output()
+        .expect("failed to run");
+
+    assert!(
+        output.status.success(),
+        "offline reset-admin-key should succeed without encrypted key material, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let new_key = stdout.trim();
 
@@ -210,9 +275,14 @@ fn reset_admin_key_fails_without_keys_json() {
     );
 }
 
+// Hardened contract: when offline `reset-admin-key` is refused (encrypted key
+// material present) it must be a no-op — the previously issued admin key keeps
+// authorizing requests both on the running server and after a restart. Rotating
+// in a way that actually invalidates the old key is the online
+// `/internal/rotate-admin-key` endpoint's job (see the rotate test above).
 #[test]
-fn reset_admin_key_invalidates_previous_admin_key_for_auth() {
-    let tmp = TempDir::new("fj_test_reset_invalidates_old_key");
+fn reset_admin_key_offline_refusal_preserves_previous_key_after_restart() {
+    let tmp = TempDir::new("fj_test_reset_refusal_preserves_key");
     let server_before_restart = RunningServer::spawn_auth_auto_port(tmp.path());
     let admin_key_path = tmp.root().join(".admin_key");
     let old_key = std::fs::read_to_string(&admin_key_path)
@@ -226,10 +296,10 @@ fn reset_admin_key_invalidates_previous_admin_key_for_auth() {
         .arg("reset-admin-key")
         .output()
         .expect("failed to run");
-    assert!(output.status.success(), "reset-admin-key should succeed");
-
-    let new_key = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    assert_ne!(new_key, old_key, "reset should generate a new admin key");
+    assert!(
+        !output.status.success(),
+        "offline reset-admin-key must be refused while encrypted key material exists"
+    );
 
     let old_key_before_restart = http_request_with_headers(
         server_before_restart.bind_addr(),
@@ -241,7 +311,7 @@ fn reset_admin_key_invalidates_previous_admin_key_for_auth() {
     .expect("old-key request before restart should return an HTTP response");
     assert_eq!(
         old_key_before_restart.status, 200,
-        "reset-admin-key should not change in-memory auth for an already-running server"
+        "refused reset must not change in-memory auth for a running server"
     );
 
     drop(server_before_restart);
@@ -256,23 +326,9 @@ fn reset_admin_key_invalidates_previous_admin_key_for_auth() {
     )
     .expect("old-key metrics request should return an HTTP response");
     assert_eq!(
-        old_key_metrics.status, 403,
-        "old key should be rejected after reset-admin-key, body: {}",
+        old_key_metrics.status, 200,
+        "refused offline reset must leave the previous admin key valid after restart, body: {}",
         old_key_metrics.body
-    );
-
-    let new_key_metrics = http_request_with_headers(
-        server_after_restart.bind_addr(),
-        "GET",
-        "/metrics",
-        &admin_auth_headers(new_key.as_str()),
-        None,
-    )
-    .expect("new-key metrics request should return an HTTP response");
-    assert_eq!(
-        new_key_metrics.status, 200,
-        "new key should be accepted after reset-admin-key, body: {}",
-        new_key_metrics.body
     );
 }
 

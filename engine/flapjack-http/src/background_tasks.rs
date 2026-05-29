@@ -346,40 +346,6 @@ fn discover_rollup_indexes(analytics_config: &flapjack::analytics::AnalyticsConf
     indexes
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{rollup_window_bounds_ms, HOUR_MS};
-    use crate::test_helpers::with_env_var;
-
-    #[test]
-    fn rollup_window_targets_last_completed_hour() {
-        let now_ms = (10 * HOUR_MS) + 123;
-        let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
-        assert_eq!(start_ms, 9 * HOUR_MS);
-        assert_eq!(end_ms, 10 * HOUR_MS);
-    }
-
-    #[test]
-    fn rollup_window_uses_completed_override_window_when_override_is_valid() {
-        let _guard = with_env_var("FLAPJACK_ROLLUP_WINDOW_OVERRIDE_MS", "60000");
-        let now_ms = (10 * HOUR_MS) + (2 * 60_000) + 12_345;
-        let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
-        assert_eq!(start_ms, (10 * HOUR_MS) + 60_000);
-        assert_eq!(end_ms, (10 * HOUR_MS) + (2 * 60_000));
-    }
-
-    #[test]
-    fn rollup_window_falls_back_to_hour_bounds_when_override_is_invalid() {
-        let now_ms = (10 * HOUR_MS) + 123;
-        for invalid_override in ["not-a-number", "0", "-60000"] {
-            let _guard = with_env_var("FLAPJACK_ROLLUP_WINDOW_OVERRIDE_MS", invalid_override);
-            let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
-            assert_eq!(start_ms, 9 * HOUR_MS);
-            assert_eq!(end_ms, 10 * HOUR_MS);
-        }
-    }
-}
-
 /// Spawns a periodic S3 snapshot backup task for all tenants.
 fn spawn_s3_backup_task(infrastructure: &InfrastructureState) {
     if let Some(s3_config) = infrastructure.s3_config.as_ref() {
@@ -497,4 +463,38 @@ fn spawn_usage_alert_task(state: &Arc<AppState>) {
         search_threshold,
         write_threshold
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rollup_window_bounds_ms, HOUR_MS};
+    use crate::test_helpers::with_env_var;
+
+    #[test]
+    fn rollup_window_targets_last_completed_hour() {
+        let now_ms = (10 * HOUR_MS) + 123;
+        let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
+        assert_eq!(start_ms, 9 * HOUR_MS);
+        assert_eq!(end_ms, 10 * HOUR_MS);
+    }
+
+    #[test]
+    fn rollup_window_uses_completed_override_window_when_override_is_valid() {
+        let _guard = with_env_var("FLAPJACK_ROLLUP_WINDOW_OVERRIDE_MS", "60000");
+        let now_ms = (10 * HOUR_MS) + (2 * 60_000) + 12_345;
+        let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
+        assert_eq!(start_ms, (10 * HOUR_MS) + 60_000);
+        assert_eq!(end_ms, (10 * HOUR_MS) + (2 * 60_000));
+    }
+
+    #[test]
+    fn rollup_window_falls_back_to_hour_bounds_when_override_is_invalid() {
+        let now_ms = (10 * HOUR_MS) + 123;
+        for invalid_override in ["not-a-number", "0", "-60000"] {
+            let _guard = with_env_var("FLAPJACK_ROLLUP_WINDOW_OVERRIDE_MS", invalid_override);
+            let (start_ms, end_ms) = rollup_window_bounds_ms(now_ms);
+            assert_eq!(start_ms, 9 * HOUR_MS);
+            assert_eq!(end_ms, 10 * HOUR_MS);
+        }
+    }
 }

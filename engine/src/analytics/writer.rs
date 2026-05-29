@@ -1284,10 +1284,14 @@ mod tests {
         (start, start + 86_400_000)
     }
 
-    /// Read every batch from a rollup Parquet file and project each row into
+    /// One projected rollup Parquet row:
     /// `(query, count, nb_hits_sum, nb_hits_count, no_results_count,
     /// has_results_count, Option<hll_bytes>)`.
-    fn read_rollup_rows(path: &Path) -> Vec<(String, i64, i64, i64, i64, i64, Option<Vec<u8>>)> {
+    type RollupRow = (String, i64, i64, i64, i64, i64, Option<Vec<u8>>);
+
+    /// Read every batch from a rollup Parquet file and project each row into a
+    /// [`RollupRow`].
+    fn read_rollup_rows(path: &Path) -> Vec<RollupRow> {
         let file = fs::File::open(path).unwrap();
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)
             .unwrap()
@@ -1343,8 +1347,7 @@ mod tests {
         assert!(path.exists(), "rollup parquet file must exist");
 
         let rows = read_rollup_rows(&path);
-        let by_query: HashMap<&str, &(String, i64, i64, i64, i64, i64, Option<Vec<u8>>)> =
-            rows.iter().map(|r| (r.0.as_str(), r)).collect();
+        let by_query: HashMap<&str, &RollupRow> = rows.iter().map(|r| (r.0.as_str(), r)).collect();
         assert_eq!(rows.len(), 4, "one row per distinct query");
 
         // laptop: count=3, sum=120, nb_hits_count=3, no_results=0, has_results=3
@@ -1433,8 +1436,7 @@ mod tests {
         assert!(daily_path.exists());
 
         let rows = read_rollup_rows(&daily_path);
-        let by_query: HashMap<&str, &(String, i64, i64, i64, i64, i64, Option<Vec<u8>>)> =
-            rows.iter().map(|r| (r.0.as_str(), r)).collect();
+        let by_query: HashMap<&str, &RollupRow> = rows.iter().map(|r| (r.0.as_str(), r)).collect();
         assert_eq!(rows.len(), 4);
 
         // Hand-calculated daily totals (must equal hourly-merged totals because
@@ -1473,10 +1475,7 @@ mod tests {
             for hr in read_rollup_rows(&hourly_path) {
                 if let Some(bytes) = hr.6 {
                     let sketch = HllSketch::from_bytes(&bytes).unwrap();
-                    expected_by_query
-                        .entry(hr.0)
-                        .or_insert_with(HllSketch::new)
-                        .merge(&sketch);
+                    expected_by_query.entry(hr.0).or_default().merge(&sketch);
                 }
             }
         }
