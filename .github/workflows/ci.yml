@@ -103,6 +103,11 @@ jobs:
         with:
           workspaces: engine
       - uses: taiki-e/install-action@a93b01ec36baa756f8701f3a0a8daa54a46d6339 # nextest
+      - name: Install cargo audit/deny tools for security audit tests
+        uses: taiki-e/install-action@a93b01ec36baa756f8701f3a0a8daa54a46d6339 # cargo-audit,cargo-deny
+        with:
+          tool: cargo-audit,cargo-deny
+          fallback: none
       - name: Create dashboard dist stub (for RustEmbed)
         run: mkdir -p dashboard/dist && echo '<html></html>' > dashboard/dist/index.html
       - name: Workspace build gate
@@ -145,6 +150,11 @@ jobs:
         with:
           workspaces: engine
       - uses: taiki-e/install-action@a93b01ec36baa756f8701f3a0a8daa54a46d6339 # nextest
+      - name: Install cargo audit/deny tools for security audit tests
+        uses: taiki-e/install-action@a93b01ec36baa756f8701f3a0a8daa54a46d6339 # cargo-audit,cargo-deny
+        with:
+          tool: cargo-audit,cargo-deny
+          fallback: none
       - name: Create dashboard dist stub (for RustEmbed)
         run: mkdir -p dashboard/dist && echo '<html></html>' > dashboard/dist/index.html
       - name: Build binaries (needed by integration tests)

@@ -577,9 +577,8 @@ async fn test_delete_object_replica_durable_failure_preserves_task_id() {
     #[cfg(unix)]
     set_tenant_permissions_writable(tmp.path(), replica);
 
-    assert_eq!(
+    assert!(
         response.status().is_server_error(),
-        true,
         "replica durable failure must surface as server error"
     );
     let accepted_primary_delete_task_id = accepted_primary_delete_task_id_for_test(
