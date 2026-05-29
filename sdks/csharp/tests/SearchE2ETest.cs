@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Flapjack.Search.Clients;
@@ -18,6 +21,251 @@ public class SearchE2ETest : IAsyncLifetime
     private const string ApiKey = "test-api-key";
     private const string Host = "localhost";
     private const int Port = 7700;
+    private static readonly IReadOnlyList<string> MutationTaskOwnerMethods = new[]
+    {
+        nameof(InitializeAsync),
+        nameof(TestPartialUpdate),
+        nameof(TestSaveAndDeleteObject),
+        nameof(TestUpdateSettings),
+        nameof(TestSynonyms),
+        nameof(TestRules),
+        nameof(TestMultiIndex),
+    };
+    private static readonly IReadOnlyDictionary<short, OpCode> OpCodesByValue = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.FieldType == typeof(OpCode))
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(opCode => opCode.Value);
+
+    [Fact]
+    public void TestMutationsDoNotUseFixedTaskDelayWaits()
+    {
+        AssertMutationMethodsAvoidTaskDelayCalls();
+    }
+
+    [Fact]
+    public void TestMutationDelayGuardDetectsHelperWrappedTaskDelay()
+    {
+        var helperWrappedMethod = typeof(DelayGuardFixture).GetMethod(
+            nameof(DelayGuardFixture.OwnerMethodCallingHelperAsync),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
+        );
+        Assert.NotNull(helperWrappedMethod);
+
+        Assert.True(
+            MethodContainsTaskDelayCall(helperWrappedMethod!),
+            "Delay guard must catch Task.Delay even when the owner method delegates to same-class helpers."
+        );
+    }
+
+    private static void AssertMutationMethodsAvoidTaskDelayCalls()
+    {
+        var ownerMethods = MutationTaskOwnerMethods
+            .Select(name => typeof(SearchE2ETest).GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            .ToList();
+        var missingMethods = MutationTaskOwnerMethods.Where((_, index) => ownerMethods[index] is null).ToList();
+        Assert.True(missingMethods.Count == 0, $"Could not resolve expected mutation methods: {string.Join(", ", missingMethods)}");
+
+        var methodsUsingTaskDelay = ownerMethods
+            .Where(method => method is not null)
+            .Select(method => method!)
+            .Where(MethodContainsTaskDelayCall)
+            .Select(method => method.Name)
+            .ToList();
+        Assert.True(
+            methodsUsingTaskDelay.Count == 0,
+            $"Mutation-readiness methods must use TaskID polling, not fixed sleeps. Found Task.Delay in: {string.Join(", ", methodsUsingTaskDelay)}"
+        );
+    }
+
+    private static bool MethodContainsTaskDelayCall(MethodInfo method)
+    {
+        var methodsToInspect = new Queue<MethodBase>(GetMethodsForExecutableInspection(method));
+        var inspectedMethods = new HashSet<int>();
+
+        while (methodsToInspect.Count > 0)
+        {
+            var currentMethod = methodsToInspect.Dequeue();
+            if (!inspectedMethods.Add(currentMethod.MetadataToken))
+            {
+                continue;
+            }
+
+            var helperMethods = new List<MethodBase>();
+            if (MethodBodyCallsTaskDelay(method.DeclaringType, currentMethod, helperMethods))
+            {
+                return true;
+            }
+
+            foreach (var helperMethod in helperMethods)
+            {
+                foreach (var executableMethod in GetMethodsForExecutableInspection(helperMethod))
+                {
+                    if (!inspectedMethods.Contains(executableMethod.MetadataToken))
+                    {
+                        methodsToInspect.Enqueue(executableMethod);
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<MethodBase> GetMethodsForExecutableInspection(MethodBase method)
+    {
+        yield return method;
+
+        var asyncStateMachine = method switch
+        {
+            MethodInfo methodInfo => methodInfo.GetCustomAttribute<AsyncStateMachineAttribute>()?.StateMachineType,
+            _ => null,
+        };
+        if (asyncStateMachine is null)
+        {
+            yield break;
+        }
+
+        var moveNextMethod = asyncStateMachine.GetMethod("MoveNext", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (moveNextMethod is not null)
+        {
+            yield return moveNextMethod;
+        }
+    }
+
+    private static bool MethodBodyCallsTaskDelay(Type rootDeclaringType, MethodBase method, ICollection<MethodBase> helperMethods)
+    {
+        var ilBytes = method.GetMethodBody()?.GetILAsByteArray();
+        if (ilBytes is null || ilBytes.Length == 0)
+        {
+            return false;
+        }
+
+        var offset = 0;
+        while (offset < ilBytes.Length)
+        {
+            if (!TryReadOpCode(ilBytes, ref offset, out var opCode))
+            {
+                break;
+            }
+
+            if (opCode.OperandType == OperandType.InlineMethod && offset + sizeof(int) <= ilBytes.Length)
+            {
+                var metadataToken = BitConverter.ToInt32(ilBytes, offset);
+                var resolvedMethod = ResolveMethodFromToken(method, metadataToken);
+                if (resolvedMethod is not null && IsTaskDelayMethod(resolvedMethod))
+                {
+                    return true;
+                }
+
+                if (resolvedMethod is not null && ShouldFollowHelperMethod(rootDeclaringType, resolvedMethod))
+                {
+                    helperMethods.Add(resolvedMethod);
+                }
+            }
+
+            offset += OperandSize(opCode.OperandType, ilBytes, offset);
+        }
+
+        return false;
+    }
+
+    private static bool TryReadOpCode(byte[] ilBytes, ref int offset, out OpCode opCode)
+    {
+        opCode = default;
+        if (offset >= ilBytes.Length)
+        {
+            return false;
+        }
+
+        var rawValue = ilBytes[offset++];
+        var opcodeValue = rawValue == 0xFE
+            ? (short)((rawValue << 8) | ilBytes[offset++])
+            : (short)rawValue;
+
+        return OpCodesByValue.TryGetValue(opcodeValue, out opCode);
+    }
+
+    private static int OperandSize(OperandType operandType, byte[] ilBytes, int operandOffset)
+    {
+        return operandType switch
+        {
+            OperandType.InlineNone => 0,
+            OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
+            OperandType.InlineVar => 2,
+            OperandType.InlineI or OperandType.InlineBrTarget or OperandType.InlineField or OperandType.InlineMethod or OperandType.InlineSig or OperandType.InlineString or OperandType.InlineTok or OperandType.InlineType or OperandType.ShortInlineR => 4,
+            OperandType.InlineI8 or OperandType.InlineR => 8,
+            OperandType.InlineSwitch => 4 + (BitConverter.ToInt32(ilBytes, operandOffset) * 4),
+            _ => 0,
+        };
+    }
+
+    private static bool ShouldFollowHelperMethod(Type rootDeclaringType, MethodBase helperMethod)
+    {
+        if (rootDeclaringType is null || helperMethod.DeclaringType is null)
+        {
+            return false;
+        }
+
+        if (helperMethod.DeclaringType == rootDeclaringType)
+        {
+            return true;
+        }
+
+        return helperMethod.DeclaringType.DeclaringType == rootDeclaringType
+            && helperMethod.DeclaringType.Name.StartsWith("<", StringComparison.Ordinal);
+    }
+
+    private static bool IsTaskDelayMethod(MethodBase resolvedMethod)
+    {
+        return resolvedMethod.DeclaringType == typeof(Task) && resolvedMethod.Name == nameof(Task.Delay);
+    }
+
+    private static MethodBase ResolveMethodFromToken(MethodBase ownerMethod, int metadataToken)
+    {
+        try
+        {
+            var genericTypeArguments = ownerMethod.DeclaringType?.IsGenericType == true
+                ? ownerMethod.DeclaringType.GetGenericArguments()
+                : null;
+            var genericMethodArguments = ownerMethod.IsGenericMethod
+                ? ownerMethod.GetGenericArguments()
+                : null;
+            return ownerMethod.Module.ResolveMethod(metadataToken, genericTypeArguments, genericMethodArguments);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private sealed class DelayGuardFixture
+    {
+        public async Task OwnerMethodCallingHelperAsync()
+        {
+            await HelperMethodUsingDelayAsync();
+        }
+
+        private static async Task HelperMethodUsingDelayAsync()
+        {
+            await Task.Delay(1);
+        }
+    }
+
+    private async Task WaitForTaskCompletionAsync(string indexName, long taskId)
+    {
+        await _client.WaitForTaskAsync(indexName, taskId);
+    }
+
+    private async Task WaitForTaskCompletionAsync(string indexName, long? taskId, string operationName)
+    {
+        if (!taskId.HasValue)
+        {
+            throw new InvalidOperationException($"{operationName} did not return a task identifier.");
+        }
+
+        await WaitForTaskCompletionAsync(indexName, taskId.Value);
+    }
 
     public async Task InitializeAsync()
     {
@@ -42,8 +290,8 @@ public class SearchE2ETest : IAsyncLifetime
             SearchableAttributes = new List<string> { "name", "brand", "category" },
             AttributesForFaceting = new List<string> { "brand", "category", "price" }
         };
-        await _client.SetSettingsAsync(TestIndex, settings);
-        await Task.Delay(1500);
+        var setSettingsResponse = await _client.SetSettingsAsync(TestIndex, settings);
+        await WaitForTaskCompletionAsync(TestIndex, setSettingsResponse.TaskID);
 
         // Seed test data using batch
         var records = new List<BatchRequest>
@@ -70,8 +318,8 @@ public class SearchE2ETest : IAsyncLifetime
             }),
         };
 
-        await _client.BatchAsync(TestIndex, new BatchWriteParams(records));
-        await Task.Delay(1500);
+        var batchResponse = await _client.BatchAsync(TestIndex, new BatchWriteParams(records));
+        await WaitForTaskCompletionAsync(TestIndex, batchResponse.TaskID);
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
@@ -176,12 +424,12 @@ public class SearchE2ETest : IAsyncLifetime
     [Fact]
     public async Task TestPartialUpdate()
     {
-        await _client.PartialUpdateObjectAsync(
+        var updateResponse = await _client.PartialUpdateObjectAsync(
             TestIndex,
             "1",
             new Dictionary<string, object> { { "price", 1099 } }
         );
-        await Task.Delay(1000);
+        await WaitForTaskCompletionAsync(TestIndex, updateResponse.TaskID, "PartialUpdateObjectAsync");
 
         var obj = await _client.GetObjectAsync(TestIndex, "1");
         Assert.NotNull(obj);
@@ -198,19 +446,19 @@ public class SearchE2ETest : IAsyncLifetime
         };
 
         // Save using batch for reliability
-        await _client.BatchAsync(TestIndex, new BatchWriteParams(new List<BatchRequest>
+        var saveResponse = await _client.BatchAsync(TestIndex, new BatchWriteParams(new List<BatchRequest>
         {
             new(Models.Search.Action.AddObject, newObj)
         }));
-        await Task.Delay(1500);
+        await WaitForTaskCompletionAsync(TestIndex, saveResponse.TaskID);
 
         // Verify saved
         var saved = await _client.GetObjectAsync(TestIndex, "temp-csharp-100");
         Assert.NotNull(saved);
 
         // Delete
-        await _client.DeleteObjectAsync(TestIndex, "temp-csharp-100");
-        await Task.Delay(1500);
+        var deleteResponse = await _client.DeleteObjectAsync(TestIndex, "temp-csharp-100");
+        await WaitForTaskCompletionAsync(TestIndex, deleteResponse.TaskID);
 
         // Verify deleted
         var ex = await Assert.ThrowsAsync<Exceptions.FlapjackApiException>(async () =>
@@ -234,8 +482,8 @@ public class SearchE2ETest : IAsyncLifetime
         {
             SearchableAttributes = new List<string> { "name", "brand" }
         };
-        await _client.SetSettingsAsync(TestIndex, newSettings);
-        await Task.Delay(1500);
+        var updateSettingsResponse = await _client.SetSettingsAsync(TestIndex, newSettings);
+        await WaitForTaskCompletionAsync(TestIndex, updateSettingsResponse.TaskID);
 
         var settings = await _client.GetSettingsAsync(TestIndex);
         Assert.NotNull(settings);
@@ -251,8 +499,8 @@ public class SearchE2ETest : IAsyncLifetime
         {
             Synonyms = new List<string> { "phone", "mobile", "cell" }
         };
-        await _client.SaveSynonymAsync(TestIndex, "syn-phone", synonym);
-        await Task.Delay(1000);
+        var saveSynonymResponse = await _client.SaveSynonymAsync(TestIndex, "syn-phone", synonym);
+        await WaitForTaskCompletionAsync(TestIndex, saveSynonymResponse.TaskID);
 
         var saved = await _client.GetSynonymAsync(TestIndex, "syn-phone");
         Assert.NotNull(saved);
@@ -272,8 +520,8 @@ public class SearchE2ETest : IAsyncLifetime
                 new() { Pattern = "promo", Anchoring = Anchoring.Contains }
             }
         };
-        await _client.SaveRuleAsync(TestIndex, "rule-promo", rule);
-        await Task.Delay(1000);
+        var saveRuleResponse = await _client.SaveRuleAsync(TestIndex, "rule-promo", rule);
+        await WaitForTaskCompletionAsync(TestIndex, saveRuleResponse.TaskID);
 
         var saved = await _client.GetRuleAsync(TestIndex, "rule-promo");
         Assert.NotNull(saved);
@@ -294,14 +542,14 @@ public class SearchE2ETest : IAsyncLifetime
     {
         // Seed a second index
         var secondIndex = "test_csharp_e2e_multi";
-        await _client.BatchAsync(secondIndex, new BatchWriteParams(new List<BatchRequest>
+        var secondIndexBatchResponse = await _client.BatchAsync(secondIndex, new BatchWriteParams(new List<BatchRequest>
         {
             new(Models.Search.Action.AddObject, new Dictionary<string, object>
             {
                 {"objectID", "m1"}, {"title", "Multi Index Test"}
             })
         }));
-        await Task.Delay(1500);
+        await WaitForTaskCompletionAsync(secondIndex, secondIndexBatchResponse.TaskID);
 
         // Search both indices
         var result1 = await _client.SearchSingleIndexAsync<object>(TestIndex, new SearchParams(new SearchParamsObject { Query = "" }));

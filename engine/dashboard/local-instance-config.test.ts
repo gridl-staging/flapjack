@@ -235,6 +235,14 @@ describe('resolveAdminKey', () => {
     expect(resolveAdminKey(undefined, 'http://localhost:7700')).toBe('fj_devtestadminkey000000');
   });
 
+  it('prefers the live loopback process admin key when env defaults are stale', () => {
+    expect(resolveAdminKey(
+      'fj_devtestadminkey000000',
+      'http://127.0.0.1:7700',
+      { loopbackProcessAdminKey: 'runtime-admin-key' },
+    )).toBe('runtime-admin-key');
+  });
+
   it('requires an explicit admin key for non-loopback backends', () => {
     expect(() => resolveAdminKey(undefined, 'https://staging.example.com')).toThrow(
       /FJ_TEST_ADMIN_KEY must be set/i,
@@ -305,6 +313,16 @@ describe('getLocalInstanceConfig', () => {
 
     expect(config.backendBaseUrl).toBe('https://staging.example.com:9443');
     expect(config.adminKey).toBe('remote-admin-key');
+  });
+
+  it('uses FLAPJACK_ADMIN_KEY when no test-only admin key override is configured', () => {
+    vi.stubEnv('FLAPJACK_ADMIN_KEY', 'runtime-admin-key');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const config = getLocalInstanceConfig();
+
+    expect(config.backendBaseUrl).toBe('http://127.0.0.1:7700');
+    expect(config.adminKey).toBe('runtime-admin-key');
   });
 
   it('normalizes dashboard URL host when FJ_HOST uses an unspecified bind address', () => {

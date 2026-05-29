@@ -9,6 +9,31 @@ For the public hardening baseline, see [SECURITY_BASELINE.md](./SECURITY_BASELIN
 For launch-blocker status, see [../1_STRATEGY/HIGHEST_PRIORITY.md](../1_STRATEGY/HIGHEST_PRIORITY.md).
 For shipped/readiness status, see [../FEATURES.md](../FEATURES.md).
 
+## Repository & deploy topology
+
+Flapjack spans a three-repo dev → staging → prod chain plus a separate fjcloud
+control plane. Knowing which is which avoids the most common traps when checking
+release or engine status:
+
+- **Repos:** dev `gridl-dev/flapjack_dev` (private; CI disabled) → staging
+  `gridl-staging/flapjack` → prod `flapjackhq/flapjack` (the public face).
+  `debbie sync` (see `.debbie.toml`) curates files along that chain; CI runs free
+  on the staging and prod mirrors. The **prod mirror's `release.yml` is the
+  authoritative release CI** — git tags, GitHub Releases, and GHCR images exist
+  only on the prod mirror, never on the dev repo (`git tag -l` on dev is empty
+  even when a release shipped).
+- **`/version.dev_sha` is the fjcloud control-plane SHA, not the engine
+  version.** `api.{staging.}flapjack.foo/version.dev_sha` reports
+  `FJCLOUD_DEV_SHA`, baked at fjcloud CI build time. The flapjack engine reaches
+  fjcloud's fleet baked into a Packer AMI, not via `debbie sync`, so `/version`
+  never reflects an engine change — never gate "is my engine change live?" on it.
+- **HA/durability is validated cross-repo, in fjcloud.** Flapjack's
+  HA/restart-window durability claims are proven by fjcloud's A5 HA soak; the
+  canonical, live status lives in the fjcloud repo at
+  `fjcloud_dev/docs/launch_verification_matrix.md` §5 (separate repo, not synced
+  here). Proof an engine change is live is the relevant fjcloud soak passing, not
+  a `/version` check.
+
 ## Deployment surfaces in this repo
 
 The repo currently maintains four deployment-oriented proof surfaces:

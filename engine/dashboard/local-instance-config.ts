@@ -4,6 +4,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +23,11 @@ const DEFAULTS = {
 } as const;
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+interface ResolveAdminKeyOptions {
+  loopbackProcessAdminKey?: string;
+  processListOutput?: string;
+}
 
 export interface LocalInstanceConfig {
   host: string;
@@ -337,16 +343,34 @@ export function resolveBackendDataDir(
 export function resolveAdminKey(
   configuredAdminKey: string | undefined,
   backendBaseUrl: string,
+  options: ResolveAdminKeyOptions = {},
 ): string {
-  if (configuredAdminKey) {
-    return configuredAdminKey;
-  }
-
   let hostname: string;
   try {
     hostname = new URL(backendBaseUrl).hostname;
   } catch {
     return DEFAULTS.adminKey;
+  }
+
+  const isLoopbackBackend = LOOPBACK_HOSTS.has(hostname);
+  const loopbackProcessAdminKey = (
+    configuredAdminKey === DEFAULTS.adminKey
+      ? (
+        options.loopbackProcessAdminKey
+        || findLoopbackProcessAdminKey(backendBaseUrl, options.processListOutput)
+      )
+      : undefined
+  );
+
+  if (configuredAdminKey) {
+    if (
+      isLoopbackBackend
+      && configuredAdminKey === DEFAULTS.adminKey
+      && loopbackProcessAdminKey
+    ) {
+      return loopbackProcessAdminKey;
+    }
+    return configuredAdminKey;
   }
 
   if (LOOPBACK_HOSTS.has(hostname)) {
@@ -356,6 +380,68 @@ export function resolveAdminKey(
   throw new Error(
     `FJ_TEST_ADMIN_KEY must be set when using a non-loopback backend URL: ${backendBaseUrl}`,
   );
+}
+
+function readProcessListOutput(): string | null {
+  try {
+    return execFileSync('ps', ['eww', '-axo', 'command'], {
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function processLineTargetsPort(processLine: string, port: number): boolean {
+  if (
+    processLine.includes(`--port ${port}`)
+    || processLine.includes(`--port=${port}`)
+  ) {
+    return true;
+  }
+
+  const bindAddressPattern = new RegExp(`--bind-addr(?:=|\\s+)\\S*:${port}(?:\\s|$)`);
+  return bindAddressPattern.test(processLine);
+}
+
+/** Finds FLAPJACK_ADMIN_KEY from a loopback flapjack process bound to backendBaseUrl. */
+export function findLoopbackProcessAdminKey(
+  backendBaseUrl: string,
+  processListOutput?: string,
+): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(backendBaseUrl);
+  } catch {
+    return undefined;
+  }
+
+  if (!LOOPBACK_HOSTS.has(parsed.hostname)) {
+    return undefined;
+  }
+
+  const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+  if (!Number.isInteger(port) || port <= 0) {
+    return undefined;
+  }
+
+  const processOutput = processListOutput ?? readProcessListOutput();
+  if (!processOutput) {
+    return undefined;
+  }
+
+  for (const processLine of processOutput.split('\n')) {
+    if (!processLine.includes('flapjack') || !processLineTargetsPort(processLine, port)) {
+      continue;
+    }
+    const keyMatch = processLine.match(/FLAPJACK_ADMIN_KEY=([^\s]+)/);
+    if (keyMatch?.[1]) {
+      return keyMatch[1];
+    }
+  }
+
+  return undefined;
 }
 
 export function getLocalInstanceConfig(): LocalInstanceConfig {
@@ -375,7 +461,11 @@ export function getLocalInstanceConfig(): LocalInstanceConfig {
   const backendBaseUrl =
     parseHttpOrigin(process.env.FLAPJACK_BACKEND_URL) || formatHttpOrigin(host, backendPort);
   const adminKey = resolveAdminKey(
-    pickConfiguredValue(fileValues.FJ_TEST_ADMIN_KEY, process.env.FJ_TEST_ADMIN_KEY),
+    pickConfiguredValue(
+      fileValues.FJ_TEST_ADMIN_KEY,
+      process.env.FJ_TEST_ADMIN_KEY,
+      process.env.FLAPJACK_ADMIN_KEY,
+    ),
     backendBaseUrl,
   );
   const backendDataDir = resolveBackendDataDir(fileValues, backendBaseUrl);

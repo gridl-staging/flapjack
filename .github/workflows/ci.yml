@@ -104,6 +104,8 @@ jobs:
         run: cargo build --tests --workspace
       - name: Build binaries (needed by integration tests)
         run: cargo build --package flapjack-server --features vector-search
+      - name: Build vector-search test binaries
+        run: cargo build --tests -p flapjack -p flapjack-http --features vector-search
       - name: Fast tests (vector-search)
         timeout-minutes: 10
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search
@@ -136,6 +138,8 @@ jobs:
         run: mkdir -p dashboard/dist && echo '<html></html>' > dashboard/dist/index.html
       - name: Build binaries (needed by integration tests)
         run: cargo build --package flapjack-server --features vector-search
+      - name: Build vector-search test binaries
+        run: cargo build --tests -p flapjack -p flapjack-http --features vector-search
       - name: All tests (vector-search)
         timeout-minutes: 10
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci
