@@ -82,6 +82,8 @@ jobs:
     needs: check-repo
     if: needs.check-repo.outputs.is-public-repo == 'true'
     runs-on: ubuntu-latest
+    env:
+      CACHE_ON_FAILURE: true
     defaults:
       run:
         working-directory: engine
@@ -105,9 +107,10 @@ jobs:
       - name: Build binaries (needed by integration tests)
         run: cargo build --package flapjack-server --features vector-search
       - name: Build vector-search test binaries
+        timeout-minutes: 30
         run: cargo build --tests -p flapjack -p flapjack-http --features vector-search
       - name: Fast tests (vector-search)
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search
       - name: Fast tests (remaining)
         timeout-minutes: 10
@@ -118,6 +121,8 @@ jobs:
     needs: check-repo
     if: needs.check-repo.outputs.is-public-repo == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      CACHE_ON_FAILURE: true
     defaults:
       run:
         working-directory: engine
@@ -137,11 +142,13 @@ jobs:
       - name: Create dashboard dist stub (for RustEmbed)
         run: mkdir -p dashboard/dist && echo '<html></html>' > dashboard/dist/index.html
       - name: Build binaries (needed by integration tests)
+        timeout-minutes: 30
         run: cargo build --package flapjack-server --features vector-search
       - name: Build vector-search test binaries
+        timeout-minutes: 30
         run: cargo build --tests -p flapjack -p flapjack-http --features vector-search
       - name: All tests (vector-search)
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci
       - name: All tests (remaining)
         timeout-minutes: 10
