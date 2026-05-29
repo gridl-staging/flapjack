@@ -1,9 +1,14 @@
 //! Per-user metrics aggregation for A/B testing experiments, reading search and click events from Parquet files and producing arm-level statistics for delta method z-tests, Welch's t-tests, and interleaving preference scoring.
 
+#[allow(dead_code)] // Aggregation helpers are consumed by analytics feature and test-only seams.
 mod aggregation;
+#[allow(dead_code)]
+// Interleaving metrics helpers are currently exercised via analytics/test paths.
 mod interleaving;
 #[cfg(feature = "analytics")]
 mod io;
+#[allow(dead_code)]
+// Shared row/metric structs are referenced conditionally by analytics and tests.
 mod types;
 
 pub use types::{ArmMetrics, ExperimentMetrics, InterleavingMetrics};

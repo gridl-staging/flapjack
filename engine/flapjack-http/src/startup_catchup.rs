@@ -400,6 +400,8 @@ fn read_local_ops_since(
     })
 }
 
+/// TODO: Document repush_failed_peer_ranges.
+#[allow(clippy::cognitive_complexity)] // Per-peer retry/strict-mode handling is centralized here to keep startup catch-up failure semantics in one place.
 async fn repush_failed_peer_ranges(
     state: &AppState,
     repl_mgr: &Arc<flapjack_replication::manager::ReplicationManager>,

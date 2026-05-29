@@ -1328,7 +1328,9 @@ mod tests {
         out
     }
 
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     #[test]
+    #[allow(clippy::cognitive_complexity)] // Known-answer test keeps all assertions inline so expected aggregates remain explicit and auditable.
     fn flush_rollup_window_hourly_aggregates_known_answer() {
         let tmp = TempDir::new().unwrap();
         let config = rollup_test_config(&tmp);
@@ -1411,7 +1413,9 @@ mod tests {
         );
     }
 
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     #[test]
+    #[allow(clippy::cognitive_complexity)] // Known-answer compaction test intentionally keeps full hand-calculated checks in one place.
     fn flush_rollup_window_daily_compacts_from_hourly_only() {
         let tmp = TempDir::new().unwrap();
         let config = rollup_test_config(&tmp);

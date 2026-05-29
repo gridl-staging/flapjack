@@ -494,12 +494,10 @@ mod tests {
 
         let response = attach_experiment_warning_header(response, None);
 
-        assert!(
-            response
-                .headers()
-                .get(EXPERIMENT_WARNING_HEADER_NAME)
-                .is_none()
-        );
+        assert!(response
+            .headers()
+            .get(EXPERIMENT_WARNING_HEADER_NAME)
+            .is_none());
         assert_eq!(
             response
                 .headers()
