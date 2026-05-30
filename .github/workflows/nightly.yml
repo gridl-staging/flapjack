@@ -60,11 +60,6 @@ jobs:
         with:
           workspaces: engine
       - uses: taiki-e/install-action@a93b01ec36baa756f8701f3a0a8daa54a46d6339 # nextest
-      - name: Install cargo audit/deny tools for security audit tests
-        uses: taiki-e/install-action@a93b01ec36baa756f8701f3a0a8daa54a46d6339 # cargo-audit,cargo-deny
-        with:
-          tool: cargo-audit,cargo-deny
-          fallback: none
       - name: Create dashboard dist stub (for RustEmbed)
         run: mkdir -p dashboard/dist && echo '<html></html>' > dashboard/dist/index.html
       - name: Rustfmt
@@ -79,7 +74,7 @@ jobs:
       - name: Build binaries
         run: cargo build --package flapjack-server
       - name: Run all tests
-        timeout-minutes: 45
+        timeout-minutes: 10
         run: cargo nextest run -P ci
 
   installer-all:
@@ -94,8 +89,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Run installer tests
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: sh engine/tests/test_install.sh
 
   # ============================================================================

@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 - The `vector-search-local` feature (local embedding via `fastembed` → `ort` → `tokenizers` → `hf-hub`) is no longer enabled by default for the `flapjack`, `flapjack-http`, and `flapjack-server` crates. Consumers that need local embedding must build with `--features vector-search-local` (or `--features vector-search` for usearch-only without local model inference). This brings the baseline `cargo build` / `cargo test` graph under the runner disk budget that previously exhausted CI; the heavy embedding chain remains exercised by the explicit `--features vector-search` CI jobs.
 
-## [1.0.3] - 2026-05-28
+## [1.0.2] - 2026-05-28
 
 ### Fixed
 
@@ -68,6 +68,6 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Hardened transport and replication flows to reduce operational failure modes during distributed operation.
 
 [Unreleased]: https://github.com/griddlehq/flapjack/commits/main
-[1.0.3]: https://github.com/flapjackhq/flapjack/releases/tag/v1.0.3
+[1.0.2]: https://github.com/flapjackhq/flapjack/releases/tag/v1.0.2
 [1.0.1]: https://github.com/griddlehq/flapjack/releases/tag/v1.0.1
 [1.0.0]: https://github.com/griddlehq/flapjack/releases
