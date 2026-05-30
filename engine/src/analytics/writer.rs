@@ -169,7 +169,24 @@ fn require_canonical_hourly_source_coverage(
     let mut hourly_paths = Vec::with_capacity(hourly_state.windows.len());
     for window in &hourly_state.windows {
         let path = manifest_hourly_source_path(&hourly_dir, &window.file)?;
-        if !path.is_file() {
+        let metadata = fs::symlink_metadata(&path).map_err(|e| {
+            format!(
+                "certified hourly source file missing for {} window {}: {} ({})",
+                date,
+                window.start_ms,
+                path.display(),
+                e
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "certified hourly source file must not be a symlink for {} window {}: {}",
+                date,
+                window.start_ms,
+                path.display()
+            ));
+        }
+        if !metadata.is_file() {
             return Err(format!(
                 "certified hourly source file missing for {} window {}: {}",
                 date,
@@ -217,6 +234,7 @@ fn manifest_hourly_source_path(hourly_dir: &Path, file_name: &str) -> Result<Pat
     }
 }
 
+#[derive(Debug)]
 struct CertifiedHourlySource {
     path: PathBuf,
     start_ms: i64,
@@ -1366,6 +1384,7 @@ mod tests {
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     #[test]
     #[allow(clippy::cognitive_complexity)] // Known-answer test keeps all assertions inline so expected aggregates remain explicit and auditable.
     fn flush_rollup_window_hourly_aggregates_known_answer() {
@@ -1450,6 +1469,7 @@ mod tests {
         );
     }
 
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
@@ -1877,6 +1897,59 @@ mod tests {
         };
         assert!(
             err.contains("invalid certified hourly source filename"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn flush_rollup_window_daily_rejects_symlinked_certified_hourly_source() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let config = rollup_test_config(&tmp);
+        let base_ts = base_ts_2025_06_15_noon();
+        seed_raw_events(&config, &fixture_events(base_ts), "2025-06-15");
+
+        for hour in 0..24 {
+            let (start, end) = hour_window_ms(2025, 6, 15, hour);
+            flush_rollup_window(&config, "products", "1hour", start, end).unwrap();
+        }
+
+        let (certified_start, certified_end) = hour_window_ms(2025, 6, 15, 0);
+        let escaped_path = config
+            .rollups_dir("products", "1hour")
+            .parent()
+            .unwrap()
+            .join("symlinked_hourly_escape.parquet");
+        let escaped_batch = RecordBatch::try_new(
+            search_rollup_schema(),
+            vec![
+                Arc::new(Int64Array::from(vec![certified_start])),
+                Arc::new(Int64Array::from(vec![certified_end])),
+                Arc::new(StringArray::from(vec!["escaped"])),
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(Int64Array::from(vec![0])),
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(BinaryArray::from(vec![None::<&[u8]>])),
+            ],
+        )
+        .unwrap();
+        write_parquet_file_atomic(&escaped_path, escaped_batch).unwrap();
+
+        let certified_path = config
+            .rollups_dir("products", "1hour")
+            .join(format!("rollup_1hour_{}.parquet", certified_start));
+        fs::remove_file(&certified_path).unwrap();
+        symlink(&escaped_path, &certified_path).unwrap();
+
+        let (day_start, _day_end) = day_window_ms(2025, 6, 15);
+        let err = require_canonical_hourly_source_coverage(&config, "products", day_start)
+            .expect_err("daily source discovery must reject symlinked certified hourly files");
+        assert!(
+            err.contains("must not be a symlink"),
             "unexpected error: {err}"
         );
     }

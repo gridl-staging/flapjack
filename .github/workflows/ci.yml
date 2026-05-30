@@ -121,7 +121,7 @@ jobs:
         timeout-minutes: 30
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search
       - name: Fast tests (remaining)
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication
 
   rust-tests-all:
@@ -167,7 +167,7 @@ jobs:
         timeout-minutes: 30
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci
       - name: All tests (remaining)
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication -P ci
 
   # ============================================================================

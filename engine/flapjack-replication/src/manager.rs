@@ -302,6 +302,7 @@ impl ReplicationManager {
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
+    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
     #[allow(clippy::cognitive_complexity)] // Merge semantics must branch on per-peer availability, strict mode, and dedup conflicts in one owner path.
     async fn catch_up_from_peer_with_metadata_internal(
         &self,
@@ -432,13 +433,15 @@ impl ReplicationManager {
             .unwrap_or_default()
     }
 
-    /// Discover visible tenant IDs from peers, requiring at least one peer to
-    /// answer successfully when peers are configured.
+    /// Discover visible tenant IDs from peers, requiring every configured peer
+    /// to answer successfully.
     pub async fn discover_tenants_from_peers_strict(&self) -> Result<Vec<String>, String> {
         self.discover_tenants_from_peers_internal(true).await
     }
 
-    /// Merge unique tenant IDs from available peers and optionally require one successful response.
+    /// Merge unique tenant IDs from available peers and, in strict mode, fail on
+    /// the first unavailable or erroring peer instead of silently returning a
+    /// partial tenant set.
     async fn discover_tenants_from_peers_internal(
         &self,
         require_all_peers: bool,
