@@ -219,7 +219,7 @@ assert_capped_vector_job_prebuild_binding() {
   local capped_step_name="$4"
   local capped_step_command="$5"
   local prebuild_step_name="Build vector-search test binaries"
-  local prebuild_command="cargo build --tests -p flapjack -p flapjack-http --features vector-search"
+  local prebuild_command="RUSTFLAGS='-C debuginfo=0 -C strip=debuginfo' cargo build --tests -p flapjack -p flapjack-http --features vector-search"
   local signal_job_block_unique="0"
   local signal_canonical_prebuild_present="0"
   local signal_canonical_capped_present="0"
@@ -323,7 +323,7 @@ jobs:
       - name: Fast tests (vector-search)
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search
       - name: Build vector-search test binaries
-        run: cargo build --tests -p flapjack -p flapjack-http --features vector-search
+        run: RUSTFLAGS='-C debuginfo=0 -C strip=debuginfo' cargo build --tests -p flapjack -p flapjack-http --features vector-search
 YAML
 
   local binding_output
@@ -417,6 +417,7 @@ assert_step_contract() {
   local workflow_label="$2"
   local step_name="$3"
   local command_signature="$4"
+  local expected_timeout="${5:-10}"
 
   local block_file
   block_file="$(mktemp)"
@@ -436,13 +437,82 @@ assert_step_contract() {
     return
   fi
 
-  if grep -v '^__' "$block_file" | grep -Eq '^[[:space:]]*timeout-minutes:[[:space:]]*10$'; then
-    pass "$workflow_label '$step_name' enforces timeout-minutes: 10"
+  if grep -v '^__' "$block_file" | grep -Eq "^[[:space:]]*timeout-minutes:[[:space:]]*${expected_timeout}$"; then
+    pass "$workflow_label '$step_name' enforces timeout-minutes: $expected_timeout"
   else
-    fail "$workflow_label '$step_name' enforces timeout-minutes: 10"
+    fail "$workflow_label '$step_name' enforces timeout-minutes: $expected_timeout"
   fi
 
   rm -f "$block_file"
+}
+
+assert_job_contains_pattern() {
+  local workflow_file="$1"
+  local workflow_label="$2"
+  local job_key="$3"
+  local pattern="$4"
+  local description="$5"
+
+  local job_block_file
+  job_block_file="$(mktemp)"
+  extract_matching_job_block "$workflow_file" "$job_key" > "$job_block_file"
+
+  local job_match_count
+  job_match_count="$(grep -Eo '__JOB_MATCH_COUNT__=[0-9]+' "$job_block_file" | head -n1 | cut -d= -f2)"
+  job_match_count="${job_match_count:-0}"
+  if [ "$job_match_count" -ne 1 ]; then
+    fail "$description"
+    rm -f "$job_block_file"
+    return
+  fi
+
+  if grep -v '^__' "$job_block_file" | grep -Eq "$pattern"; then
+    pass "$description"
+  else
+    fail "$description"
+  fi
+
+  rm -f "$job_block_file"
+}
+
+assert_named_step_order_in_job() {
+  local workflow_file="$1"
+  local workflow_label="$2"
+  local job_key="$3"
+  local first_step_name="$4"
+  local second_step_name="$5"
+
+  local job_block_file
+  job_block_file="$(mktemp)"
+  extract_matching_job_block "$workflow_file" "$job_key" > "$job_block_file"
+
+  local job_match_count
+  job_match_count="$(grep -Eo '__JOB_MATCH_COUNT__=[0-9]+' "$job_block_file" | head -n1 | cut -d= -f2)"
+  job_match_count="${job_match_count:-0}"
+  if [ "$job_match_count" -ne 1 ]; then
+    fail "$workflow_label '$job_key' defines named steps '$first_step_name' and '$second_step_name' in order"
+    rm -f "$job_block_file"
+    return
+  fi
+
+  local sanitized_job_block
+  sanitized_job_block="$(mktemp)"
+  grep -v '^__' "$job_block_file" > "$sanitized_job_block"
+
+  local first_line
+  first_line="$(grep -nF -- "- name: $first_step_name" "$sanitized_job_block" | head -n1 | cut -d: -f1)"
+  local second_line
+  second_line="$(grep -nF -- "- name: $second_step_name" "$sanitized_job_block" | head -n1 | cut -d: -f1)"
+  first_line="${first_line:-0}"
+  second_line="${second_line:-0}"
+
+  if [ "$first_line" -gt 0 ] && [ "$second_line" -gt 0 ] && [ "$first_line" -lt "$second_line" ]; then
+    pass "$workflow_label '$job_key' runs '$first_step_name' before '$second_step_name'"
+  else
+    fail "$workflow_label '$job_key' runs '$first_step_name' before '$second_step_name'"
+  fi
+
+  rm -f "$job_block_file" "$sanitized_job_block"
 }
 
 section "Rust test timeout acceptance contract"
@@ -451,8 +521,12 @@ assert_duplicate_step_fixture_guards_wrong_failure_mode
 assert_duplicate_step_fixture_ignores_helper_prose_changes
 assert_step_contract "$CI_WORKFLOW" "ci.yml" "Fast tests (vector-search)" "cargo nextest run -p flapjack -p flapjack-http --features vector-search"
 assert_step_contract "$CI_WORKFLOW" "ci.yml" "Fast tests (remaining)" "cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication"
-assert_step_contract "$CI_WORKFLOW" "ci.yml" "All tests (vector-search)" "cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci"
+assert_step_contract "$CI_WORKFLOW" "ci.yml" "All tests (vector-search)" "cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci" "20"
 assert_step_contract "$CI_WORKFLOW" "ci.yml" "All tests (remaining)" "cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication -P ci"
+assert_job_contains_pattern "$CI_WORKFLOW" "ci.yml" "rust-tests-fast" '^[[:space:]]*tool:[[:space:]]*cargo-audit,cargo-deny[[:space:]]*$' "ci.yml 'rust-tests-fast' installs cargo-audit and cargo-deny before running vector-search tests"
+assert_job_contains_pattern "$CI_WORKFLOW" "ci.yml" "rust-tests-all" '^[[:space:]]*tool:[[:space:]]*cargo-audit,cargo-deny[[:space:]]*$' "ci.yml 'rust-tests-all' installs cargo-audit and cargo-deny before running vector-search tests"
+assert_named_step_order_in_job "$CI_WORKFLOW" "ci.yml" "rust-tests-fast" "Install cargo security tools" "Fast tests (vector-search)"
+assert_named_step_order_in_job "$CI_WORKFLOW" "ci.yml" "rust-tests-all" "Install cargo security tools" "All tests (vector-search)"
 assert_capped_vector_job_prebuild_binding "$CI_WORKFLOW" "ci.yml" "rust-tests-fast" "Fast tests (vector-search)" "cargo nextest run -p flapjack -p flapjack-http --features vector-search"
 assert_capped_vector_job_prebuild_binding "$CI_WORKFLOW" "ci.yml" "rust-tests-all" "All tests (vector-search)" "cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci"
 assert_step_contract "$NIGHTLY_WORKFLOW" "nightly.yml" "Run all tests" "cargo nextest run -P ci"

@@ -116,7 +116,7 @@ jobs:
         run: cargo build --package flapjack-server --features vector-search
       - name: Build vector-search test binaries
         timeout-minutes: 30
-        run: cargo build --tests -p flapjack -p flapjack-http --features vector-search
+        run: RUSTFLAGS='-C debuginfo=0 -C strip=debuginfo' cargo build --tests -p flapjack -p flapjack-http --features vector-search
       - name: Fast tests (vector-search)
         timeout-minutes: 30
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search
@@ -162,7 +162,7 @@ jobs:
         run: cargo build --package flapjack-server --features vector-search
       - name: Build vector-search test binaries
         timeout-minutes: 30
-        run: cargo build --tests -p flapjack -p flapjack-http --features vector-search
+        run: RUSTFLAGS='-C debuginfo=0 -C strip=debuginfo' cargo build --tests -p flapjack -p flapjack-http --features vector-search
       - name: All tests (vector-search)
         timeout-minutes: 30
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci

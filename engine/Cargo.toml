@@ -18,7 +18,7 @@ keywords = ["search", "full-text", "tantivy", "algolia", "faceting"]
 categories = ["database", "text-processing"]
 
 [features]
-default = ["axum-support", "s3-snapshots", "openapi", "analytics", "vector-search-local", "decompound"]
+default = ["axum-support", "s3-snapshots", "openapi", "analytics", "decompound"]
 axum-support = ["axum"]
 s3-snapshots = ["rust-s3", "flate2", "tar"]
 openapi = ["utoipa"]

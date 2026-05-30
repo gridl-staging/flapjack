@@ -8,22 +8,25 @@ capability, configuring embedders, and running your first hybrid search query.
 
 ## 1. Build with vector search
 
-The default `flapjack-server` build now includes both vector search and local
-embedding support:
+The default `flapjack-server` build is now a lean text-only binary. To get
+vector search with local embedding support, opt in with
+`--features vector-search-local`:
 
 ```bash
 cd engine
-cargo build -p flapjack-server --release
+cargo build -p flapjack-server --release --features vector-search-local
 ```
 
-If you intentionally want a lean text-only binary, opt out of default features:
+To enable vector search WITHOUT bundling the local `fastembed` model chain
+(for example when you only use userProvided / OpenAI / HuggingFace remote
+embedders), opt in to the lighter `vector-search` feature instead:
 
 ```bash
-cargo build -p flapjack-server --release --no-default-features
+cargo build -p flapjack-server --release --features vector-search
 ```
 
-To force an explicit vector-enabled build on top of a `--no-default-features`
-workflow, use `--features vector-search-local`.
+Plain `cargo build -p flapjack-server --release` produces the lean text-only
+binary with no vector capabilities compiled in.
 
 ## 2. Verify capabilities
 
@@ -33,7 +36,7 @@ After starting the server, check `/health`:
 curl -s http://127.0.0.1:7700/health | jq '.capabilities'
 ```
 
-Expected output for a lean text-only build:
+Expected output for the default (lean text-only) build:
 
 ```json
 {
@@ -42,7 +45,7 @@ Expected output for a lean text-only build:
 }
 ```
 
-Expected output for the default build:
+Expected output for a `--features vector-search-local` build:
 
 ```json
 {
@@ -116,7 +119,7 @@ curl -s -X PUT http://127.0.0.1:7700/1/indexes/products/settings \
 
 ### Option D: Local embedding with FastEmbed
 
-Available in the default `flapjack-server` build.
+Requires a `flapjack-server` build with `--features vector-search-local`.
 
 ```bash
 curl -s -X PUT http://127.0.0.1:7700/1/indexes/products/settings \

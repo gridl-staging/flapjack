@@ -999,13 +999,23 @@ fn collect_parquet_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("Failed to stat entry {}: {}", path.display(), e))?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "refusing to traverse symlinked analytics path {}",
+                path.display()
+            ));
+        }
+        if file_type.is_dir() {
             files.extend(collect_parquet_files(&path)?);
-        } else if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("parquet"))
-            .unwrap_or(false)
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("parquet"))
+                .unwrap_or(false)
         {
             files.push(path);
         }
@@ -1168,6 +1178,8 @@ fn rewrite_parquet_file(
 mod tests {
     use super::*;
     use chrono::{NaiveDate, TimeZone};
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use tempfile::TempDir;
 
     #[test]
@@ -1184,6 +1196,24 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(first.parent(), second.parent());
         assert!(first.parent().unwrap().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_parquet_files_rejects_symlinked_directories() {
+        let tmp = TempDir::new().unwrap();
+        let events_dir = tmp.path().join("events");
+        let outside_dir = tmp.path().join("outside");
+        std::fs::create_dir_all(&events_dir).unwrap();
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        symlink(&outside_dir, events_dir.join("linked")).unwrap();
+
+        let err = collect_parquet_files(&events_dir)
+            .expect_err("analytics purge must fail closed on symlinked directories");
+        assert!(
+            err.contains("refusing to traverse symlinked analytics path"),
+            "unexpected error: {err}"
+        );
     }
 
     // ── Rollup writer tests ──
@@ -1333,6 +1363,9 @@ mod tests {
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     #[test]
     #[allow(clippy::cognitive_complexity)] // Known-answer test keeps all assertions inline so expected aggregates remain explicit and auditable.
     fn flush_rollup_window_hourly_aggregates_known_answer() {
@@ -1417,6 +1450,9 @@ mod tests {
         );
     }
 
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.

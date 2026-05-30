@@ -2,6 +2,7 @@ use axum::http::{Method, StatusCode};
 use base64::Engine as _;
 use flapjack::analytics::schema::SearchEvent;
 use flapjack::analytics::{AnalyticsCollector, AnalyticsConfig, AnalyticsQueryEngine};
+#[cfg(feature = "vector-search")]
 use flapjack::index::settings::IndexSettings;
 use flapjack::types::{Document, FieldValue};
 use flapjack_http::analytics_cluster::AnalyticsClusterClient;
@@ -228,6 +229,12 @@ async fn a10_chat_ai_provider_rejects_unsafe_base_urls_from_env() {
     }
 }
 
+// Asserts behavior of `IndexSettings::validate_embedders_inner`, which is a
+// no-op under `#[cfg(not(feature = "vector-search"))]` — gating the test on
+// the same feature keeps the SSRF coverage live under the heavy CI lane
+// (`cargo nextest run ... --features vector-search`) while letting the lean
+// default-build test suite skip it instead of asserting a no-op.
+#[cfg(feature = "vector-search")]
 #[test]
 fn a10_vector_embedders_reject_ssrf_payload_urls() {
     // Each payload is validated in isolation so every class is asserted-rejected

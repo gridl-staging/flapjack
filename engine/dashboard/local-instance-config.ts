@@ -23,6 +23,7 @@ const DEFAULTS = {
 } as const;
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const LOCAL_BINDABLE_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0', '::']);
 
 interface ResolveAdminKeyOptions {
   loopbackProcessAdminKey?: string;
@@ -290,14 +291,80 @@ function normalizeTrackedDataDir(rawPath: string | undefined): string | null {
   }
 }
 
+interface HostAndPort {
+  hostname: string;
+  port: string;
+}
+
+function parseHostAndPort(value: string): HostAndPort | null {
+  try {
+    const parsed = new URL(value);
+    return {
+      hostname: parsed.hostname,
+      port: parsed.port,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackBackendUrl(backendBaseUrl: string): boolean {
+  try {
+    return LOOPBACK_HOSTS.has(new URL(backendBaseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function parseBindAddress(rawBindAddress: string | undefined): HostAndPort | null {
+  if (!rawBindAddress) {
+    return null;
+  }
+
+  const trimmed = rawBindAddress.trim();
+  const portSeparator = trimmed.lastIndexOf(':');
+  if (portSeparator <= 0 || portSeparator === trimmed.length - 1) {
+    return null;
+  }
+
+  let hostname = trimmed.slice(0, portSeparator);
+  const port = trimmed.slice(portSeparator + 1);
+  if (!hostname || !port) {
+    return null;
+  }
+
+  if (hostname.startsWith('[') && hostname.endsWith(']')) {
+    hostname = hostname.slice(1, -1);
+  }
+
+  return { hostname, port };
+}
+
+function normalizeTrackedHost(hostname: string): string {
+  return LOCAL_BINDABLE_HOSTS.has(hostname) ? 'loopback' : hostname.toLowerCase();
+}
+
+function trackedBindAddressMatchesBackend(
+  trackedBindAddress: string | undefined,
+  backendBaseUrl: string,
+): boolean {
+  const backendAddress = parseHostAndPort(backendBaseUrl);
+  const trackedAddress = parseBindAddress(trackedBindAddress);
+  if (!backendAddress || !trackedAddress) {
+    return false;
+  }
+
+  return (
+    backendAddress.port === trackedAddress.port
+    && normalizeTrackedHost(backendAddress.hostname) === normalizeTrackedHost(trackedAddress.hostname)
+  );
+}
+
 export function findTrackedBackendDataDir(
   backendBaseUrl: string,
   stateDir: string = MULTI_INSTANCE_STATE_DIR,
 ): string | null {
-  let backendHost: string;
-  try {
-    backendHost = new URL(backendBaseUrl).host;
-  } catch {
+  if (!parseHostAndPort(backendBaseUrl)) {
     return null;
   }
 
@@ -305,7 +372,7 @@ export function findTrackedBackendDataDir(
     for (const metaPath of secureTrackedMetaFiles(stateDir)) {
       const contents = fs.readFileSync(metaPath, 'utf8');
       const values = parseLocalConfigFile(contents);
-      if (values.bind_addr !== backendHost) {
+      if (!trackedBindAddressMatchesBackend(values.bind_addr, backendBaseUrl)) {
         continue;
       }
 
@@ -460,12 +527,16 @@ export function getLocalInstanceConfig(): LocalInstanceConfig {
   );
   const backendBaseUrl =
     parseHttpOrigin(process.env.FLAPJACK_BACKEND_URL) || formatHttpOrigin(host, backendPort);
+  // Only reuse the runtime server admin key for loopback backends. Remote
+  // dashboard targets must opt in with FJ_TEST_ADMIN_KEY so a local secret
+  // is never sent to an arbitrary non-local URL by default.
+  const configuredAdminKey = pickConfiguredValue(
+    fileValues.FJ_TEST_ADMIN_KEY,
+    process.env.FJ_TEST_ADMIN_KEY,
+    isLoopbackBackendUrl(backendBaseUrl) ? process.env.FLAPJACK_ADMIN_KEY : undefined,
+  );
   const adminKey = resolveAdminKey(
-    pickConfiguredValue(
-      fileValues.FJ_TEST_ADMIN_KEY,
-      process.env.FJ_TEST_ADMIN_KEY,
-      process.env.FLAPJACK_ADMIN_KEY,
-    ),
+    configuredAdminKey,
     backendBaseUrl,
   );
   const backendDataDir = resolveBackendDataDir(fileValues, backendBaseUrl);

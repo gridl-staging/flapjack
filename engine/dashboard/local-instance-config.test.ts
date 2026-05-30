@@ -185,6 +185,14 @@ describe('findTrackedBackendDataDir', () => {
     expect(findTrackedBackendDataDir('http://127.0.0.1:18893', stateDir)).toBe(dataDir);
   });
 
+  it('treats localhost and loopback bind-address aliases as the same tracked instance', () => {
+    const stateDir = createTempDir();
+    const dataDir = fs.realpathSync(createTempDir());
+    writeTrackedMetaFile(stateDir, 'loopback.meta', dataDir);
+
+    expect(findTrackedBackendDataDir('http://localhost:18893', stateDir)).toBe(dataDir);
+  });
+
   it('ignores tracked metadata files with unsafe write permissions', () => {
     const stateDir = createTempDir();
     const dataDir = fs.realpathSync(createTempDir());
@@ -220,6 +228,14 @@ describe('resolveBackendDataDir', () => {
     writeTrackedMetaFile(stateDir, 'staging.meta', dataDir);
 
     expect(resolveBackendDataDir({}, 'http://127.0.0.1:18893', stateDir)).toBe(dataDir);
+  });
+
+  it('resolves tracked metadata for localhost backend URLs without falling back to engine/data', () => {
+    const stateDir = createTempDir();
+    const dataDir = fs.realpathSync(createTempDir());
+    writeTrackedMetaFile(stateDir, 'localhost.meta', dataDir);
+
+    expect(resolveBackendDataDir({}, 'http://localhost:18893', stateDir)).toBe(dataDir);
   });
 
   it('falls back to the repo engine/data dir when no override or tracked instance exists', () => {
@@ -323,6 +339,14 @@ describe('getLocalInstanceConfig', () => {
 
     expect(config.backendBaseUrl).toBe('http://127.0.0.1:7700');
     expect(config.adminKey).toBe('runtime-admin-key');
+  });
+
+  it('does not reuse FLAPJACK_ADMIN_KEY for remote backends without an explicit test key', () => {
+    vi.stubEnv('FLAPJACK_BACKEND_URL', 'https://staging.example.com:9443/internal/status');
+    vi.stubEnv('FLAPJACK_ADMIN_KEY', 'runtime-admin-key');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    expect(() => getLocalInstanceConfig()).toThrow(/FJ_TEST_ADMIN_KEY must be set/i);
   });
 
   it('normalizes dashboard URL host when FJ_HOST uses an unspecified bind address', () => {
