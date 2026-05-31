@@ -1,3 +1,4 @@
+//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/may31_12pm_1_v104_release_cut/flapjack_dev/engine/src/analytics/writer.rs.
 use arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, BooleanBuilder, Float64Builder,
     Int64Array, Int64Builder, StringArray, StringBuilder, UInt32Array, UInt32Builder,
@@ -117,29 +118,66 @@ pub fn flush_rollup_window_with_event_count(
         .map_err(|e| format!("Failed to create rollup dir {}: {}", tier_dir.display(), e))?;
     let filename = rollup_window_filename(tier, window_start_ms);
     let parquet_path = tier_dir.join(&filename);
-    write_parquet_file_atomic(&parquet_path, batch)?;
+    let backup_path = stage_existing_rollup_backup(&parquet_path)?;
+    if let Err(error) = write_parquet_file_atomic(&parquet_path, batch) {
+        if let Err(rollback_error) =
+            rollback_rollup_file_replacement(&parquet_path, backup_path.as_deref())
+        {
+            return Err(format!("{error}; rollback failed: {rollback_error}"));
+        }
+        return Err(error);
+    }
 
     let manifest_path = config.rollup_manifest_path(index_name);
-    let mut manifest = RollupManifest::load(&manifest_path)
-        .map_err(|e| format!("Failed to load rollup manifest: {}", e))?;
+    let mut manifest = match RollupManifest::load(&manifest_path) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            rollback_rollup_file_replacement(&parquet_path, backup_path.as_deref()).map_err(
+                |rollback_error| {
+                    format!(
+                        "Failed to load rollup manifest: {}; rollback failed: {}",
+                        error, rollback_error
+                    )
+                },
+            )?;
+            return Err(format!("Failed to load rollup manifest: {}", error));
+        }
+    };
     let date = window_start_utc_date(window_start_ms);
-    manifest
-        .record_window(
-            tier,
-            &date,
-            WindowEntry {
-                start_ms: window_start_ms,
-                end_ms: window_end_ms,
-                status: WindowStatus::Closed,
-                event_count,
-                file: filename,
+    if let Err(error) = manifest.record_window(
+        tier,
+        &date,
+        WindowEntry {
+            start_ms: window_start_ms,
+            end_ms: window_end_ms,
+            status: WindowStatus::Closed,
+            event_count,
+            file: filename,
+        },
+        &tier_dir,
+    ) {
+        rollback_rollup_file_replacement(&parquet_path, backup_path.as_deref()).map_err(
+            |rollback_error| {
+                format!(
+                    "Failed to record manifest window: {}; rollback failed: {}",
+                    error, rollback_error
+                )
             },
-            &tier_dir,
-        )
-        .map_err(|e| format!("Failed to record manifest window: {}", e))?;
-    manifest
-        .save(&manifest_path)
-        .map_err(|e| format!("Failed to save rollup manifest: {}", e))?;
+        )?;
+        return Err(format!("Failed to record manifest window: {}", error));
+    }
+    if let Err(error) = manifest.save(&manifest_path) {
+        rollback_rollup_file_replacement(&parquet_path, backup_path.as_deref()).map_err(
+            |rollback_error| {
+                format!(
+                    "Failed to save rollup manifest: {}; rollback failed: {}",
+                    error, rollback_error
+                )
+            },
+        )?;
+        return Err(format!("Failed to save rollup manifest: {}", error));
+    }
+    drop_rollup_backup(backup_path.as_deref())?;
 
     Ok((parquet_path, event_count))
 }
@@ -674,6 +712,65 @@ fn downcast_col<'a, T: Array + 'static>(
 /// accumulating duplicates.
 fn rollup_window_filename(tier: &str, window_start_ms: i64) -> String {
     format!("rollup_{}_{}.parquet", tier, window_start_ms)
+}
+
+fn unique_rollup_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let now_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    path.with_extension(format!("parquet.{}.{}", now_ns, suffix))
+}
+
+fn stage_existing_rollup_backup(path: &Path) -> Result<Option<PathBuf>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let backup_path = unique_rollup_sidecar_path(path, "bak");
+    fs::rename(path, &backup_path).map_err(|error| {
+        format!(
+            "Failed to stage existing rollup parquet {} at {}: {}",
+            path.display(),
+            backup_path.display(),
+            error
+        )
+    })?;
+    Ok(Some(backup_path))
+}
+
+fn rollback_rollup_file_replacement(path: &Path, backup_path: Option<&Path>) -> Result<(), String> {
+    remove_file_if_exists(path)?;
+    if let Some(backup_path) = backup_path {
+        fs::rename(backup_path, path).map_err(|error| {
+            format!(
+                "Failed to restore rollup parquet {} from backup {}: {}",
+                path.display(),
+                backup_path.display(),
+                error
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn drop_rollup_backup(backup_path: Option<&Path>) -> Result<(), String> {
+    if let Some(backup_path) = backup_path {
+        remove_file_if_exists(backup_path)?;
+    }
+    Ok(())
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to remove file {}: {}",
+            path.display(),
+            error
+        )),
+    }
 }
 
 /// UTC date string (YYYY-MM-DD) for the start of a rollup window, used as the
@@ -1385,6 +1482,22 @@ mod tests {
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
+    /// TODO: Document flush_rollup_window_hourly_aggregates_known_answer.
     #[test]
     #[allow(clippy::cognitive_complexity)] // Known-answer test keeps all assertions inline so expected aggregates remain explicit and auditable.
     fn flush_rollup_window_hourly_aggregates_known_answer() {
@@ -1469,6 +1582,22 @@ mod tests {
         );
     }
 
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
+    /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
     /// TODO: Document flush_rollup_window_daily_compacts_from_hourly_only.
@@ -2155,5 +2284,85 @@ mod tests {
                 "daily parquet must not be written when hourly HLL decode fails"
             );
         }
+    }
+
+    #[test]
+    fn flush_rollup_window_hourly_removes_new_parquet_when_manifest_load_fails() {
+        let tmp = TempDir::new().unwrap();
+        let config = rollup_test_config(&tmp);
+        let base_ts = base_ts_2025_06_15_noon();
+        seed_raw_events(&config, &fixture_events(base_ts), "2025-06-15");
+
+        let manifest_path = config.rollup_manifest_path("products");
+        fs::create_dir_all(&manifest_path).unwrap();
+
+        let (start, end) = hour_window_ms(2025, 6, 15, 12);
+        let err = flush_rollup_window(&config, "products", "1hour", start, end)
+            .expect_err("manifest load failure must abort hourly parquet publication");
+        assert!(
+            err.contains("Failed to load rollup manifest"),
+            "unexpected error: {err}"
+        );
+
+        let hourly_dir = config.rollups_dir("products", "1hour");
+        if hourly_dir.exists() {
+            assert!(
+                collect_parquet_files(&hourly_dir).unwrap().is_empty(),
+                "failed manifest load must not leave an orphaned hourly parquet behind"
+            );
+        }
+    }
+
+    #[test]
+    fn flush_rollup_window_hourly_restores_previous_parquet_when_manifest_load_fails() {
+        let tmp = TempDir::new().unwrap();
+        let config = rollup_test_config(&tmp);
+        let base_ts = base_ts_2025_06_15_noon();
+        seed_raw_events(&config, &fixture_events(base_ts), "2025-06-15");
+
+        let (start, end) = hour_window_ms(2025, 6, 15, 12);
+        let hourly_path = flush_rollup_window(&config, "products", "1hour", start, end).unwrap();
+        let original_bytes = fs::read(&hourly_path).unwrap();
+
+        let extra_event = SearchEvent {
+            timestamp_ms: start + 7_000,
+            query: "laptop".to_string(),
+            query_id: None,
+            index_name: "products".to_string(),
+            nb_hits: 9,
+            processing_time_ms: 5,
+            user_token: Some("user-extra".to_string()),
+            user_ip: None,
+            filters: None,
+            facets: None,
+            analytics_tags: None,
+            page: 0,
+            hits_per_page: 20,
+            has_results: true,
+            country: None,
+            region: None,
+            experiment_id: None,
+            variant_id: None,
+            assignment_method: None,
+        };
+        let partition = config.searches_dir("products").join("date=2025-06-15");
+        let extra_batch = search_events_to_batch(&[extra_event], &search_event_schema()).unwrap();
+        write_parquet_file(&partition.join("seed_extra.parquet"), extra_batch).unwrap();
+
+        let manifest_path = config.rollup_manifest_path("products");
+        fs::remove_file(&manifest_path).unwrap();
+        fs::create_dir_all(&manifest_path).unwrap();
+
+        let err = flush_rollup_window(&config, "products", "1hour", start, end)
+            .expect_err("manifest load failure must roll back in-place hourly replacement");
+        assert!(
+            err.contains("Failed to load rollup manifest"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            fs::read(&hourly_path).unwrap(),
+            original_bytes,
+            "failed manifest load must restore the previous hourly parquet bytes"
+        );
     }
 }
