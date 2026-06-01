@@ -1,6 +1,6 @@
 # Highest Priority: Open-Source Launch Readiness
 
-**Updated: 2026-04-15 (v1.0.0 released; OSS launch gate closed; wave 3 published; dev main now ahead with the Mar 31 stack plus Apr 8 and Apr 15 hardening awaiting next sync)**
+**Updated: 2026-05-31 (v1.0.3 released; doc reframed as intent SSOT — active status now routes to `PRIORITIES.md` + `ROADMAP.md`; historical launch + post-launch content moved under Archive)**
 
 ## Mission
 

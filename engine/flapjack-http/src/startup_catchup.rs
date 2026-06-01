@@ -552,6 +552,9 @@ fn read_local_ops_since(
 /// TODO: Document repush_failed_peer_ranges.
 /// TODO: Document repush_failed_peer_ranges.
 /// TODO: Document repush_failed_peer_ranges.
+/// TODO: Document repush_failed_peer_ranges.
+/// TODO: Document repush_failed_peer_ranges.
+/// TODO: Document repush_failed_peer_ranges.
 #[allow(clippy::cognitive_complexity)] // Per-peer retry/strict-mode handling is centralized here to keep startup catch-up failure semantics in one place.
 async fn repush_failed_peer_ranges(
     state: &AppState,
@@ -1131,7 +1134,7 @@ mod tests {
         let malicious_tenant_id = format!("../{}", victim_name);
         let result = install_snapshot_bytes(&manager, &malicious_tenant_id, &snapshot_bytes);
         assert!(result.is_err(), "path traversal tenant id must be rejected");
-        let (step, error_msg) = result.as_ref().err().expect("error tuple expected").clone();
+        let (step, error_msg) = result.as_ref().expect_err("error tuple expected").clone();
         assert_eq!(
             step,
             super::SnapshotInstallStep::ValidateTenantId,
