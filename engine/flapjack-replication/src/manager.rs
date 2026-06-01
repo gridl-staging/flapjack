@@ -1,8 +1,3 @@
-<<<<<<< HEAD
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/may31_eve_3_dashboard_brand_apple_verify/flapjack_dev/engine/flapjack-replication/src/manager.rs.
-=======
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/may31_eve_2_ha_snapshot_flake_verify/flapjack_dev/engine/flapjack-replication/src/manager.rs.
->>>>>>> s41_stage4_pushfix
 use super::circuit_breaker::CircuitState;
 use super::config::NodeConfig;
 use super::peer::PeerClient;
@@ -326,19 +321,6 @@ impl ReplicationManager {
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-<<<<<<< HEAD
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-    /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
-=======
->>>>>>> s41_stage4_pushfix
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
     /// TODO: Document ReplicationManager.catch_up_from_peer_with_metadata_internal.
