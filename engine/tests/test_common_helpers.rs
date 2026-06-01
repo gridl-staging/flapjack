@@ -51,12 +51,18 @@ fn uses_default_when_missing() {
 
 #[test]
 fn uses_default_when_invalid() {
-    assert_eq!(common::fixtures::parse_usize_or_default(Some("bad"), 77), 77);
+    assert_eq!(
+        common::fixtures::parse_usize_or_default(Some("bad"), 77),
+        77
+    );
 }
 
 #[test]
 fn parses_valid_usize() {
-    assert_eq!(common::fixtures::parse_usize_or_default(Some("10000"), 1), 10_000);
+    assert_eq!(
+        common::fixtures::parse_usize_or_default(Some("10000"), 1),
+        10_000
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
