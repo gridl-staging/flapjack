@@ -1,4 +1,4 @@
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/jun02_pm_4_readme_known_limitations_and_ignore_annotations/flapjack_dev/engine/src/integ_tests/search_compat.rs.
+//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/jun02_pm_5_v106_release_cut/flapjack_dev/engine/src/integ_tests/search_compat.rs.
 use crate::index::SearchOptions;
 use crate::types::{FacetRequest, Filter, SearchResult, Sort};
 use crate::{error::Result, IndexManager};

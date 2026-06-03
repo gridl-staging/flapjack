@@ -1,4 +1,4 @@
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/jun02_pm_4_readme_known_limitations_and_ignore_annotations/flapjack_dev/engine/src/analytics/writer.rs.
+//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/jun02_pm_5_v106_release_cut/flapjack_dev/engine/src/analytics/writer.rs.
 use arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, BooleanBuilder, Float64Builder,
     Int64Array, Int64Builder, StringArray, StringBuilder, UInt32Array, UInt32Builder,

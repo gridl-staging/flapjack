@@ -1,4 +1,4 @@
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/jun02_pm_4_readme_known_limitations_and_ignore_annotations/flapjack_dev/engine/flapjack-replication/src/manager.rs.
+//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/jun02_pm_5_v106_release_cut/flapjack_dev/engine/flapjack-replication/src/manager.rs.
 use super::circuit_breaker::CircuitState;
 use super::config::NodeConfig;
 use super::peer::PeerClient;

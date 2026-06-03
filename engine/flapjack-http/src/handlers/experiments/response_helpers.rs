@@ -1,4 +1,4 @@
-//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/jun02_pm_4_readme_known_limitations_and_ignore_annotations/flapjack_dev/engine/flapjack-http/src/handlers/experiments/response_helpers.rs.
+//! Stub summary for /Users/stuart/parallel_development/flapjack_dev/jun02_pm_5_v106_release_cut/flapjack_dev/engine/flapjack-http/src/handlers/experiments/response_helpers.rs.
 use super::{
     dto_algolia, metrics, resolve::resolve_store_and_experiment_id, AppState, Experiment,
     ExperimentArm, ExperimentConclusion, ExperimentError, ExperimentStatus, ExperimentStore,
