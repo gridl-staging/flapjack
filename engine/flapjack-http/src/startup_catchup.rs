@@ -318,7 +318,9 @@ impl SnapshotInstallStep {
             SnapshotInstallStep::CleanStaging => "clean_staging",
             SnapshotInstallStep::RecoverInterrupted => "recover_interrupted",
             SnapshotInstallStep::ImportExtract => "import_extract",
-            SnapshotInstallStep::ValidateSnapshotTenantContent => "validate_snapshot_tenant_content",
+            SnapshotInstallStep::ValidateSnapshotTenantContent => {
+                "validate_snapshot_tenant_content"
+            }
             SnapshotInstallStep::RenameTenantToBackup => "rename_tenant_to_backup",
             SnapshotInstallStep::RenameStagingToTenant => "rename_staging_to_tenant",
         }
@@ -1207,9 +1209,8 @@ mod tests {
         let snapshot_src = TempDir::new().unwrap();
         let foreign_tenant_id = "tenant_blue";
         let oplog_dir = snapshot_src.path().join("oplog");
-        let oplog =
-            flapjack::index::oplog::OpLog::open(&oplog_dir, foreign_tenant_id, "peer-node")
-                .unwrap();
+        let oplog = flapjack::index::oplog::OpLog::open(&oplog_dir, foreign_tenant_id, "peer-node")
+            .unwrap();
         oplog
             .append(
                 "upsert",
