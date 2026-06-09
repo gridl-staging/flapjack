@@ -89,7 +89,7 @@ Binaries: [Releases](https://github.com/gridl-staging/flapjack/releases/latest).
 curl -fsSL https://staging.flapjack.foo | sh
 
 # Pin a specific release when needed
-curl -fsSL https://staging.flapjack.foo | sh -s -- v1.0.9
+curl -fsSL https://staging.flapjack.foo | sh -s -- v1.0.10
 
 # Custom install directory
 FLAPJACK_INSTALL=/opt/flapjack curl -fsSL https://staging.flapjack.foo | sh
