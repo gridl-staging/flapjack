@@ -1654,7 +1654,10 @@ async fn test_facet_value_query_finds_values_beyond_top_1000() {
             },
         )
         .unwrap();
-    let hits = ranked.facets.get("brand").expect("brand facets (ranked path)");
+    let hits = ranked
+        .facets
+        .get("brand")
+        .expect("brand facets (ranked path)");
     assert_eq!(
         hits.len(),
         1,
