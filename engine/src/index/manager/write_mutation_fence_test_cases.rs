@@ -273,9 +273,14 @@
             observation.active_durable_calls_at_replacement_start <= OVERLAPPING_MUTATIONS
         );
         assert_eq!(observation.active_durable_calls_after_replacement, 0);
-        assert!(admitted_tasks > 0);
-        assert!(admitted_tasks >= durable_success_acks);
-        assert!(durable_success_acks > 0);
+        assert_eq!(
+            admitted_tasks, ATTEMPTED_MUTATIONS,
+            "post-replacement task ledger must include every attempted mutation"
+        );
+        assert_eq!(
+            durable_success_acks, ATTEMPTED_MUTATIONS,
+            "this overlap fixture must produce durable success ACKs for every attempted mutation"
+        );
         assert!(observation.replacement.is_ok());
     }
 
@@ -569,6 +574,114 @@
             destination_id,
             "post_replacement_uncommitted",
             "post replacement crash replay",
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(replacement_reopen_proof_hook)]
+    async fn replace_index_contents_refuses_reopen_when_committed_journal_loses_fence_evidence() {
+        assert_post_commit_reopen_proof_refusal(
+            "journal_evidence_live",
+            "journal_evidence_staging",
+            |_, _, journal| {
+                journal.fence_evidence = None;
+            },
+            "committed journal",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(replacement_reopen_proof_hook)]
+    async fn replace_index_contents_refuses_reopen_when_durable_epoch_is_stale() {
+        assert_post_commit_reopen_proof_refusal(
+            "epoch_stale_live",
+            "epoch_stale_staging",
+            |manager, destination_id, _| {
+                let target = publication::PublicationTarget::new(destination_id).unwrap();
+                let epoch_path = publication::PublicationPaths::new(
+                    &manager.base_path,
+                    &target,
+                    &publication::PublicationTransactionId::new("epoch_probe").unwrap(),
+                )
+                .epoch_path();
+                std::fs::write(epoch_path, b"0").unwrap();
+            },
+            "durable publication epoch",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[serial_test::serial(replacement_reopen_proof_hook)]
+    async fn replace_index_contents_refuses_reopen_when_promoted_committed_seq_mismatches_w() {
+        assert_post_commit_reopen_proof_refusal(
+            "promoted_seq_live",
+            "promoted_seq_staging",
+            |manager, destination_id, _| {
+                crate::index::oplog::write_committed_seq(
+                    &manager.base_path.join(destination_id),
+                    9,
+                )
+                .unwrap();
+            },
+            "promoted committed_seq",
+        )
+        .await;
+    }
+
+    async fn assert_post_commit_reopen_proof_refusal(
+        destination_id: &'static str,
+        staging_id: &'static str,
+        corrupt: impl Fn(&IndexManager, &str, &mut publication::PublicationJournal)
+            + Send
+            + Sync
+            + 'static,
+        expected_message: &str,
+    ) {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = IndexManager::new(temp_dir.path());
+        manager.create_tenant(destination_id).unwrap();
+        manager.create_tenant(staging_id).unwrap();
+        manager
+            .add_documents_sync(
+                destination_id,
+                vec![document("destination_snapshot", "destination snapshot")],
+            )
+            .await
+            .unwrap();
+        let staging_baseline = manager
+            .capture_replacement_staging_baseline(destination_id)
+            .unwrap();
+        manager
+            .add_documents_sync(
+                destination_id,
+                vec![document("destination_tail", "destination drained tail")],
+            )
+            .await
+            .unwrap();
+        manager
+            .add_documents_sync(
+                staging_id,
+                vec![document("staging_seed", "replacement generation seed")],
+            )
+            .await
+            .unwrap();
+        let _hook =
+            IndexManager::set_replacement_reopen_proof_hook_for_test(move |manager, observed, journal| {
+                if observed == destination_id {
+                    corrupt(manager, observed, journal);
+                }
+            });
+
+        let error = manager
+            .replace_index_contents(staging_id, destination_id, staging_baseline)
+            .await
+            .expect_err("replacement must fail closed before certifying reopen");
+        let message = error.to_string();
+        assert!(
+            message.contains(expected_message),
+            "wrong reopen-proof refusal for {destination_id}: {message}"
         );
     }
 

@@ -157,12 +157,27 @@ impl PreStagedPublication {
     pub fn activate_create_only(
         self,
     ) -> std::result::Result<PublicationJournal, PreStagedActivationError> {
-        self.activate_with_mode(ActivationMode::CreateOnly)
+        self.activate_with_mode_and_fence(ActivationMode::CreateOnly, None)
+    }
+
+    pub(crate) fn activate_with_fence(
+        self,
+        fence_evidence: PublicationFenceEvidence,
+    ) -> std::result::Result<PublicationJournal, PreStagedActivationError> {
+        self.activate_with_mode_and_fence(ActivationMode::Replace, Some(fence_evidence))
     }
 
     fn activate_with_mode(
         self,
         mode: ActivationMode,
+    ) -> std::result::Result<PublicationJournal, PreStagedActivationError> {
+        self.activate_with_mode_and_fence(mode, None)
+    }
+
+    fn activate_with_mode_and_fence(
+        self,
+        mode: ActivationMode,
+        fence_evidence: Option<PublicationFenceEvidence>,
     ) -> std::result::Result<PublicationJournal, PreStagedActivationError> {
         // The inventory is collected before any reservation so it observes the real
         // trees rather than this activation's own empty reservation directory.
@@ -201,7 +216,7 @@ impl PreStagedPublication {
                 io: &io,
                 stage: &stage,
                 mode,
-                fence_evidence: None,
+                fence_evidence,
             },
         )
         .map_err(|source| PreStagedActivationError {

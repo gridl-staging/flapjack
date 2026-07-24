@@ -1284,6 +1284,40 @@ async fn migrate_overwrite_true_is_refused_before_admission() {
 }
 
 #[tokio::test]
+async fn migrate_overwrite_true_node_local_sync_is_admitted_after_fence_contract() {
+    let tmp = TempDir::new().unwrap();
+    let state = TestStateBuilder::new(&tmp).build_shared();
+    seed_preexisting_target_resources(&state, TARGET_INDEX).await;
+    assert_preexisting_target_resources(&state, TARGET_INDEX).await;
+    let source_factory_invoked = Arc::new(AtomicBool::new(false));
+    let source_factory_invoked_by_handler = Arc::clone(&source_factory_invoked);
+
+    let response = migrate_from_algolia_with_test_source_factory(
+        State(Arc::clone(&state)),
+        Json(MigrateFromAlgoliaRequest {
+            overwrite: true,
+            ..valid_request()
+        }),
+        move |_| {
+            source_factory_invoked_by_handler.store(true, Ordering::SeqCst);
+            Ok(hermetic_source_reader())
+        },
+    )
+    .await;
+
+    assert_import_reported_equals_target_contents(&state, response).await;
+    assert!(
+        source_factory_invoked.load(Ordering::SeqCst),
+        "node-local overwrite admission must construct the hermetic source reader"
+    );
+    assert_eq!(
+        query_hit_count(&state, TARGET_INDEX, "Cedar Caliper").await,
+        0,
+        "overwrite=true must replace, not merge with, preexisting target contents"
+    );
+}
+
+#[tokio::test]
 async fn migrate_preexisting_searchable_target_survives_canonical_conflict() {
     let tmp = TempDir::new().unwrap();
     let state = TestStateBuilder::new(&tmp).build_shared();

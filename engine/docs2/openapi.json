@@ -2867,7 +2867,7 @@
           "migration"
         ],
         "summary": "One-click migration from Algolia to Flapjack.",
-        "description": "Validates the requested source and target shape, refuses overwrite and HA\nrequests before import admission, then synchronously imports the Algolia\nsource into a create-only Flapjack target. A successful response reports the\ncounts read back from the activated target; this lane has no durable async\njob id and returns a fixed `taskID` of `0`.",
+        "description": "Validates the requested source and target shape, refuses HA requests before\nimport admission, then synchronously imports the Algolia source into a\nFlapjack target. The default path is create-only; node-local\n`overwrite=true` replaces an existing target through the fenced publication\nowner. A successful response reports the counts read back from the activated\ntarget; this lane has no durable async job id and returns a fixed `taskID`\nof `0`.",
         "operationId": "migrate_from_algolia",
         "requestBody": {
           "content": {
@@ -2916,7 +2916,7 @@
           "migration"
         ],
         "summary": "Additive async Algolia migration submission endpoint.",
-        "description": "This route admits the same create-only migration request as the synchronous\n`/1/migrate-from-algolia` endpoint, immediately returns the durable\nadmission snapshot, and leaves the synchronous endpoint unchanged.",
+        "description": "This route admits create-only migration requests, immediately returns the\ndurable admission snapshot, and explicitly refuses `overwrite=true`.",
         "operationId": "submit_algolia_migration",
         "requestBody": {
           "content": {
@@ -8862,7 +8862,7 @@
       },
       "MigrateFromAlgoliaRequest": {
         "type": "object",
-        "description": "Request payload for migrating an index from Algolia to Flapjack.\n\nContains Algolia credentials, the source index name, and optional target\nindex settings. Valid requests on HA clusters are refused before import\nadmission; standalone requests synchronously export, translate, stage, and\ncreate-only publish the target index.",
+        "description": "Request payload for migrating an index from Algolia to Flapjack.\n\nContains Algolia credentials, the source index name, and optional target\nindex settings. HA imports are refused before import admission. Standalone\nsynchronous requests create a fresh target by default; `overwrite=true`\nreplaces an existing target through the node-local fenced publication path.",
         "required": [
           "appId",
           "apiKey",
@@ -8877,7 +8877,7 @@
           },
           "overwrite": {
             "type": "boolean",
-            "description": "Reserved for a future replacement lane. The synchronous import path is\ncreate-only and refuses overwrite requests before import admission."
+            "description": "Replace the target index only on the node-local synchronous endpoint.\nAsync migration and HA imports still refuse overwrite requests."
           },
           "sourceIndex": {
             "type": "string"

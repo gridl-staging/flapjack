@@ -1,16 +1,45 @@
 use super::recovery::RecoverySeqWindow;
 use super::*;
-use crate::index::oplog::{read_committed_seq, write_committed_seq, OpLogEntry, OPLOG_DIR};
+use crate::index::oplog::{read_committed_seq, write_committed_seq, OpLog, OpLogEntry, OPLOG_DIR};
 #[cfg(test)]
 use publication::{activate_publication_for_test, PublicationFaultPoint};
 use publication::{
-    activate_publication_with_fence, invalid_publication, read_strict_committed_seq,
+    activate_publication_with_fence, invalid_publication, read_publication_epoch,
+    read_strict_committed_seq, PreStagedActivationError, PreStagedPublication,
     PublicationActivationInputs, PublicationArtifactPlan, PublicationFenceEvidence,
     PublicationGenerationEvidence, PublicationPaths, PublicationPhase, PublicationStagingBaseline,
     PublicationTarget, PublicationTransactionId, PublicationWatermark, TantivyManagedInventory,
 };
+use std::error::Error;
+#[cfg(test)]
+use std::sync::{Arc as StdArc, Mutex as StdMutex, OnceLock as StdOnceLock};
 
-#[derive(Clone, Copy)]
+#[cfg(test)]
+type ReplacementReopenProofHook =
+    StdArc<dyn Fn(&super::IndexManager, &str, &mut publication::PublicationJournal) + Send + Sync>;
+
+#[cfg(test)]
+static REPLACEMENT_REOPEN_PROOF_HOOK: StdOnceLock<StdMutex<Option<ReplacementReopenProofHook>>> =
+    StdOnceLock::new();
+
+#[cfg(test)]
+pub(crate) struct ReplacementReopenProofHookGuard {
+    previous: Option<ReplacementReopenProofHook>,
+}
+
+#[cfg(test)]
+impl Drop for ReplacementReopenProofHookGuard {
+    fn drop(&mut self) {
+        *replacement_reopen_proof_hook().lock().unwrap() = self.previous.take();
+    }
+}
+
+#[cfg(test)]
+fn replacement_reopen_proof_hook() -> &'static StdMutex<Option<ReplacementReopenProofHook>> {
+    REPLACEMENT_REOPEN_PROOF_HOOK.get_or_init(|| StdMutex::new(None))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PublicationArtifactMode {
     MoveWithSource,
     PreserveDestination,
@@ -26,6 +55,19 @@ impl PublicationArtifactMode {
 }
 
 impl super::IndexManager {
+    #[cfg(test)]
+    pub(crate) fn set_replacement_reopen_proof_hook_for_test(
+        hook: impl Fn(&super::IndexManager, &str, &mut publication::PublicationJournal)
+            + Send
+            + Sync
+            + 'static,
+    ) -> ReplacementReopenProofHookGuard {
+        let mut slot = replacement_reopen_proof_hook().lock().unwrap();
+        ReplacementReopenProofHookGuard {
+            previous: slot.replace(StdArc::new(hook)),
+        }
+    }
+
     /// Create or load a tenant index, initializing default settings if the index is new.
     ///
     /// # Arguments
@@ -279,7 +321,55 @@ impl super::IndexManager {
         .await
     }
 
-    pub(crate) fn capture_replacement_staging_baseline(
+    pub async fn replace_index_contents_from_pre_staged(
+        &self,
+        publication: PreStagedPublication,
+        destination: &str,
+        staging_baseline: PublicationStagingBaseline,
+    ) -> Result<TaskInfo> {
+        validate_index_name(destination)?;
+        let source_path = publication.paths().staging.clone();
+        if !source_path.exists() {
+            return self.make_noop_task(destination);
+        }
+        let target = PublicationTarget::new(destination)?;
+        let publication_epoch_fence =
+            self.advance_destination_publication_epoch(destination, &target)?;
+
+        self.drain_target_write_queue(&destination.to_string())
+            .await?;
+        let destination_path = self.base_path.join(destination);
+        let watermark = self.stage_replacement_from_drained_destination(
+            "staging",
+            destination,
+            &source_path,
+            &destination_path,
+            staging_baseline,
+        )?;
+        let fence_evidence = PublicationFenceEvidence::new(
+            publication_epoch_fence.previous(),
+            publication_epoch_fence.advanced(),
+            staging_baseline,
+            PublicationWatermark::new(watermark),
+        )?;
+        self.invalidate_facet_cache(destination);
+        self.clear_tenant_runtime_state(&destination.to_string());
+
+        let mut journal = publication
+            .activate_with_fence(fence_evidence)
+            .map_err(pre_staged_activation_error)?;
+        ensure_committed_move(&journal)?;
+        self.run_replacement_reopen_proof_hook(destination, &mut journal);
+        self.certify_replacement_reopen(
+            destination,
+            PublicationArtifactMode::PreserveDestination,
+            &journal,
+        )?;
+        drop(publication_epoch_fence);
+        self.make_noop_task(destination)
+    }
+
+    pub fn capture_replacement_staging_baseline(
         &self,
         destination: &str,
     ) -> Result<PublicationStagingBaseline> {
@@ -374,7 +464,7 @@ impl super::IndexManager {
             .as_ref()
             .map(PublicationArtifactPlan::manifest)
             .unwrap_or_default();
-        let journal = self.activate_lifecycle_publication(
+        let mut journal = self.activate_lifecycle_publication(
             PublicationActivationInputs {
                 paths: &paths,
                 target,
@@ -387,6 +477,8 @@ impl super::IndexManager {
             fault,
         )?;
         ensure_committed_move(&journal)?;
+        self.run_replacement_reopen_proof_hook(destination, &mut journal);
+        self.certify_replacement_reopen(destination, artifact_mode, &journal)?;
         #[cfg(test)]
         if fault == Some(PublicationFaultPoint::BeforeSourceCleanup) {
             return Err(FlapjackError::InvalidQuery(
@@ -416,6 +508,72 @@ impl super::IndexManager {
             return activate_publication_for_test(inputs, fault);
         }
         activate_publication_with_fence(inputs, fence_evidence)
+    }
+
+    fn run_replacement_reopen_proof_hook(
+        &self,
+        #[cfg_attr(not(test), allow(unused_variables))] destination: &str,
+        #[cfg_attr(not(test), allow(unused_variables))]
+        journal: &mut publication::PublicationJournal,
+    ) {
+        #[cfg(test)]
+        if let Some(hook) = replacement_reopen_proof_hook().lock().unwrap().clone() {
+            hook(self, destination, journal);
+        }
+    }
+
+    fn certify_replacement_reopen(
+        &self,
+        destination: &str,
+        artifact_mode: PublicationArtifactMode,
+        journal: &publication::PublicationJournal,
+    ) -> Result<()> {
+        if artifact_mode == PublicationArtifactMode::MoveWithSource {
+            return Ok(());
+        }
+        let fence = journal.fence_evidence.as_ref().ok_or_else(|| {
+            invalid_publication(
+                "committed journal missing replacement fence evidence before reopen",
+            )
+        })?;
+        self.verify_replacement_epoch_reopen(destination, journal, fence)?;
+        self.verify_replacement_watermark_reopen(destination, fence)
+    }
+
+    fn verify_replacement_epoch_reopen(
+        &self,
+        destination: &str,
+        journal: &publication::PublicationJournal,
+        fence: &PublicationFenceEvidence,
+    ) -> Result<()> {
+        let durable_epoch =
+            read_publication_epoch(&self.base_path, &journal.target).map_err(|error| {
+                invalid_publication(format!(
+                    "durable publication epoch for {destination} is not readable before reopen: {error}"
+                ))
+            })?;
+        if durable_epoch != fence.epoch_new() {
+            return Err(invalid_publication(format!(
+                "durable publication epoch for {destination} is {durable_epoch:?}, expected {:?} before reopen",
+                fence.epoch_new()
+            )));
+        }
+        Ok(())
+    }
+
+    fn verify_replacement_watermark_reopen(
+        &self,
+        destination: &str,
+        fence: &PublicationFenceEvidence,
+    ) -> Result<()> {
+        let promoted_seq = read_strict_committed_seq(&self.base_path.join(destination))?;
+        let watermark = fence.watermark().value();
+        if promoted_seq != watermark {
+            return Err(invalid_publication(format!(
+                "promoted committed_seq for {destination} is {promoted_seq}, expected watermark {watermark} before reopen"
+            )));
+        }
+        Ok(())
     }
 
     fn advance_destination_publication_epoch(
@@ -477,6 +635,8 @@ impl super::IndexManager {
                 let watermark = self.stage_replacement_from_drained_destination(
                     source,
                     destination,
+                    &self.base_path.join(source),
+                    &self.base_path.join(destination),
                     staging_baseline,
                 )?;
                 let fence = PublicationFenceEvidence::new(
@@ -502,13 +662,13 @@ impl super::IndexManager {
         &self,
         source: &str,
         destination: &str,
+        source_path: &Path,
+        destination_path: &Path,
         staging_baseline: PublicationStagingBaseline,
     ) -> Result<u64> {
-        let source_path = self.base_path.join(source);
-        let destination_path = self.base_path.join(destination);
         let baseline = staging_baseline.value();
 
-        let watermark = self.prove_drained_destination_watermark(destination, &destination_path)?;
+        let watermark = self.prove_drained_destination_watermark(destination, destination_path)?;
         if baseline > watermark {
             return Err(invalid_publication(format!(
                 "replacement staging baseline {baseline} exceeds drained watermark {watermark}"
@@ -523,13 +683,13 @@ impl super::IndexManager {
         self.replay_delta_into_staged_tree(
             source,
             destination,
-            &source_path,
+            source_path,
             &delta,
             baseline,
             watermark,
         )?;
-        self.align_staged_oplog_to_destination(source, &source_path, &destination_path, watermark)?;
-        self.verify_staged_watermark(source, &source_path, watermark)?;
+        self.align_staged_oplog_to_destination(source, source_path, destination_path, watermark)?;
+        self.verify_staged_watermark(source, source_path, watermark)?;
         Ok(watermark)
     }
 
@@ -615,7 +775,8 @@ impl super::IndexManager {
         )?;
         #[cfg(feature = "vector-search")]
         {
-            let staged_ops = self.get_or_create_oplog_result(source)?.read_since(0)?;
+            let staged_ops =
+                OpLog::open(&source_path.join(OPLOG_DIR), source, "local")?.read_since(0)?;
             let combined = staged_ops
                 .into_iter()
                 .chain(delta.iter().cloned())
@@ -663,7 +824,8 @@ impl super::IndexManager {
                 "staged committed_seq {staged_committed} does not equal watermark {watermark}"
             )));
         }
-        let staged_current = self.get_or_create_oplog_result(source)?.current_seq();
+        let staged_current =
+            OpLog::open(&source_path.join(OPLOG_DIR), source, "local")?.current_seq();
         self.oplogs.remove(source);
         if staged_current != watermark {
             return Err(invalid_publication(format!(
@@ -804,5 +966,18 @@ fn ensure_committed_move(journal: &publication::PublicationJournal) -> Result<()
             "move_index publication returned non-committed journal phase {:?}",
             journal.phase
         )))
+    }
+}
+
+fn pre_staged_activation_error(error: PreStagedActivationError) -> FlapjackError {
+    match error.source() {
+        Some(source) => FlapjackError::InvalidQuery(format!(
+            "pre-staged replacement activation failed at {:?}: {source}",
+            error.stage()
+        )),
+        None => FlapjackError::InvalidQuery(format!(
+            "pre-staged replacement activation failed at {:?}",
+            error.stage()
+        )),
     }
 }

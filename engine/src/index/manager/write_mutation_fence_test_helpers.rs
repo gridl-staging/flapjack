@@ -205,9 +205,8 @@
     }
 
     fn assert_drain_failure_result(result: Result<TaskInfo>, destination_id: &str) {
-        let error = result
-            .err()
-            .expect("destination drain failure must fail replacement before promotion");
+        let error =
+            result.expect_err("destination drain failure must fail replacement before promotion");
         let message = error.to_string();
         assert!(
             message.contains("destination write queue")
@@ -223,7 +222,7 @@
             "failed destination drain must not clear destination runtime state"
         );
         assert_document_title(
-            &manager,
+            manager,
             destination_id,
             "destination_seed",
             "destination before failure",
@@ -245,9 +244,9 @@
             )
             .await
             .unwrap();
-        assert_document_title(&manager, control_id, "control_seed", "control before");
+        assert_document_title(manager, control_id, "control_seed", "control before");
         assert_document_title(
-            &manager,
+            manager,
             control_id,
             "control_after_failure",
             "control after failure",

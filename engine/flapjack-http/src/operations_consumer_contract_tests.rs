@@ -1,11 +1,16 @@
-const OPERATIONS_CONSUMER_CONTRACT: &str =
-    include_str!("../../docs2/operations_consumer_contract.md");
-const FEATURES: &str = include_str!("../../docs2/FEATURES.md");
+use std::path::Path;
+
+const OPERATIONS_CONSUMER_CONTRACT_PATH: &str = "../docs2/operations_consumer_contract.md";
+const FEATURES_PATH: &str = "../docs2/FEATURES.md";
 
 #[test]
 fn operations_consumer_contract_names_runtime_and_screen_spec_owners() {
+    let operations_consumer_contract = read_contract_fixture(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        OPERATIONS_CONSUMER_CONTRACT_PATH,
+    );
     assert_contains_all(
-        OPERATIONS_CONSUMER_CONTRACT,
+        &operations_consumer_contract,
         &[
             "docs/screen_specs/system.md",
             "docs/screen_specs/cluster.md",
@@ -22,8 +27,12 @@ fn operations_consumer_contract_names_runtime_and_screen_spec_owners() {
 
 #[test]
 fn operations_consumer_contract_publishes_r5_wire_contract() {
+    let operations_consumer_contract = read_contract_fixture(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        OPERATIONS_CONSUMER_CONTRACT_PATH,
+    );
     assert_contains_all(
-        OPERATIONS_CONSUMER_CONTRACT,
+        &operations_consumer_contract,
         &[
             "/health",
             "14 top-level keys",
@@ -45,8 +54,12 @@ fn operations_consumer_contract_publishes_r5_wire_contract() {
 
 #[test]
 fn operations_consumer_contract_captures_known_bounds() {
+    let operations_consumer_contract = read_contract_fixture(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        OPERATIONS_CONSUMER_CONTRACT_PATH,
+    );
     assert_contains_all(
-        OPERATIONS_CONSUMER_CONTRACT,
+        &operations_consumer_contract,
         &[
             "build_profile",
             "not a top-level `/health` field",
@@ -66,8 +79,9 @@ fn operations_consumer_contract_captures_known_bounds() {
 
 #[test]
 fn features_mentions_published_operations_contracts() {
+    let features = read_contract_fixture(Path::new(env!("CARGO_MANIFEST_DIR")), FEATURES_PATH);
     assert_contains_all(
-        FEATURES,
+        &features,
         &[
             "Published operations APIs",
             "operations_consumer_contract.md",
@@ -77,6 +91,40 @@ fn features_mentions_published_operations_contracts() {
             "`indexPrefix`",
         ],
     );
+}
+
+#[test]
+fn synced_contract_fixture_reader_fails_when_artifact_is_absent() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let missing_file = "docs2/operations_consumer_contract.md";
+
+    let panic = std::panic::catch_unwind(|| {
+        read_contract_fixture(temp_dir.path(), missing_file);
+    })
+    .expect_err("missing public contract fixture must fail the guard");
+    let message = panic_message(panic);
+
+    assert!(
+        message.contains(missing_file),
+        "missing fixture failure should name the absent synced artifact, got {message}"
+    );
+}
+
+fn read_contract_fixture(manifest_dir: &Path, relative_path: &str) -> String {
+    let path = manifest_dir.join(relative_path);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("required synced contract fixture missing at {path:?}: {error}")
+    })
+}
+
+fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<String>() {
+        return message.clone();
+    }
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    "<non-string panic>".to_string()
 }
 
 fn assert_contains_all(document: &str, expected_fragments: &[&str]) {

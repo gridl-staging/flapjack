@@ -283,18 +283,18 @@ Env-var details for operational behavior are canonical in
 | InstantSearch iOS | ✅ | Via Swift client + Swift smoke |
 | Autocomplete.js | ✅ | |
 
-## Algolia migration (`/1/migrate-from-algolia`) — CREATE-ONLY SHIPPED
+## Algolia migration (`/1/migrate-from-algolia`) — NODE-LOCAL SYNC OVERWRITE SHIPPED
 
-**Status as of 2026-07-18: create-only Algolia migration is joined end-to-end.** The synchronous endpoint exports a source index, translates documents/settings/synonyms/rules, publishes a fresh target index, and reports counts that are backed by the target index listing. `overwrite=true`, async status/cancel/resume, and HA-converging import remain deferred in [`ROADMAP.md`](../../ROADMAP.md) rows `MIG-5`, `MIG-6`, and `MIG-7`. `MIG-4` is a separate publication-repair proof row, not part of this migration capability.
+**Status as of 2026-07-24: node-local synchronous Algolia migration supports create-only import and `overwrite=true` replacement.** The synchronous endpoint exports a source index, translates documents/settings/synonyms/rules, publishes a fresh target index by default, replaces an existing target only on the node-local synchronous path when `overwrite=true`, and reports counts backed by the target index listing. Async overwrite and HA import remain refused; resume and HA-converging import remain deferred in [`ROADMAP.md`](../../ROADMAP.md) rows `MIG-6` and `MIG-7`. `MIG-4` is a separate publication-repair proof row, not part of this migration capability.
 
 | Leg | Status | Owner |
 |---|---|---|
 | Source export: Algolia → durable on-disk spool (checkpointed, resumable) | ✅ Shipped | `engine/flapjack-http/src/handlers/migration/{algolia_client,source_reader,export,spool}.rs` |
 | Translation: spool → Flapjack documents/settings/synonyms/rules | ✅ Shipped | `engine/flapjack-http/src/handlers/migration/translation.rs` |
-| Import: translated content → target index via staged publication | ✅ Shipped for create-only targets | `engine/flapjack-http/src/handlers/migration/import.rs`; `engine/flapjack-http/src/handlers/migration/mod.rs::migrate_from_algolia` |
+| Import: translated content → target index via staged publication | ✅ Shipped for create-only and node-local synchronous overwrite | `engine/flapjack-http/src/handlers/migration/import.rs`; `engine/flapjack-http/src/handlers/migration/mod.rs::migrate_from_algolia` |
 | Staged publication primitive (crash-safe, node-local) | ✅ Shipped | `engine/src/index/manager/publication.rs` |
 | Dashboard `Migrate` page | ✅ Shipped and proven for create-only migration | `engine/dashboard/src/pages/Migrate.tsx`; `engine/dashboard/tests/e2e-ui/full/migrate-algolia.spec.ts` |
-| **Backend ↔ frontend joined end-to-end** | ✅ Create-only path proven with real Algolia credentials | `migrate_from_algolia`; `engine/dashboard/tests/e2e-ui/full/migrate-algolia.spec.ts` |
+| **Backend ↔ frontend joined end-to-end** | ✅ Create-only path proven with real Algolia credentials; node-local sync overwrite shipped at the backend contract | `migrate_from_algolia`; `engine/dashboard/tests/e2e-ui/full/migrate-algolia.spec.ts` |
 
 Replica translation detects topology from the source primary, fetches every named replica's own settings, and carries the derived virtual topology plus translated per-replica settings in the create-only migration bundle. Materialization then creates each derived replica as a settings-only virtual sidecar (no physical copy, by design) whose sort order resolves at query time. This contract is live-proven: on 2026-07-19 a real Algolia application with one `virtual(...)` relevance replica and one standard replica migrated end-to-end with a passing machine-verified receipt (jul18_11am batch) covering fixture seeding, import, sort-order proofs on the primary and both replica indexes, sidecar structure, and exact source cleanup. Remaining fidelity limits stay owned by `ROADMAP.md` MIG-11 and surface as documented migration warnings: standard-replica exhaustive sorting is approximated as a virtual replica, and Algolia `relevancyStrictness` semantics differ from Flapjack's deterministic ranking.
 
@@ -305,14 +305,14 @@ Migration warnings expose the remaining replica fidelity limits:
 - Matching-critical fields that diverge from the primary cannot be reproduced independently by a virtual replica.
 - Algolia and Flapjack use different `relevancyStrictness` scales, and `nbSortedHits` may differ for deterministic queries.
 
-**Current boundary:** the shipped path is create-only. Existing target overwrite returns 409 unless and until `MIG-5` lands. The call is synchronous; no HTTP status, cancel, or resume route exists until `MIG-6`. HA import is refused because staged publication is node-local and no convergence epoch exists; that design remains under `MIG-7`.
+**Current boundary:** node-local synchronous import can create a fresh target or replace an existing target with `overwrite=true`. Async overwrite is refused before job artifacts are created. The async status/cancel route exists, but resume remains deferred to `MIG-6`. HA import is refused because staged publication is node-local and no convergence epoch exists; that design remains under `MIG-7`.
 
 ## Dashboard UI
 
 22 user-facing routes are shipped, backed by 21 lazy-loaded page components, plus the `*` not-found catch-all. No stub pages remain.
 The route inventory spans overview, search/browse, settings, analytics, relevancy controls, security tooling, and migration workflows with no placeholder pages.
 
-**Caveat — route shipped ≠ every migration mode shipped.** The `Migrate` route is a proven browser path when credentials are supplied and `overwrite` is false. Existing-target overwrite, async jobs, and HA import remain deferred through [`ROADMAP.md`](../../ROADMAP.md) rows `MIG-5`, `MIG-6`, and `MIG-7`.
+**Caveat — route shipped ≠ every migration mode shipped.** The `Migrate` route is a proven browser path when credentials are supplied and `overwrite` is false; the backend also ships node-local synchronous `overwrite=true`. Async overwrite, resume, and HA import remain deferred through [`ROADMAP.md`](../../ROADMAP.md) rows `MIG-6` and `MIG-7`.
 
 | Status | Features |
 |---|---|

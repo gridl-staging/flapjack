@@ -8,6 +8,7 @@ use super::translation::{
 };
 use super::{
     algolia_error, MigrateCount, MigrateError, MigrateFromAlgoliaResponse, MigrateWarning,
+    MigrationPublicationMode,
 };
 use crate::error_response::{json_error_parts, json_error_parts_with_code};
 use crate::handlers::index_resource_store::{save_resource_batch, IndexResourceStore};
@@ -143,6 +144,7 @@ impl ImportTestHooks {
 pub(super) async fn import_from_source<R>(
     state_manager: &Arc<IndexManager>,
     target_index: String,
+    publication_mode: MigrationPublicationMode,
     reader: &mut R,
 ) -> Result<Json<MigrateFromAlgoliaResponse>, MigrateError>
 where
@@ -158,6 +160,7 @@ where
         &spool,
         job_uuid,
         target_index,
+        publication_mode,
         reader,
         #[cfg(test)]
         ImportTestHooks::default(),
@@ -169,6 +172,7 @@ where
 pub(super) async fn import_from_source_with_test_hooks<R>(
     state_manager: &Arc<IndexManager>,
     target_index: String,
+    publication_mode: MigrationPublicationMode,
     reader: &mut R,
     hooks: ImportTestHooks,
 ) -> Result<Json<MigrateFromAlgoliaResponse>, MigrateError>
@@ -180,8 +184,16 @@ where
     spool
         .create_migration_phase(job_uuid)
         .map_err(spool_error)?;
-    import_from_admitted_source_inner(state_manager, &spool, job_uuid, target_index, reader, hooks)
-        .await
+    import_from_admitted_source_inner(
+        state_manager,
+        &spool,
+        job_uuid,
+        target_index,
+        publication_mode,
+        reader,
+        hooks,
+    )
+    .await
 }
 
 #[allow(dead_code)]
@@ -199,6 +211,7 @@ where
         &spool_for_manager(state_manager)?,
         job_uuid,
         target_index,
+        MigrationPublicationMode::CreateOnly,
         reader,
         #[cfg(test)]
         ImportTestHooks::default(),
@@ -222,6 +235,7 @@ where
         &spool_for_manager(state_manager)?,
         job_uuid,
         target_index,
+        MigrationPublicationMode::CreateOnly,
         reader,
         hooks,
     )
@@ -239,6 +253,7 @@ async fn import_from_admitted_source_inner<R>(
     spool: &SpoolStore,
     job_uuid: Uuid,
     target_index: String,
+    publication_mode: MigrationPublicationMode,
     reader: &mut R,
     #[cfg(test)] hooks: ImportTestHooks,
 ) -> Result<Json<MigrateFromAlgoliaResponse>, MigrateError>
@@ -315,11 +330,15 @@ where
     // abort the unjournaled transaction; once journaled, `abort()` must refuse.
     let ((), publication) =
         abort_publication_on_error(spool, job_uuid, cancellation.check(), publication)?;
-    settle_import_result(
+    activate_staged_publication(
+        state_manager,
         spool,
         job_uuid,
-        publication.activate_create_only().map_err(activation_error),
-    )?;
+        publication,
+        &target_index,
+        publication_mode,
+    )
+    .await?;
     settle_import_result(
         spool,
         job_uuid,
@@ -354,6 +373,40 @@ where
     spool.succeed_migration(job_uuid).map_err(spool_error)?;
     let _ = spool.delete_export_artifacts(export.job_uuid, &export.source_identity_digest);
     Ok(Json(response))
+}
+
+async fn activate_staged_publication(
+    state_manager: &Arc<IndexManager>,
+    spool: &SpoolStore,
+    job_uuid: Uuid,
+    publication: PreStagedPublication,
+    target_index: &str,
+    publication_mode: MigrationPublicationMode,
+) -> Result<(), MigrateError> {
+    match publication_mode {
+        MigrationPublicationMode::CreateOnly => {
+            settle_import_result(
+                spool,
+                job_uuid,
+                publication.activate_create_only().map_err(activation_error),
+            )?;
+        }
+        MigrationPublicationMode::ReplaceExisting { staging_baseline } => {
+            settle_import_result(
+                spool,
+                job_uuid,
+                state_manager
+                    .replace_index_contents_from_pre_staged(
+                        publication,
+                        target_index,
+                        staging_baseline,
+                    )
+                    .await
+                    .map_err(flapjack_error),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn prepare_import_publication(
