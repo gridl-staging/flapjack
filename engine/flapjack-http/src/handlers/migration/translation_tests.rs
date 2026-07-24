@@ -1994,6 +1994,11 @@ fn exact_document_and_settings_payload() -> SpoolTranslationInput {
 }
 
 fn assert_exact_settings_payload_values(translated: &TranslatedSpoolPayload) {
+    assert_exact_settings_payload_core_values(translated);
+    assert_exact_settings_payload_advanced_values(translated);
+}
+
+fn assert_exact_settings_payload_core_values(translated: &TranslatedSpoolPayload) {
     let settings = &translated.bundle.settings;
     assert_eq!(settings.attributes_for_faceting, vec!["brand"]);
     assert_eq!(
@@ -2022,6 +2027,10 @@ fn assert_exact_settings_payload_values(translated: &TranslatedSpoolPayload) {
     assert_eq!(settings.query_type, "prefixLast");
     assert_eq!(settings.enable_personalization, Some(true));
     assert_eq!(settings.user_data, Some(json!({"owner": "migration"})));
+}
+
+fn assert_exact_settings_payload_advanced_values(translated: &TranslatedSpoolPayload) {
+    let settings = &translated.bundle.settings;
     assert_eq!(settings.enable_rules, Some(false));
     assert_eq!(
         settings.advanced_syntax_features,
@@ -3256,6 +3265,11 @@ fn assert_positive_live_documents(translated: &TranslatedSpoolPayload) {
 }
 
 fn assert_positive_live_settings(translated: &TranslatedSpoolPayload) {
+    assert_positive_live_filter_settings(translated);
+    assert_positive_live_ranking_settings(translated);
+}
+
+fn assert_positive_live_filter_settings(translated: &TranslatedSpoolPayload) {
     assert_eq!(
         translated.bundle.settings.searchable_attributes,
         Some(vec!["title".to_string(), "brand".to_string()])
@@ -3297,6 +3311,9 @@ fn assert_positive_live_settings(translated: &TranslatedSpoolPayload) {
         "attribute"
     );
     assert_eq!(translated.bundle.settings.synonyms, None);
+}
+
+fn assert_positive_live_ranking_settings(translated: &TranslatedSpoolPayload) {
     assert_eq!(
         translated.bundle.settings.ranking,
         Some(vec![

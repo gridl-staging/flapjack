@@ -468,7 +468,7 @@
             ..Default::default()
         };
         settings
-            .save(&base_path.join(tenant_id).join("settings.json"))
+            .save(base_path.join(tenant_id).join("settings.json"))
             .unwrap();
     }
 
