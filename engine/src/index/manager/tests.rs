@@ -1055,6 +1055,147 @@ async fn live_write_admission_bypasses_persistence_and_keeps_manager_contract() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial_test::serial(flapjack_write_durable_timeout_env)]
+async fn durable_add_documents_persists_replayable_admission_until_commit() {
+    let _writer_timeout_guard = WriteQueueWriterAcquireTimeoutEnvGuard::set("5000");
+    let temp_dir = TempDir::new().unwrap();
+    let tenant_id = "durable_admission_until_commit";
+    let object_id = "durable_admission_doc";
+    let expected_title = "durable admission coverage";
+    let tenant_path = temp_dir.path().join(tenant_id);
+    std::fs::create_dir_all(&tenant_path).unwrap();
+    let manager = IndexManager::new(temp_dir.path());
+    let index = Arc::new(
+        Index::create_with_budget(
+            &tenant_path,
+            crate::index::schema::Schema::builder().build(),
+            Arc::new(MemoryBudget::new(MemoryBudgetConfig {
+                max_concurrent_writers: 1,
+                ..Default::default()
+            })),
+        )
+        .unwrap(),
+    );
+    manager
+        .loaded
+        .insert(tenant_id.to_string(), Arc::clone(&index));
+    let held_writer = index
+        .writer()
+        .expect("test precondition: held writer must keep durable commit pending");
+
+    let durable_write = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move {
+            manager
+                .add_documents_durable(
+                    tenant_id,
+                    vec![write_queue_test_document(object_id, expected_title)],
+                )
+                .await
+        }
+    });
+
+    let task = wait_for_single_enqueued_tenant_task(&manager, tenant_id).await;
+    let store = WriteAdmissionStore::open(temp_dir.path(), tenant_id).unwrap();
+    let records = store.load_records().unwrap();
+    assert_eq!(
+        records.len(),
+        1,
+        "durable admission must persist exactly one replayable record before commit"
+    );
+    let record = records.first().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let record_path = temp_dir
+            .path()
+            .join(tenant_id)
+            .join("write_admission")
+            .join(format!("{:020}.json", record.sequence));
+        let mode = std::fs::metadata(&record_path)
+            .expect("durable admission record must remain present before commit")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "durable admission records contain full document bodies and must not be group- or world-readable; mode was {mode:o}"
+        );
+    }
+    assert_eq!(
+        record.task_id, task.id,
+        "durable admission record must use the enqueued canonical task id"
+    );
+    assert_eq!(
+        record.numeric_id, task.numeric_id,
+        "durable admission record must use the enqueued numeric task id"
+    );
+    assert_eq!(record.received_documents, 1);
+    match record.actions.as_slice() {
+        [WriteAction::Upsert(document)] => {
+            assert_eq!(
+                document.id, object_id,
+                "durable admission record must preserve the upsert object id"
+            );
+            assert!(
+                matches!(
+                    document.fields.get("title"),
+                    Some(FieldValue::Text(title)) if title == expected_title
+                ),
+                "durable admission record must preserve the upsert document fields"
+            );
+        }
+        actions => panic!("durable admission must persist one Upsert action, got {actions:?}"),
+    }
+
+    drop(held_writer);
+    let committed_task = durable_write
+        .await
+        .expect("durable write task must not panic")
+        .expect("durable write must succeed after writer release");
+    assert_eq!(committed_task.id, task.id);
+    let document = manager
+        .get_document(tenant_id, object_id)
+        .unwrap()
+        .expect("durable write must index the document after writer release");
+    assert!(
+        matches!(
+            document.fields.get("title"),
+            Some(FieldValue::Text(title)) if title == expected_title
+        ),
+        "durable write must preserve the indexed document fields"
+    );
+    assert_eq!(
+        tenant_admission_record_count(temp_dir.path(), tenant_id),
+        0,
+        "successful durable commit must clean up its admission record"
+    );
+}
+
+async fn wait_for_single_enqueued_tenant_task(manager: &IndexManager, tenant_id: &str) -> TaskInfo {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let tasks = manager.tenant_tasks_snapshot_for_test(tenant_id);
+        if tasks.len() == 1 {
+            let task = tasks.into_iter().next().unwrap();
+            assert!(
+                matches!(task.status, TaskStatus::Enqueued),
+                "durable admission checkpoint must observe one enqueued task before writer release, got {:?}",
+                task.status
+            );
+            return task;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for one durable admission task; observed {} tasks",
+            tasks.len()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn durable_add_documents_write_queue_full_returns_queue_full_before_ack_wait() {
     let temp_dir = TempDir::new().unwrap();
     let tenant_id = "durable_write_queue_capacity";
