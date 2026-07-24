@@ -111,25 +111,53 @@ async fn restore_tenant_from_s3(
     tid: &str,
     data_path: &std::path::Path,
 ) {
-    if extract_s3_snapshot_tenant_id(&format!("snapshots/{tid}/")).is_none() {
-        tracing::warn!("S3 auto-restore: refusing path-unsafe tenant id {:?}", tid);
+    if !is_path_safe_snapshot_tenant_id(tid) {
         return;
     }
+
+    let Some((key, data)) = download_latest_tenant_snapshot(s3_config, tid).await else {
+        return;
+    };
+    if import_tenant_snapshot(tid, data_path, &data).is_none() {
+        return;
+    }
+    tracing::info!(
+        "S3 auto-restore: restored {} from {} ({} bytes)",
+        tid,
+        key,
+        data.len()
+    );
+}
+
+fn is_path_safe_snapshot_tenant_id(tid: &str) -> bool {
+    if extract_s3_snapshot_tenant_id(&format!("snapshots/{tid}/")).is_some() {
+        return true;
+    }
+    tracing::warn!("S3 auto-restore: refusing path-unsafe tenant id {:?}", tid);
+    false
+}
+
+async fn download_latest_tenant_snapshot(
+    s3_config: &flapjack::index::s3::S3Config,
+    tid: &str,
+) -> Option<(String, Vec<u8>)> {
     match flapjack::index::s3::download_latest_snapshot(s3_config, tid).await {
-        Ok((key, data)) => {
-            let index_path = data_path.join(tid);
-            if let Err(e) = flapjack::index::snapshot::import_from_bytes(&data, &index_path) {
-                tracing::error!("S3 auto-restore: failed to import {}: {}", tid, e);
-                return;
-            }
-            tracing::info!(
-                "S3 auto-restore: restored {} from {} ({} bytes)",
-                tid,
-                key,
-                data.len()
-            );
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => {
+            tracing::warn!("S3 auto-restore: no snapshot for {}: {}", tid, error);
+            None
         }
-        Err(e) => tracing::warn!("S3 auto-restore: no snapshot for {}: {}", tid, e),
+    }
+}
+
+fn import_tenant_snapshot(tid: &str, data_path: &std::path::Path, data: &[u8]) -> Option<()> {
+    let index_path = data_path.join(tid);
+    match flapjack::index::snapshot::import_from_bytes(data, &index_path) {
+        Ok(()) => Some(()),
+        Err(error) => {
+            tracing::error!("S3 auto-restore: failed to import {}: {}", tid, error);
+            None
+        }
     }
 }
 

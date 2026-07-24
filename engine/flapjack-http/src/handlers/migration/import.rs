@@ -368,7 +368,13 @@ where
     let response = settle_import_result(
         spool,
         job_uuid,
-        activated_response(state_manager, &target_index, staged, sidecar_warnings),
+        activated_response(
+            state_manager,
+            &target_index,
+            staged,
+            publication_mode,
+            sidecar_warnings,
+        ),
     )?;
     spool.succeed_migration(job_uuid).map_err(spool_error)?;
     let _ = spool.delete_export_artifacts(export.job_uuid, &export.source_identity_digest);
@@ -682,12 +688,18 @@ fn activated_response(
     manager: &Arc<IndexManager>,
     target_index: &str,
     staged: StagedImport,
+    publication_mode: MigrationPublicationMode,
     sidecar_warnings: Vec<MigrateWarning>,
 ) -> Result<MigrateFromAlgoliaResponse, MigrateError> {
     let objects = document_count(manager, target_index)?;
     let rules = resource_count::<RuleStore>(manager, target_index)?;
     let synonyms = resource_count::<SynonymStore>(manager, target_index)?;
-    if objects != staged.counts.documents
+    // Replacement activation replays acknowledged mutations from
+    // `(baseline_seq, write_watermark]` after installing the staged source.
+    // Its reopened target can therefore legitimately differ from the source
+    // object count. Create-only publication has no replay window.
+    if (matches!(publication_mode, MigrationPublicationMode::CreateOnly)
+        && objects != staged.counts.documents)
         || rules != staged.counts.rules
         || synonyms != staged.counts.synonyms
     {
@@ -699,9 +711,15 @@ fn activated_response(
     Ok(MigrateFromAlgoliaResponse {
         status: "complete".to_string(),
         settings: staged.counts.settings,
-        synonyms: MigrateCount { imported: synonyms },
-        rules: MigrateCount { imported: rules },
-        objects: MigrateCount { imported: objects },
+        synonyms: MigrateCount {
+            imported: staged.counts.synonyms,
+        },
+        rules: MigrateCount {
+            imported: staged.counts.rules,
+        },
+        objects: MigrateCount {
+            imported: staged.counts.documents,
+        },
         // Translation warnings first, then runtime sidecar warnings in replica
         // order, so an existing warning never shifts position.
         warnings: migrate_warnings(&staged.report)

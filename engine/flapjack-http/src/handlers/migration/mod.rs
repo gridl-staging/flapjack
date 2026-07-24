@@ -275,9 +275,10 @@ pub(super) struct AdmittedMigration {
 /// import admission, then synchronously imports the Algolia source into a
 /// Flapjack target. The default path is create-only; node-local
 /// `overwrite=true` replaces an existing target through the fenced publication
-/// owner. A successful response reports the counts read back from the activated
-/// target; this lane has no durable async job id and returns a fixed `taskID`
-/// of `0`.
+/// owner. A successful response reports the imported source counts after
+/// reading back the activated target; an overwrite target can additionally
+/// contain acknowledged writes replayed during activation. This lane has no
+/// durable async job id and returns a fixed `taskID` of `0`.
 #[utoipa::path(
     post,
     path = "/1/migrate-from-algolia",

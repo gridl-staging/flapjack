@@ -2867,7 +2867,7 @@
           "migration"
         ],
         "summary": "One-click migration from Algolia to Flapjack.",
-        "description": "Validates the requested source and target shape, refuses HA requests before\nimport admission, then synchronously imports the Algolia source into a\nFlapjack target. The default path is create-only; node-local\n`overwrite=true` replaces an existing target through the fenced publication\nowner. A successful response reports the counts read back from the activated\ntarget; this lane has no durable async job id and returns a fixed `taskID`\nof `0`.",
+        "description": "Validates the requested source and target shape, refuses HA requests before\nimport admission, then synchronously imports the Algolia source into a\nFlapjack target. The default path is create-only; node-local\n`overwrite=true` replaces an existing target through the fenced publication\nowner. A successful response reports the imported source counts after\nreading back the activated target; an overwrite target can additionally\ncontain acknowledged writes replayed during activation. This lane has no\ndurable async job id and returns a fixed `taskID` of `0`.",
         "operationId": "migrate_from_algolia",
         "requestBody": {
           "content": {
