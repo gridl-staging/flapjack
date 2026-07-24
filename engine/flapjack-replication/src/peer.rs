@@ -361,8 +361,7 @@ mod tests {
 
     #[test]
     fn transport_error_text_classifies_dns_failure_as_unreachable() {
-        let error = std::io::Error::new(
-            ErrorKind::Other,
+        let error = std::io::Error::other(
             "dns error: failed to lookup address information: nodename nor servname provided, or not known",
         );
 
