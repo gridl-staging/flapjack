@@ -2,7 +2,7 @@
 
 Single maintained status ledger for Flapjack. Shipped feature status, current production-readiness state, and post-launch work are owned in this document.
 
-**Last updated: 2026-07-18 (Algolia create-only migration is shipped and joined; deferred overwrite, async jobs, and HA import remain routed through `ROADMAP.md`.)**
+**Last updated: 2026-07-23 (dead-node auto-heal is documented as a bounded default-off HA engine capability; prior 2026-07-18 context: Algolia create-only migration is shipped and joined, with deferred overwrite, async jobs, and HA import routed through `ROADMAP.md`.)**
 
 - 2026-05-31 stage note: `FLAPJACK_WRITE_QUEUE_BATCH_SIZE` is now runtime-configurable with default-preserving behavior (`32` fallback). See [`3_IMPLEMENTATION/OPS_CONFIGURATION.md`](3_IMPLEMENTATION/OPS_CONFIGURATION.md) for full operator semantics.
 
@@ -140,6 +140,12 @@ All shipped capability status lives in the feature tables below (Search, Indexin
 | CJK tokenization | ✅ | |
 | Language-specific stemming | ✅ | |
 
+## High Availability
+
+| Feature | Status | Notes |
+|---|---|---|
+| Dead-node auto-heal | ✅ Bounded / default-off | Opt-in with `FLAPJACK_AUTOHEAL_ENABLED=true`. The engine evicts at most one sustained-unreachable peer after the fixed three-observation threshold only when the local quorum guard remains satisfied, records refusals/evictions/readmissions in `${FLAPJACK_DATA_DIR}/autoheal_decisions.jsonl`, readmits returning healthy candidates with startup catch-up before authoritative reads, and exposes `autoheal_enabled` plus `autoheal_peers` on admin-only `/internal/cluster/status`. See [Dead-node auto-heal](3_IMPLEMENTATION/OPERATIONS.md#scenario-dead-node-auto-heal) and [Replication configuration](3_IMPLEMENTATION/OPS_CONFIGURATION.md#replication). Excludes consensus, majority writes, arbitrary partition healing, simultaneous majority-loss recovery, UI workflow, and CRD/controller lifecycle management. |
+
 ## Indexing & Records
 
 | Feature | Status | Notes |
@@ -192,7 +198,7 @@ All shipped capability status lives in the feature tables below (Search, Indexin
 | Analytics API (top queries, no-results, no-clicks) | ✅ | |
 | Events / Insights API | ✅ | click, conversion, view events with position tracking |
 | Event Debugger | ✅ | Per-index event stream inspection |
-| A/B Testing (experiments) | ✅ | Traffic split, variant tracking, winner selection |
+| A/B Testing (experiments) | ✅ | Traffic split, variant tracking, winner selection. List filtering uses exact `indexName` matching separately from `indexPrefix`/`indexSuffix`; owner: `engine/flapjack-http/src/handlers/experiments/mod.rs::list_experiments`. |
 | Usage metering | ✅ | Per-key, per-index operation counts |
 | Analytics retention cleanup | ✅ | Partition-based retention cleanup is configurable with `FLAPJACK_ANALYTICS_RETENTION_DAYS`, defaults to 90 days, skips malformed/non-partition paths, and is covered by deterministic cutoff tests. |
 | Durable analytics rollup storage | ✅ | Rollup writer + query planner fallback + certified-coverage retention gate are shipped. Proof: `engine/src/analytics/writer.rs` (rollup writer), `engine/src/analytics/query/mod.rs` (rollup planner with raw fallback), `engine/src/analytics/retention.rs` + `engine/src/analytics/manifest.rs` (certified-coverage delete gate), `engine/loadtest/soak_proof.sh` (soak evidence flow). Rollout design and test-citation details are retained in private stage evidence. |
@@ -235,6 +241,7 @@ All shipped capability status lives in the feature tables below (Search, Indexin
 | Multi-tenant isolation | ✅ | Per-tenant memory limits (31 MB buffer, 40 concurrent writers) |
 | Oplog replication + startup catch-up | ✅ | Peer oplog replication with pre-serve catch-up (`run_pre_serve_catchup`) |
 | S3 snapshots | ✅ | Single-node snapshot APIs with scheduled backups and empty-dir auto-restore. Verified via MinIO harness in `engine/examples/s3-snapshot/`. |
+| Published operations APIs | ✅ | Engine-owned consumer contract is published in [`operations_consumer_contract.md`](operations_consumer_contract.md) for `/health`, `/internal/status`, `/internal/cluster/status`, and `/internal/snapshots/capability`. Snapshot capability reports `not_configured` or `configured_unverified`; `configured_unverified` means config exists, not that credentials, bucket existence, or reachability were verified. |
 | SSL / TLS | ✅ | Let's Encrypt ACME automation |
 | OpenAPI spec | ✅ | Auto-generated via utoipa; includes recommend, personalization, and experiments routes with coverage in both `openapi_export_tests` and `openapi::tests`. |
 | Memory safety | ✅ | OOM-proof: BufferSizeExceeded → 429, DocumentTooLarge → drop |

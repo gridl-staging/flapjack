@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 const HOUR_MS: i64 = 3_600_000;
 const MIGRATION_SPOOL_GC_INTERVAL_ENV: &str = "FLAPJACK_MIGRATION_SPOOL_GC_INTERVAL_SECS";
 const DEFAULT_MIGRATION_SPOOL_GC_INTERVAL_SECS: u64 = 300;
+const AUTOHEAL_ENABLED_ENV: &str = "FLAPJACK_AUTOHEAL_ENABLED";
 
 /// Restore all tenant indexes from S3 snapshots when the data directory is empty.
 ///
@@ -232,6 +233,31 @@ fn migration_spool_gc_interval_secs() -> u64 {
         .unwrap_or(DEFAULT_MIGRATION_SPOOL_GC_INTERVAL_SECS)
 }
 
+fn parse_autoheal_enabled(value: Option<&str>) -> Result<bool, String> {
+    let Some(raw_value) = value else {
+        return Ok(false);
+    };
+    match raw_value.trim() {
+        value if value.eq_ignore_ascii_case("true") => Ok(true),
+        value if value.eq_ignore_ascii_case("false") => Ok(false),
+        _ => Err(raw_value.to_string()),
+    }
+}
+
+fn autoheal_enabled_from_env() -> bool {
+    match parse_autoheal_enabled(std::env::var(AUTOHEAL_ENABLED_ENV).ok().as_deref()) {
+        Ok(enabled) => enabled,
+        Err(value) => {
+            tracing::warn!(
+                "[autoheal] ignoring invalid {} value {:?}; using false",
+                AUTOHEAL_ENABLED_ENV,
+                value
+            );
+            false
+        }
+    }
+}
+
 fn spawn_migration_spool_gc_task(state: &Arc<AppState>) {
     let interval_secs = migration_spool_gc_interval_secs();
     let store = match SpoolStore::new(&state.manager.base_path, SpoolLimits::default()) {
@@ -443,7 +469,9 @@ fn spawn_s3_backup_task(infrastructure: &InfrastructureState) {
 /// Spawns replication health probe and periodic peer-sync tasks.
 fn spawn_replication_tasks(state: &Arc<AppState>, infrastructure: &InfrastructureState) {
     if let Some(replication_manager) = infrastructure.replication_manager.as_ref() {
-        replication_manager.start_health_probe(10);
+        let autoheal_enabled = autoheal_enabled_from_env();
+        replication_manager.start_health_probe(10, autoheal_enabled);
+        tracing::info!("[autoheal] enabled={}", autoheal_enabled);
         // NOTE: One-shot startup catch-up moved to server.rs as a pre-serve barrier
         // (run_pre_serve_catchup). Only periodic sync remains as a background task.
         let sync_interval: u64 = std::env::var("FLAPJACK_SYNC_INTERVAL_SECS")

@@ -820,9 +820,11 @@ async fn async_import_ha_state_is_refused_by_shared_admission_owner() {
         .with_replication_manager(repl_mgr)
         .build_shared();
     let source_factory_invoked = Arc::new(AtomicBool::new(false));
+    let mut request = valid_request();
+    request.overwrite = false;
     let refused = state
         .migration_runner
-        .submit_algolia_import(valid_request(), {
+        .submit_algolia_import(request, {
             let source_factory_invoked = Arc::clone(&source_factory_invoked);
             move |_| {
                 source_factory_invoked.store(true, Ordering::SeqCst);
@@ -1211,10 +1213,12 @@ async fn migrate_refuses_ha_cluster_before_import_admission() {
         .build_shared();
     let source_factory_invoked = Arc::new(AtomicBool::new(false));
     let source_factory_invoked_by_handler = Arc::clone(&source_factory_invoked);
+    let mut request = valid_request();
+    request.overwrite = false;
 
     let response = migrate_from_algolia_with_test_source_factory(
         State(Arc::clone(&state)),
-        Json(valid_request()),
+        Json(request),
         move |_| {
             source_factory_invoked_by_handler.store(true, Ordering::SeqCst);
             Ok(hermetic_source_reader())

@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Default deadline for durable HTTP writes, in milliseconds.
@@ -10,7 +12,60 @@ use std::time::{Duration, Instant};
 /// forever if the consumer task dies mid-restart (PL-13 silent-drop failure mode).
 const DEFAULT_WRITE_DURABLE_TIMEOUT_MS: u64 = 30_000;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WriteAdmissionCheckpoint {
+    Captured,
+    Validated,
+}
+
+#[cfg(test)]
+type WriteAdmissionCheckpointHook =
+    Arc<dyn Fn(&str, WriteAdmissionCheckpoint) + Send + Sync + 'static>;
+
+#[cfg(test)]
+static WRITE_ADMISSION_CHECKPOINT_HOOK: OnceLock<Mutex<Option<WriteAdmissionCheckpointHook>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+pub(crate) struct WriteAdmissionCheckpointHookGuard {
+    previous: Option<WriteAdmissionCheckpointHook>,
+}
+
+#[cfg(test)]
+impl Drop for WriteAdmissionCheckpointHookGuard {
+    fn drop(&mut self) {
+        *write_admission_checkpoint_hook().lock().unwrap() = self.previous.take();
+    }
+}
+
+#[cfg(test)]
+fn write_admission_checkpoint_hook() -> &'static Mutex<Option<WriteAdmissionCheckpointHook>> {
+    WRITE_ADMISSION_CHECKPOINT_HOOK.get_or_init(|| Mutex::new(None))
+}
+
 impl super::IndexManager {
+    #[cfg(test)]
+    pub(crate) fn set_write_admission_checkpoint_hook_for_test(
+        hook: impl Fn(&str, WriteAdmissionCheckpoint) + Send + Sync + 'static,
+    ) -> WriteAdmissionCheckpointHookGuard {
+        let mut slot = write_admission_checkpoint_hook().lock().unwrap();
+        WriteAdmissionCheckpointHookGuard {
+            previous: slot.replace(Arc::new(hook)),
+        }
+    }
+
+    #[cfg(test)]
+    fn run_write_admission_checkpoint_for_test(
+        tenant_id: &str,
+        checkpoint: WriteAdmissionCheckpoint,
+    ) {
+        let hook = write_admission_checkpoint_hook().lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(tenant_id, checkpoint);
+        }
+    }
+
     fn get_or_create_admission_store(&self, tenant_id: &str) -> Result<Arc<WriteAdmissionStore>> {
         if let Some(store) = self.admission_stores.get(tenant_id) {
             return Ok(Arc::clone(store.value()));
@@ -81,7 +136,7 @@ impl super::IndexManager {
                     vector_ctx,
                 })?;
                 self.write_task_handles
-                    .insert(tenant_id.to_string(), handle);
+                    .insert(tenant_id.to_string(), WriteTaskHandle::new(handle));
                 Ok(queue)
             })?;
         Ok(entry.clone())
@@ -204,23 +259,103 @@ impl super::IndexManager {
         index: &Arc<Index>,
         actions: Vec<WriteAction>,
     ) -> Result<TaskInfo> {
+        let target = publication::PublicationTarget::new(tenant_id)?;
+        let observed_epoch = publication::capture_publication_epoch(&self.base_path, &target)
+            .map_err(|error| Self::admission_epoch_error(tenant_id, error))?;
+        #[cfg(test)]
+        Self::run_write_admission_checkpoint_for_test(
+            tenant_id,
+            WriteAdmissionCheckpoint::Captured,
+        );
+        if let Some(tx) = self.write_queues.get(tenant_id).map(|queue| queue.clone()) {
+            // Preserve the pre-admission API contract from `try_send`: callers can retry
+            // both capacity pressure and a queue consumer that is being restarted.
+            let permit = tx.try_reserve().map_err(|_| FlapjackError::QueueFull)?;
+            let admission_guard = publication::try_validate_publication_epoch_admission(
+                &self.base_path,
+                &target,
+                observed_epoch,
+            )
+            .map_err(|error| Self::admission_epoch_error(tenant_id, error))?;
+            #[cfg(test)]
+            Self::run_write_admission_checkpoint_for_test(
+                tenant_id,
+                WriteAdmissionCheckpoint::Validated,
+            );
+            return Ok(self.send_admitted_write(tenant_id, actions, admission_guard, permit));
+        }
+        let admission_guard = publication::try_validate_publication_epoch_admission(
+            &self.base_path,
+            &target,
+            observed_epoch,
+        )
+        .map_err(|error| Self::admission_epoch_error(tenant_id, error))?;
+        #[cfg(test)]
+        Self::run_write_admission_checkpoint_for_test(
+            tenant_id,
+            WriteAdmissionCheckpoint::Validated,
+        );
         let tx = self.get_or_create_write_queue(tenant_id, index)?;
         // Preserve the pre-admission API contract from `try_send`: callers can retry
         // both capacity pressure and a queue consumer that is being restarted.
         let permit = tx.try_reserve().map_err(|_| FlapjackError::QueueFull)?;
 
+        Ok(self.send_admitted_write(tenant_id, actions, admission_guard, permit))
+    }
+
+    fn send_admitted_write(
+        &self,
+        tenant_id: &str,
+        actions: Vec<WriteAction>,
+        admission_guard: publication::PublicationEpochAdmissionGuard,
+        permit: tokio::sync::mpsc::Permit<'_, WriteOp>,
+    ) -> TaskInfo {
         let numeric_id = self.next_numeric_task_id();
         let task_id = format!("task_{}_{}", tenant_id, uuid::Uuid::new_v4());
         let received_documents = actions.len();
-        let record =
-            WriteAdmissionRecord::new(task_id.clone(), numeric_id, received_documents, actions);
+        let ticket = WriteAdmissionTicket::new(tenant_id.to_string(), admission_guard.observed());
+        let record = WriteAdmissionRecord::new(
+            ticket,
+            task_id.clone(),
+            numeric_id,
+            received_documents,
+            actions,
+        );
         let task = record.task_info();
         self.tasks.insert(task_id.clone(), task.clone());
         self.tasks.insert(numeric_id.to_string(), task.clone());
         self.evict_old_tasks(tenant_id, MAX_TASKS_PER_TENANT);
 
         permit.send(record.write_op());
-        Ok(task)
+        drop(admission_guard);
+        task
+    }
+
+    fn admission_epoch_error(
+        tenant_id: &str,
+        error: publication::PublicationEpochAdmissionError,
+    ) -> FlapjackError {
+        match error {
+            publication::PublicationEpochAdmissionError::Busy
+            | publication::PublicationEpochAdmissionError::Stale { .. } => {
+                FlapjackError::IndexPaused(tenant_id.to_string())
+            }
+            publication::PublicationEpochAdmissionError::Epoch(
+                publication::PublicationEpochError::CorruptState { path },
+            ) => FlapjackError::Io(format!(
+                "publication epoch admission evidence is corrupt for {tenant_id} at {}",
+                path.display()
+            )),
+            publication::PublicationEpochAdmissionError::Epoch(
+                publication::PublicationEpochError::Io { path, source },
+            ) => FlapjackError::Io(format!(
+                "publication epoch admission evidence failed for {tenant_id} at {}: {source}",
+                path.display()
+            )),
+            publication::PublicationEpochAdmissionError::Epoch(error) => FlapjackError::Io(
+                format!("publication epoch admission failed for {tenant_id}: {error}"),
+            ),
+        }
     }
 
     /// Resolve the durable-write deadline from `FLAPJACK_WRITE_DURABLE_TIMEOUT_MS`,
@@ -387,3 +522,7 @@ fn parse_writer_contention_failure(message: &str) -> Option<(usize, usize)> {
     let (current, max) = details.split_once(" active, max ")?;
     Some((current.parse().ok()?, max.parse().ok()?))
 }
+
+#[cfg(test)]
+#[path = "write_mutation_fence_tests.rs"]
+mod mutation_fence;

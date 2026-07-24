@@ -1,4 +1,5 @@
 use crate::error::{FlapjackError, Result};
+use crate::index::manager::publication::PublicationEpoch;
 use crate::index::write_queue::{WriteAction, WriteOp};
 use crate::types::{TaskInfo, TaskStatus};
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,39 @@ type LifecycleHook = Box<dyn FnOnce() + Send>;
 
 pub(crate) const WRITE_ADMISSION_DIR: &str = "write_admission";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WriteAdmissionTicket {
+    target: String,
+    observed_epoch: PublicationEpoch,
+}
+
+impl WriteAdmissionTicket {
+    pub(crate) fn new(target: String, observed_epoch: PublicationEpoch) -> Self {
+        Self {
+            target,
+            observed_epoch,
+        }
+    }
+
+    fn evidence(&self) -> WriteAdmissionEpochEvidence {
+        WriteAdmissionEpochEvidence::Observed {
+            target: self.target.clone(),
+            epoch: self.observed_epoch,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum WriteAdmissionEpochEvidence {
+    Observed {
+        target: String,
+        epoch: PublicationEpoch,
+    },
+    #[default]
+    LegacyUnproven,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WriteAdmissionRecord {
     pub sequence: u64,
@@ -28,11 +62,14 @@ pub(crate) struct WriteAdmissionRecord {
     pub numeric_id: i64,
     pub received_documents: usize,
     pub created_at_ms: u64,
+    #[serde(default)]
+    pub epoch_evidence: WriteAdmissionEpochEvidence,
     pub actions: Vec<WriteAction>,
 }
 
 impl WriteAdmissionRecord {
     pub(crate) fn new(
+        ticket: WriteAdmissionTicket,
         task_id: String,
         numeric_id: i64,
         received_documents: usize,
@@ -44,6 +81,7 @@ impl WriteAdmissionRecord {
             numeric_id,
             received_documents,
             created_at_ms: system_time_ms(SystemTime::now()),
+            epoch_evidence: ticket.evidence(),
             actions,
         }
     }

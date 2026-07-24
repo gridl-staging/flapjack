@@ -1,4 +1,6 @@
 pub(crate) mod admission;
+#[cfg(test)]
+mod admission_tests;
 mod finalization;
 mod vectors;
 

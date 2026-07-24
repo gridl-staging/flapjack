@@ -4832,7 +4832,9 @@
             "description": "Server is healthy",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
               }
             }
           }
@@ -4921,6 +4923,86 @@
           },
           "404": {
             "description": "Peer is not in runtime membership"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/internal/cluster/status": {
+      "get": {
+        "tags": [
+          "cluster"
+        ],
+        "summary": "GET /internal/cluster/status\nReturn health status of all peers based on last_success timestamps.\nProvides quick cluster health overview without active probing.",
+        "operationId": "cluster_status",
+        "responses": {
+          "200": {
+            "description": "Cluster membership and auto-heal lifecycle status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterStatusResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin API key is required"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/internal/snapshots/capability": {
+      "get": {
+        "tags": [
+          "internal"
+        ],
+        "operationId": "snapshot_capability",
+        "responses": {
+          "200": {
+            "description": "Snapshot backend capability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotCapabilityResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/internal/status": {
+      "get": {
+        "tags": [
+          "internal"
+        ],
+        "summary": "GET /internal/status\nReturn basic replication status for monitoring",
+        "operationId": "replication_status",
+        "responses": {
+          "200": {
+            "description": "Replication and storage status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplicationStatusResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -6783,6 +6865,63 @@
           }
         }
       },
+      "AutohealActionResponse": {
+        "type": "object",
+        "required": [
+          "phase",
+          "outcome"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          }
+        }
+      },
+      "AutohealPeerLifecycleResponse": {
+        "type": "object",
+        "required": [
+          "peer_id",
+          "observation_count"
+        ],
+        "properties": {
+          "action": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AutohealActionResponse"
+              }
+            ]
+          },
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": "object"
+          },
+          "observation_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "peer_id": {
+            "type": "string"
+          }
+        }
+      },
       "BatchAction": {
         "type": "string",
         "description": "Action in a batch request.",
@@ -6942,6 +7081,21 @@
           }
         }
       },
+      "BuildCapabilities": {
+        "type": "object",
+        "required": [
+          "vectorSearch",
+          "vectorSearchLocal"
+        ],
+        "properties": {
+          "vectorSearch": {
+            "type": "boolean"
+          },
+          "vectorSearchLocal": {
+            "type": "boolean"
+          }
+        }
+      },
       "BuildStatus": {
         "type": "object",
         "required": [
@@ -7032,6 +7186,135 @@
             }
           }
         }
+      },
+      "ClusterPeerHealthStatus": {
+        "type": "string",
+        "enum": [
+          "healthy",
+          "stale",
+          "unhealthy",
+          "circuit_open",
+          "never_contacted"
+        ]
+      },
+      "ClusterPeerStatus": {
+        "type": "object",
+        "required": [
+          "peer_id",
+          "addr",
+          "status",
+          "last_success_secs_ago"
+        ],
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "last_success_secs_ago": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "peer_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClusterPeerHealthStatus"
+          }
+        }
+      },
+      "ClusterStatusHaResponse": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "replication_enabled",
+          "peers_total",
+          "peers_healthy",
+          "peers"
+        ],
+        "properties": {
+          "autoheal_enabled": {
+            "type": "boolean"
+          },
+          "autoheal_peers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutohealPeerLifecycleResponse"
+            }
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "peers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterPeerStatus"
+            }
+          },
+          "peers_healthy": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "peers_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "replication_enabled": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClusterStatusResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ClusterStatusStandaloneResponse"
+          },
+          {
+            "$ref": "#/components/schemas/ClusterStatusHaResponse"
+          }
+        ]
+      },
+      "ClusterStatusStandaloneResponse": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "replication_enabled",
+          "peers"
+        ],
+        "properties": {
+          "autoheal_enabled": {
+            "type": "boolean"
+          },
+          "autoheal_peers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutohealPeerLifecycleResponse"
+            }
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "peers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterPeerStatus"
+            },
+            "maxItems": 0
+          },
+          "replication_enabled": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "ConcludeExperimentRequest": {
         "type": "object",
@@ -7991,6 +8274,78 @@
           }
         }
       },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "build",
+          "uptime_secs",
+          "capabilities",
+          "active_writers",
+          "max_concurrent_writers",
+          "facet_cache_entries",
+          "facet_cache_cap",
+          "heap_allocated_mb",
+          "system_limit_mb",
+          "pressure_level",
+          "allocator",
+          "tenants_loaded"
+        ],
+        "properties": {
+          "active_writers": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "allocator": {
+            "type": "string"
+          },
+          "build": {
+            "$ref": "#/components/schemas/PublicBuildInfo"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/BuildCapabilities"
+          },
+          "facet_cache_cap": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "facet_cache_entries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "heap_allocated_mb": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_concurrent_writers": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pressure_level": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "system_limit_mb": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tenants_loaded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uptime_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "HybridSearchParams": {
         "type": "object",
         "description": "Parameters for hybrid (keyword + vector) search.\n\nMeilisearch-style: `\"hybrid\": {\"semanticRatio\": 0.8, \"embedder\": \"mymodel\"}`\nAlgolia-style: synthesized internally when `mode: \"neuralSearch\"`.",
@@ -8743,6 +9098,31 @@
           "abandonmentRate"
         ]
       },
+      "PublicBuildInfo": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "version",
+          "profile",
+          "capabilities"
+        ],
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/BuildCapabilities"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "PutObjectResponse": {
         "type": "object",
         "required": [
@@ -9110,6 +9490,53 @@
             }
           }
         ]
+      },
+      "ReplicationStatusResponse": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "replication_enabled",
+          "peer_count",
+          "ssl_renewal",
+          "storage_total_bytes",
+          "tenant_count",
+          "vector_memory_bytes"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string"
+          },
+          "peer_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "replication_enabled": {
+            "type": "boolean"
+          },
+          "ssl_renewal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SslRenewalStatus"
+              }
+            ]
+          },
+          "storage_total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tenant_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "vector_memory_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "RestoreKeyResponse": {
         "type": "object",
@@ -10656,6 +11083,41 @@
           }
         }
       },
+      "SnapshotBackend": {
+        "type": "string",
+        "enum": [
+          "s3"
+        ]
+      },
+      "SnapshotCapabilityResponse": {
+        "type": "object",
+        "required": [
+          "backend",
+          "state",
+          "bucket"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/SnapshotBackend"
+          },
+          "bucket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/SnapshotCapabilityState"
+          }
+        }
+      },
+      "SnapshotCapabilityState": {
+        "type": "string",
+        "enum": [
+          "not_configured",
+          "configured_unverified"
+        ]
+      },
       "SourceMutationTimestampResponse": {
         "type": "object",
         "properties": {
@@ -10676,6 +11138,44 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "SslRenewalStatus": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "status",
+          "error",
+          "cert_expires_in_days",
+          "next_check"
+        ],
+        "properties": {
+          "cert_expires_in_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_check": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },

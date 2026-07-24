@@ -1,11 +1,14 @@
+use super::recovery::RecoverySeqWindow;
 use super::*;
-use publication::{
-    activate_publication, PublicationActivationInputs, PublicationArtifactPlan,
-    PublicationGenerationEvidence, PublicationPaths, PublicationPhase, PublicationTarget,
-    PublicationTransactionId, TantivyManagedInventory,
-};
+use crate::index::oplog::{read_committed_seq, write_committed_seq, OpLogEntry, OPLOG_DIR};
 #[cfg(test)]
 use publication::{activate_publication_for_test, PublicationFaultPoint};
+use publication::{
+    activate_publication_with_fence, invalid_publication, read_strict_committed_seq,
+    PublicationActivationInputs, PublicationArtifactPlan, PublicationFenceEvidence,
+    PublicationGenerationEvidence, PublicationPaths, PublicationPhase, PublicationStagingBaseline,
+    PublicationTarget, PublicationTransactionId, PublicationWatermark, TantivyManagedInventory,
+};
 
 #[derive(Clone, Copy)]
 enum PublicationArtifactMode {
@@ -103,6 +106,8 @@ impl super::IndexManager {
         self.settings_cache.remove(tenant_id);
         self.rules_cache.remove(tenant_id);
         self.synonyms_cache.remove(tenant_id);
+        #[cfg(feature = "vector-search")]
+        self.vector_indices.remove(tenant_id);
     }
 
     pub fn unload(&self, tenant_id: &TenantId) -> Result<()> {
@@ -128,8 +133,14 @@ impl super::IndexManager {
         self.invalidate_facet_cache(tenant_id);
         self.write_queues.remove(tenant_id);
 
-        if let Some((_, handle)) = self.write_task_handles.remove(tenant_id) {
-            let _ = handle.await;
+        if let Some(handle) = self
+            .write_task_handles
+            .get(tenant_id)
+            .map(|entry| entry.value().clone())
+        {
+            let _ = handle.drain(tenant_id.clone()).await;
+            self.write_task_handles
+                .remove_if(tenant_id, |_, current| current.same_handle(&handle));
         }
 
         self.admission_stores.remove(tenant_id);
@@ -242,6 +253,7 @@ impl super::IndexManager {
             destination,
             PublicationArtifactMode::MoveWithSource,
             None,
+            None,
         )
         .await
     }
@@ -255,14 +267,26 @@ impl super::IndexManager {
         &self,
         source: &str,
         destination: &str,
+        staging_baseline: PublicationStagingBaseline,
     ) -> Result<TaskInfo> {
         self.move_index_with_publication(
             source,
             destination,
             PublicationArtifactMode::PreserveDestination,
+            Some(staging_baseline),
             None,
         )
         .await
+    }
+
+    pub(crate) fn capture_replacement_staging_baseline(
+        &self,
+        destination: &str,
+    ) -> Result<PublicationStagingBaseline> {
+        validate_index_name(destination)?;
+        Ok(PublicationStagingBaseline::new(read_committed_seq(
+            &self.base_path.join(destination),
+        )))
     }
 
     #[cfg(test)]
@@ -276,6 +300,7 @@ impl super::IndexManager {
             source,
             destination,
             PublicationArtifactMode::MoveWithSource,
+            None,
             Some(fault),
         )
         .await
@@ -286,8 +311,9 @@ impl super::IndexManager {
         source: &str,
         destination: &str,
         artifact_mode: PublicationArtifactMode,
+        staging_baseline: Option<PublicationStagingBaseline>,
         #[cfg(test)] fault: Option<PublicationFaultPoint>,
-        #[cfg(not(test))] _fault: Option<()>,
+        #[cfg(not(test))] fault: Option<()>,
     ) -> Result<TaskInfo> {
         validate_index_name(source)?;
         validate_index_name(destination)?;
@@ -296,29 +322,34 @@ impl super::IndexManager {
             return self.make_noop_task(source);
         }
 
-        self.unload(&source.to_string())?;
-        self.unload(&destination.to_string())?;
-
         let target = PublicationTarget::new(destination)?;
+        let publication_epoch_fence =
+            self.advance_destination_publication_epoch(destination, &target)?;
+
+        self.unload(&source.to_string())?;
+        self.drain_target_write_queue(&destination.to_string())
+            .await?;
+        // After the target drain, no old-epoch mutation can still transition to
+        // succeeded. Stage 3 proves the strict `committed_seq = W` replacement
+        // contract against the quiesced destination and carries the resulting
+        // fence evidence into activation, all before any live-target mutation.
+        let fence_evidence = self.stage_replacement_fence_evidence(
+            source,
+            destination,
+            artifact_mode,
+            staging_baseline,
+            &publication_epoch_fence,
+        )?;
+        self.invalidate_facet_cache(destination);
+        self.clear_tenant_runtime_state(&destination.to_string());
+
         let operation_name = artifact_mode.operation_name();
         let transaction = PublicationTransactionId::new(format!(
             "{}_{}",
             operation_name,
             uuid::Uuid::new_v4().simple()
         ))?;
-        let paths = PublicationPaths::new(&self.base_path, &target, &transaction);
-        std::fs::create_dir_all(paths.staging.parent().ok_or_else(|| {
-            FlapjackError::InvalidQuery("publication staging path has no parent".into())
-        })?)?;
-        if paths.staging.exists() {
-            std::fs::remove_dir_all(&paths.staging)?;
-        }
-        copy_dir_recursive(&src_path, &paths.staging)?;
-
-        let inventory = TantivyManagedInventory::from_existing_trees([
-            paths.staging.as_path(),
-            paths.target.as_path(),
-        ])?;
+        let (paths, inventory) = self.stage_publication_tree(source, &target, &transaction)?;
         let artifacts = match artifact_mode {
             PublicationArtifactMode::MoveWithSource => Some(PublicationArtifactPlan::for_move(
                 &self.base_path,
@@ -343,45 +374,319 @@ impl super::IndexManager {
             .as_ref()
             .map(PublicationArtifactPlan::manifest)
             .unwrap_or_default();
-        #[cfg(test)]
-        if let Some(fault) = fault {
-            let journal = activate_publication_for_test(
-                PublicationActivationInputs {
-                    paths: &paths,
-                    target,
-                    transaction_id: transaction,
-                    generation,
-                    manifest,
-                    inventory: &inventory,
-                },
-                fault,
-            )?;
-            ensure_committed_move(&journal)?;
-            if fault == PublicationFaultPoint::BeforeSourceCleanup {
-                return Err(FlapjackError::InvalidQuery(
-                    "injected publication fault before source cleanup".into(),
-                ));
-            }
-            if let Some(artifacts) = &artifacts {
-                artifacts.remove_source()?;
-            }
-            std::fs::remove_dir_all(&src_path)?;
-            return self.make_noop_task(destination);
-        }
-        let journal = activate_publication(PublicationActivationInputs {
-            paths: &paths,
-            target,
-            transaction_id: transaction,
-            generation,
-            manifest,
-            inventory: &inventory,
-        })?;
+        let journal = self.activate_lifecycle_publication(
+            PublicationActivationInputs {
+                paths: &paths,
+                target,
+                transaction_id: transaction,
+                generation,
+                manifest,
+                inventory: &inventory,
+            },
+            fence_evidence,
+            fault,
+        )?;
         ensure_committed_move(&journal)?;
+        #[cfg(test)]
+        if fault == Some(PublicationFaultPoint::BeforeSourceCleanup) {
+            return Err(FlapjackError::InvalidQuery(
+                "injected publication fault before source cleanup".into(),
+            ));
+        }
         if let Some(artifacts) = &artifacts {
             artifacts.remove_source()?;
         }
         std::fs::remove_dir_all(&src_path)?;
+        drop(publication_epoch_fence);
         self.make_noop_task(destination)
+    }
+
+    fn activate_lifecycle_publication(
+        &self,
+        inputs: PublicationActivationInputs<'_>,
+        fence_evidence: Option<PublicationFenceEvidence>,
+        #[cfg(test)] fault: Option<PublicationFaultPoint>,
+        #[cfg(not(test))] _fault: Option<()>,
+    ) -> Result<publication::PublicationJournal> {
+        #[cfg(test)]
+        if let Some(fault) = fault {
+            // Fault injection is only wired for the move path, which carries no
+            // fence evidence; the replacement path never injects faults here.
+            debug_assert!(fence_evidence.is_none());
+            return activate_publication_for_test(inputs, fault);
+        }
+        activate_publication_with_fence(inputs, fence_evidence)
+    }
+
+    fn advance_destination_publication_epoch(
+        &self,
+        destination: &str,
+        target: &PublicationTarget,
+    ) -> Result<publication::PublicationEpochFence> {
+        let observed_epoch = publication::capture_publication_epoch(&self.base_path, target)
+            .map_err(|error| {
+                FlapjackError::Io(format!(
+                    "publication epoch capture failed for {destination}: {error:?}"
+                ))
+            })?;
+        publication::compare_and_advance_publication_epoch(&self.base_path, target, observed_epoch)
+            .map_err(|error| {
+                FlapjackError::Io(format!(
+                    "publication epoch advance failed for {destination}: {error}"
+                ))
+            })
+    }
+
+    fn stage_publication_tree(
+        &self,
+        source: &str,
+        target: &PublicationTarget,
+        transaction: &PublicationTransactionId,
+    ) -> Result<(PublicationPaths, TantivyManagedInventory)> {
+        let paths = PublicationPaths::new(&self.base_path, target, transaction);
+        std::fs::create_dir_all(paths.staging.parent().ok_or_else(|| {
+            FlapjackError::InvalidQuery("publication staging path has no parent".into())
+        })?)?;
+        if paths.staging.exists() {
+            std::fs::remove_dir_all(&paths.staging)?;
+        }
+        copy_dir_recursive(&self.base_path.join(source), &paths.staging)?;
+
+        let inventory = TantivyManagedInventory::from_existing_trees([
+            paths.staging.as_path(),
+            paths.target.as_path(),
+        ])?;
+        Ok((paths, inventory))
+    }
+
+    /// Prove and stage the strict replacement watermark contract for one
+    /// destination that has already been drained. Returns the fence evidence to
+    /// carry into activation: `None` for a plain move (no destination replay),
+    /// `Some` for a replacement that proved `committed_seq = W`.
+    fn stage_replacement_fence_evidence(
+        &self,
+        source: &str,
+        destination: &str,
+        artifact_mode: PublicationArtifactMode,
+        staging_baseline: Option<PublicationStagingBaseline>,
+        publication_epoch_fence: &publication::PublicationEpochFence,
+    ) -> Result<Option<PublicationFenceEvidence>> {
+        match (artifact_mode, staging_baseline) {
+            (PublicationArtifactMode::MoveWithSource, None) => Ok(None),
+            (PublicationArtifactMode::PreserveDestination, Some(staging_baseline)) => {
+                let watermark = self.stage_replacement_from_drained_destination(
+                    source,
+                    destination,
+                    staging_baseline,
+                )?;
+                let fence = PublicationFenceEvidence::new(
+                    publication_epoch_fence.previous(),
+                    publication_epoch_fence.advanced(),
+                    staging_baseline,
+                    PublicationWatermark::new(watermark),
+                )?;
+                Ok(Some(fence))
+            }
+            _ => Err(invalid_publication(
+                "replacement publication requires exactly one staging baseline",
+            )),
+        }
+    }
+
+    /// Prove `committed_seq = W` against the drained destination, replay the
+    /// acknowledged `(baseline, W]` delta into the staged tree, align the staged
+    /// oplog to the destination sequence domain, and strictly re-read the staged
+    /// evidence. Returns the proven watermark `W` on success; any missing,
+    /// malformed, non-contiguous, or mismatched evidence aborts before activation.
+    fn stage_replacement_from_drained_destination(
+        &self,
+        source: &str,
+        destination: &str,
+        staging_baseline: PublicationStagingBaseline,
+    ) -> Result<u64> {
+        let source_path = self.base_path.join(source);
+        let destination_path = self.base_path.join(destination);
+        let baseline = staging_baseline.value();
+
+        let watermark = self.prove_drained_destination_watermark(destination, &destination_path)?;
+        if baseline > watermark {
+            return Err(invalid_publication(format!(
+                "replacement staging baseline {baseline} exceeds drained watermark {watermark}"
+            )));
+        }
+
+        let delta = self
+            .get_or_create_oplog_result(destination)?
+            .read_since(baseline)?;
+        Self::require_contiguous_delta(&delta, baseline, watermark)?;
+
+        self.replay_delta_into_staged_tree(
+            source,
+            destination,
+            &source_path,
+            &delta,
+            baseline,
+            watermark,
+        )?;
+        self.align_staged_oplog_to_destination(source, &source_path, &destination_path, watermark)?;
+        self.verify_staged_watermark(source, &source_path, watermark)?;
+        Ok(watermark)
+    }
+
+    /// Define `W` as the drained destination oplog high-water mark and strictly
+    /// require the old generation's durable `committed_seq` sidecar to equal it.
+    /// The sidecar read is fail-closed (never the recovery fail-open reader), so a
+    /// missing, non-regular, malformed, or drifted value refuses the replacement.
+    fn prove_drained_destination_watermark(
+        &self,
+        destination: &str,
+        destination_path: &Path,
+    ) -> Result<u64> {
+        let watermark = self.get_or_create_oplog_result(destination)?.current_seq();
+        let durable = read_strict_committed_seq(destination_path).map_err(|error| {
+            invalid_publication(format!(
+                "drained destination committed_seq is not strict watermark proof: {error}"
+            ))
+        })?;
+        if durable != watermark {
+            return Err(invalid_publication(format!(
+                "drained destination committed_seq {durable} does not equal watermark {watermark}"
+            )));
+        }
+        Ok(watermark)
+    }
+
+    /// Require the retained destination delta to cover every sequence in
+    /// `(baseline, watermark]` exactly once, contiguously. A truncated or gapped
+    /// delta fails closed rather than certifying an incomplete prefix as `W`.
+    fn require_contiguous_delta(delta: &[OpLogEntry], baseline: u64, watermark: u64) -> Result<()> {
+        let expected_len = (watermark - baseline) as usize;
+        if delta.len() != expected_len {
+            return Err(invalid_publication(format!(
+                "retained destination delta covers {} entries but (baseline {baseline}, watermark {watermark}] requires {expected_len}",
+                delta.len()
+            )));
+        }
+        for (offset, entry) in delta.iter().enumerate() {
+            let expected_seq = baseline + 1 + offset as u64;
+            if entry.seq != expected_seq {
+                return Err(invalid_publication(format!(
+                    "retained destination delta is not contiguous: expected seq {expected_seq}, found {}",
+                    entry.seq
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Replay the acknowledged `(baseline, W]` document effects into the staged
+    /// Tantivy tree using the one recovery-owned replay path, so the staged
+    /// generation carries every drained write. Vector effects are rebuilt over the
+    /// staged history plus the delta when the feature is enabled.
+    fn replay_delta_into_staged_tree(
+        &self,
+        source: &str,
+        destination: &str,
+        source_path: &Path,
+        delta: &[OpLogEntry],
+        baseline: u64,
+        watermark: u64,
+    ) -> Result<()> {
+        let document_ops = delta
+            .iter()
+            .filter(|entry| Self::is_document_recovery_op(entry.op_type.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if document_ops.is_empty() {
+            return Ok(());
+        }
+        let source_index = self.open_tenant_index_without_write_queue(source_path)?;
+        let settings = self.load_settings_after_config(source, source_path)?;
+        self.replay_document_ops(
+            destination,
+            &source_index,
+            source_path,
+            &document_ops,
+            RecoverySeqWindow {
+                committed_seq: baseline,
+                final_seq: watermark,
+            },
+            settings.as_ref(),
+        )?;
+        #[cfg(feature = "vector-search")]
+        {
+            let staged_ops = self.get_or_create_oplog_result(source)?.read_since(0)?;
+            let combined = staged_ops
+                .into_iter()
+                .chain(delta.iter().cloned())
+                .collect::<Vec<_>>();
+            self.rebuild_vector_index(source, source_path, &combined);
+        }
+        Ok(())
+    }
+
+    /// Replace the staged oplog with the drained destination oplog so the staged
+    /// tree's high-water mark is exactly `W` in the destination sequence domain,
+    /// then persist staged `committed_seq = W`. This is why `W` cannot be certified
+    /// by overwriting the sidecar on an independently numbered staged oplog.
+    fn align_staged_oplog_to_destination(
+        &self,
+        source: &str,
+        source_path: &Path,
+        destination_path: &Path,
+        watermark: u64,
+    ) -> Result<()> {
+        self.oplogs.remove(source);
+        let staged_oplog_dir = source_path.join(OPLOG_DIR);
+        if staged_oplog_dir.exists() {
+            std::fs::remove_dir_all(&staged_oplog_dir)?;
+        }
+        copy_dir_recursive(&destination_path.join(OPLOG_DIR), &staged_oplog_dir)?;
+        write_committed_seq(source_path, watermark)?;
+        Ok(())
+    }
+
+    /// Strictly re-read the staged evidence and require both the durable
+    /// `committed_seq` sidecar and the staged oplog maximum to equal `W`. Evicts
+    /// the replay/alignment-opened staged oplog handle so a reused staging tenant
+    /// reopens from the promoted-domain files.
+    fn verify_staged_watermark(
+        &self,
+        source: &str,
+        source_path: &Path,
+        watermark: u64,
+    ) -> Result<()> {
+        let staged_committed = read_strict_committed_seq(source_path)?;
+        if staged_committed != watermark {
+            self.oplogs.remove(source);
+            return Err(invalid_publication(format!(
+                "staged committed_seq {staged_committed} does not equal watermark {watermark}"
+            )));
+        }
+        let staged_current = self.get_or_create_oplog_result(source)?.current_seq();
+        self.oplogs.remove(source);
+        if staged_current != watermark {
+            return Err(invalid_publication(format!(
+                "staged oplog maximum {staged_current} does not equal watermark {watermark}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn open_tenant_index_without_write_queue(&self, path: &Path) -> Result<Arc<Index>> {
+        let index_languages = Self::read_index_languages(path);
+        let indexed_separators = Self::read_indexed_separators(path);
+        let keep_diacritics_on_characters = Self::read_keep_diacritics_on_characters(path);
+        let custom_normalization = Self::read_custom_normalization(path);
+        Index::open_with_languages_indexed_separators_and_keep_diacritics(
+            path,
+            crate::index::get_global_budget(),
+            &index_languages,
+            &indexed_separators,
+            &keep_diacritics_on_characters,
+            &custom_normalization,
+        )
+        .map(Arc::new)
     }
 
     /// Copy an index from source to destination, optionally filtering to specific configuration files.
@@ -453,46 +758,40 @@ impl super::IndexManager {
     /// Drops all write queue senders (triggering final batch flush in each
     /// write task), then awaits every write task handle to completion.
     pub async fn graceful_shutdown(&self) {
-        // Drop all senders — receivers will get None and flush pending ops
-        self.write_queues.clear();
-
-        // Drain and await all write task handles
         let handles: Vec<_> = self
             .write_task_handles
             .iter()
             .map(|r| r.key().clone())
             .collect();
         for tenant_id in handles {
-            if let Some((_, handle)) = self.write_task_handles.remove(&tenant_id) {
-                Self::log_write_queue_shutdown_outcome(&tenant_id, handle.await);
-            }
-        }
-    }
-
-    /// Log the result of a write-queue task shutdown: success, application error,
-    /// or task panic.
-    fn log_write_queue_shutdown_outcome(
-        tenant_id: &str,
-        shutdown_result: std::result::Result<Result<()>, tokio::task::JoinError>,
-    ) {
-        match shutdown_result {
-            Ok(Ok(())) => {
-                tracing::info!("[shutdown] Write queue for '{}' drained", tenant_id);
-            }
-            Ok(Err(error)) => {
+            if let Err(error) = self.drain_target_write_queue(&tenant_id).await {
                 tracing::error!(
-                    "[shutdown] Write queue for '{}' exited with error: {}",
+                    "[shutdown] Write queue for '{}' failed: {}",
                     tenant_id,
                     error
                 );
             }
-            Err(join_error) => {
-                tracing::error!(
-                    "[shutdown] Write queue task for '{}' panicked: {}",
-                    tenant_id,
-                    join_error
-                );
+        }
+    }
+
+    async fn drain_target_write_queue(&self, tenant_id: &TenantId) -> Result<()> {
+        drop(self.write_queues.remove(tenant_id));
+        let Some(handle) = self
+            .write_task_handles
+            .get(tenant_id)
+            .map(|entry| entry.value().clone())
+        else {
+            return Ok(());
+        };
+
+        match handle.drain(tenant_id.clone()).await {
+            Ok(()) => {
+                tracing::info!("[shutdown] Write queue for '{}' drained", tenant_id);
+                self.write_task_handles
+                    .remove_if(tenant_id, |_, current| current.same_handle(&handle));
+                Ok(())
             }
+            Err(error) => Err(error),
         }
     }
 }
