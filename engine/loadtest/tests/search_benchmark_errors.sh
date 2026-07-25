@@ -127,6 +127,7 @@ run_main_with_fixture() {
   SEARCH_FIXTURE_INDEXES_FILE="$indexes_json_file" bash -lc '
     source "$1"
     LOADTEST_HELPERS="$2"
+    RESULTS_BASE_DIR="$(dirname "$1")/results"
     fixture_mode="$3"
 
     if [[ "$fixture_mode" == "bad-json" ]]; then
