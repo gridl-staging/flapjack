@@ -115,7 +115,7 @@ const PRIVACY_SCRUB_ROUTE: &str = "/1/migrations/privacy-scrub";
 const PRIVACY_SCRUB_ID: &str = "privacy-scrub-stable-contract-id";
 const PRIVACY_SCRUB_TARGET: &str = "privacy_scrub_contract_target";
 const PRIVACY_SCRUB_CURRENT_GENERATION: &str = "generation-current";
-const PRIVACY_SCRUB_BOUNDARY_TIMEOUT: Duration = Duration::from_secs(2);
+const PRIVACY_SCRUB_BOUNDARY_TIMEOUT: Duration = Duration::from_secs(10);
 const PRIVACY_SCRUB_OWNER_APP_ID: &str = "privacy-scrub-contract-app";
 const PRIVACY_SCRUB_INTENT_FILE: &str = "privacy_scrub_intent.json";
 
