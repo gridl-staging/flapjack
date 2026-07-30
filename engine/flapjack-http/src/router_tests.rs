@@ -378,6 +378,28 @@ async fn assert_source_migration_alias_admin_contract(
     assert_migration_job_not_found_response(get_request(app, &job_path, Some("admin-key")).await)
         .await;
 
+    assert_migration_job_action_contract(app, &job_path, non_admin_keys).await;
+
+    if source_provider != AsyncMigrationSourceProvider::Algolia {
+        let recognized_provider =
+            post_json(app, &submit_path, Some("admin-key"), submit_payload).await;
+        assert_eq!(recognized_provider.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(recognized_provider).await,
+            serde_json::json!({
+                "message": "Source provider is not supported",
+                "status": 400,
+                "code": "source_provider_unsupported"
+            })
+        );
+    }
+}
+
+async fn assert_migration_job_action_contract(
+    app: &axum::Router,
+    job_path: &str,
+    non_admin_keys: [&str; 2],
+) {
     for action in ["cancel", "acknowledge"] {
         let action_path = format!("{job_path}/{action}");
         assert_invalid_credentials_response(
@@ -394,20 +416,6 @@ async fn assert_source_migration_alias_admin_contract(
             post_json(app, &action_path, Some("admin-key"), serde_json::json!({})).await,
         )
         .await;
-    }
-
-    if source_provider != AsyncMigrationSourceProvider::Algolia {
-        let recognized_provider =
-            post_json(app, &submit_path, Some("admin-key"), submit_payload).await;
-        assert_eq!(recognized_provider.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            body_json(recognized_provider).await,
-            serde_json::json!({
-                "message": "Source provider is not supported",
-                "status": 400,
-                "code": "source_provider_unsupported"
-            })
-        );
     }
 }
 
@@ -866,7 +874,7 @@ async fn cancelled_build_removes_only_its_own_staging_generation_after_saving_it
         &app,
         "/1/migrations/bulk-replace?indexName=cancelled_bulk_replace",
         Some("admin-key"),
-        &payload,
+        payload,
     )
     .await;
     assert_eq!(cancelled_submit.status(), StatusCode::ACCEPTED);
@@ -881,7 +889,7 @@ async fn cancelled_build_removes_only_its_own_staging_generation_after_saving_it
         &app,
         "/1/migrations/bulk-replace?indexName=surviving_bulk_replace",
         Some("admin-key"),
-        &payload,
+        payload,
     )
     .await;
     assert_eq!(surviving_submit.status(), StatusCode::ACCEPTED);
