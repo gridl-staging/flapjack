@@ -6,6 +6,10 @@ fn record_stage_6_observation(
     backpressure::record_observation_result_for_test(tmp.path(), tenant_id, result).unwrap();
 }
 
+fn force_stage_6_backpressure_pause(tmp: &tempfile::TempDir, tenant_id: &str) {
+    backpressure::force_backpressure_pause_for_test(tmp.path(), tenant_id).unwrap();
+}
+
 fn assert_stage_6_backpressure_error(result: crate::error::Result<TaskInfo>) {
     match result {
         Err(FlapjackError::IndexPaused(message)) => {
@@ -15,6 +19,18 @@ fn assert_stage_6_backpressure_error(result: crate::error::Result<TaskInfo>) {
             );
         }
         other => panic!("expected backpressure IndexPaused, got {other:?}"),
+    }
+}
+
+fn assert_stage_6_io_error(result: crate::error::Result<TaskInfo>) {
+    match result {
+        Err(FlapjackError::Io(message)) => {
+            assert!(
+                !message.is_empty(),
+                "I/O failures should preserve the underlying filesystem detail"
+            );
+        }
+        other => panic!("expected I/O failure, got {other:?}"),
     }
 }
 
@@ -172,7 +188,7 @@ fn failed_test_pause_setup_clears_in_memory_state() {
 
     assert!(result.is_err(), "artifact persistence must fail");
     assert!(
-        backpressure::ensure_bulk_admission_allowed(tmp.path(), tenant_id).is_ok(),
+        !backpressure::tenant_is_paused_for_test(tmp.path(), tenant_id),
         "failed setup must not leave a pause without a cleanup guard"
     );
 }
@@ -274,6 +290,58 @@ async fn read_count_stays_live_while_backpressure_pause_and_commit_overlap() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn forced_backpressure_pause_blocks_first_durable_insert_then_recovers() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_id = "forced_pause_blocks_durable_insert";
+    let manager = crate::index::manager::IndexManager::new(tmp.path());
+    manager.create_tenant(tenant_id).unwrap();
+    backpressure::clear_for_test(tmp.path(), tenant_id);
+
+    crate::index::write_queue::force_backpressure_pause_for_test(tmp.path(), tenant_id).unwrap();
+
+    assert_stage_6_backpressure_error(
+        manager
+            .add_documents_insert_durable(
+                tenant_id,
+                vec![text_document(
+                    "blocked_insert",
+                    "title",
+                    "forced pause blocked insert",
+                )],
+            )
+            .await,
+    );
+    assert!(
+        manager.tenant_tasks_snapshot_for_test(tenant_id).is_empty(),
+        "paused durable insert must not allocate task records"
+    );
+    assert!(
+        !tmp.path()
+            .join(tenant_id)
+            .join(admission::WRITE_ADMISSION_DIR)
+            .exists(),
+        "paused durable insert must not append durable admission records"
+    );
+
+    manager
+        .add_documents_insert_durable(
+            tenant_id,
+            vec![text_document(
+                "retry_insert",
+                "title",
+                "forced pause retry accepted",
+            )],
+        )
+        .await
+        .unwrap();
+    assert_eq!(manager.tenant_doc_count(tenant_id), Some(1));
+    assert!(
+        manager.get_document(tenant_id, "retry_insert").unwrap().is_some(),
+        "subsequent retry should write through normal durable admission"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn bulk_admission_pauses_when_segment_ceiling_persists_without_improvement() {
     let tmp = tempfile::TempDir::new().unwrap();
     let tenant_id = "stage6_pauses_persistent_ceiling";
@@ -292,6 +360,7 @@ async fn bulk_admission_pauses_when_segment_ceiling_persists_without_improvement
             )),
         );
     }
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause");
 
     assert_stage_6_backpressure_error(
         manager
@@ -312,7 +381,6 @@ async fn bulk_admission_pauses_when_segment_ceiling_persists_without_improvement
             .exists(),
         "paused durable admission must not append durable admission records"
     );
-    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -324,9 +392,9 @@ async fn backpressure_does_not_fire_while_state_is_improving() {
     backpressure::clear_for_test(tmp.path(), tenant_id);
 
     for (segments, bytes) in [
-        (SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 4, 12_000),
+        (SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 4, 10_000),
         (SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 3, 11_000),
-        (SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2, 10_000),
+        (SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2, 12_000),
     ] {
         record_stage_6_observation(
             &tmp,
@@ -336,6 +404,10 @@ async fn backpressure_does_not_fire_while_state_is_improving() {
             )),
         );
     }
+    assert!(
+        !backpressure::pause_artifact_path(tmp.path(), tenant_id).exists(),
+        "decreasing live-segment counts are improving even while index bytes grow"
+    );
 
     manager
         .add_documents_durable(
@@ -375,6 +447,7 @@ async fn reads_stay_live_while_bulk_admission_is_paused() {
             )),
         );
     }
+    assert_stage_6_pause_artifact(&tmp, &tenant_id, "pause");
 
     assert_stage_6_backpressure_error(manager.add_documents(
         &tenant_id,
@@ -405,6 +478,7 @@ async fn indeterminate_observation_pauses_bulk_admission() {
         tenant_id,
         Err(FlapjackError::Io("segment metadata unreadable".to_string())),
     );
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause_indeterminate");
 
     assert_stage_6_backpressure_error(manager.add_documents(
         tenant_id,
@@ -418,7 +492,6 @@ async fn indeterminate_observation_pauses_bulk_admission() {
         manager.tenant_tasks_snapshot_for_test(tenant_id).is_empty(),
         "indeterminate pause must not allocate task records"
     );
-    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause_indeterminate");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -440,11 +513,16 @@ async fn backpressure_clears_when_segment_count_recovers_below_selected_band() {
             )),
         );
     }
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause");
+
     assert_stage_6_backpressure_error(manager.add_documents(
         tenant_id,
-        vec![text_document("blocked_doc", "title", "blocked before recovery")],
+        vec![text_document(
+            "blocked_doc",
+            "title",
+            "blocked before recovery",
+        )],
     ));
-
     record_stage_6_observation(
         &tmp,
         tenant_id,
@@ -454,6 +532,7 @@ async fn backpressure_clears_when_segment_count_recovers_below_selected_band() {
             0,
         )),
     );
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "admit");
 
     manager
         .add_documents(
@@ -465,7 +544,205 @@ async fn backpressure_clears_when_segment_count_recovers_below_selected_band() {
             )],
         )
         .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn backpressure_clears_when_segment_growth_stops_above_selected_ceiling() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_id = "stage6_stable_plateau_above_ceiling";
+    let manager = crate::index::manager::IndexManager::new(tmp.path());
+    manager.create_tenant(tenant_id).unwrap();
+    backpressure::clear_for_test(tmp.path(), tenant_id);
+
+    for bytes in [10_000, 10_500, 11_000] {
+        record_stage_6_observation(
+            &tmp,
+            tenant_id,
+            Ok(backpressure::segment_observation_for_test(
+                SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 3,
+                bytes,
+                1,
+            )),
+        );
+    }
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause");
+
+    assert_stage_6_backpressure_error(manager.add_documents(
+        tenant_id,
+        vec![text_document(
+            "blocked_doc",
+            "title",
+            "blocked before plateau recovery",
+        )],
+    ));
+    record_stage_6_observation(
+        &tmp,
+        tenant_id,
+        Ok(backpressure::segment_observation_for_test(
+            SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 3,
+            12_000,
+            1,
+        )),
+    );
     assert_stage_6_pause_artifact(&tmp, tenant_id, "admit");
+
+    manager
+        .add_documents(
+            tenant_id,
+            vec![text_document(
+                "accepted_doc",
+                "title",
+                "accepted after segment growth stops",
+            )],
+        )
+        .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn backpressure_stays_active_when_segments_rise_to_paused_window_peak() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_id = "stage6_segments_rise_to_paused_peak";
+    let manager = crate::index::manager::IndexManager::new(tmp.path());
+    manager.create_tenant(tenant_id).unwrap();
+    backpressure::clear_for_test(tmp.path(), tenant_id);
+
+    for (segments, bytes) in [
+        (SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 5, 10_000),
+        (SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 3, 10_500),
+        (SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 4, 11_000),
+    ] {
+        record_stage_6_observation(
+            &tmp,
+            tenant_id,
+            Ok(backpressure::segment_observation_for_test(
+                segments, bytes, 1,
+            )),
+        );
+    }
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause");
+
+    assert_stage_6_backpressure_error(manager.add_documents(
+        tenant_id,
+        vec![text_document(
+            "blocked_doc",
+            "title",
+            "blocked before renewed segment growth",
+        )],
+    ));
+    record_stage_6_observation(
+        &tmp,
+        tenant_id,
+        Ok(backpressure::segment_observation_for_test(
+            SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 5,
+            12_000,
+            1,
+        )),
+    );
+
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn paused_bulk_admission_resamples_loaded_index_and_recovers() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_id = "stage6_paused_admission_resamples_loaded_index";
+    let manager = crate::index::manager::IndexManager::new(tmp.path());
+    manager.create_tenant(tenant_id).unwrap();
+    backpressure::clear_for_test(tmp.path(), tenant_id);
+
+    for bytes in [10_000, 10_500, 11_000] {
+        record_stage_6_observation(
+            &tmp,
+            tenant_id,
+            Ok(backpressure::segment_observation_for_test(
+                SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2,
+                bytes,
+                0,
+            )),
+        );
+    }
+
+    assert_stage_6_backpressure_error(
+        manager
+            .add_documents_insert_durable(
+                tenant_id,
+                vec![text_document(
+                    "blocked_doc",
+                    "title",
+                    "blocked before admission resample",
+                )],
+            )
+            .await,
+    );
+    manager
+        .add_documents_insert_durable(
+            tenant_id,
+            vec![text_document(
+                "accepted_doc",
+                "title",
+                "accepted after admission resample",
+            )],
+        )
+        .await
+        .unwrap();
+    assert_eq!(manager.tenant_doc_count(tenant_id), Some(1));
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "admit");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn paused_bulk_admission_propagates_resample_artifact_write_failures() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_id = "stage6_resample_artifact_write_failure";
+    let manager = crate::index::manager::IndexManager::new(tmp.path());
+    manager.create_tenant(tenant_id).unwrap();
+    backpressure::clear_for_test(tmp.path(), tenant_id);
+
+    for bytes in [10_000, 10_500, 11_000] {
+        record_stage_6_observation(
+            &tmp,
+            tenant_id,
+            Ok(backpressure::segment_observation_for_test(
+                SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2,
+                bytes,
+                0,
+            )),
+        );
+    }
+
+    assert_stage_6_backpressure_error(
+        manager
+            .add_documents_insert_durable(
+                tenant_id,
+                vec![text_document(
+                    "blocked_doc",
+                    "title",
+                    "blocked before artifact write failure",
+                )],
+            )
+            .await,
+    );
+
+    let artifact_path = backpressure::pause_artifact_path(tmp.path(), tenant_id);
+    let mut permissions = std::fs::metadata(&artifact_path).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&artifact_path, permissions).unwrap();
+
+    assert_stage_6_io_error(
+        manager
+            .add_documents_insert_durable(
+                tenant_id,
+                vec![text_document(
+                    "io_failure_doc",
+                    "title",
+                    "artifact write failure should surface",
+                )],
+            )
+            .await,
+    );
+    assert!(
+        manager.tenant_tasks_snapshot_for_test(tenant_id).is_empty(),
+        "failed resample writes must not allocate task records"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -487,10 +764,7 @@ async fn deleting_tenant_removes_stale_backpressure_state() {
             )),
         );
     }
-    assert_stage_6_backpressure_error(manager.add_documents(
-        tenant_id,
-        vec![text_document("blocked_doc", "title", "blocked before delete")],
-    ));
+    assert_stage_6_pause_artifact(&tmp, tenant_id, "pause");
 
     manager.delete_tenant(&tenant_id.to_string()).await.unwrap();
     manager.create_tenant(tenant_id).unwrap();
@@ -513,26 +787,18 @@ async fn backpressure_pauses_every_write_queue_entrypoint_before_task_allocation
     let manager = crate::index::manager::IndexManager::new(tmp.path());
     manager.create_tenant(tenant_id).unwrap();
     backpressure::clear_for_test(tmp.path(), tenant_id);
-    for bytes in [30_000, 30_000, 30_000] {
-        record_stage_6_observation(
-            &tmp,
-            tenant_id,
-            Ok(backpressure::segment_observation_for_test(
-                SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2,
-                bytes,
-                0,
-            )),
-        );
-    }
 
+    force_stage_6_backpressure_pause(&tmp, tenant_id);
     assert_stage_6_backpressure_error(manager.add_documents(
         tenant_id,
         vec![text_document("upsert_doc", "title", "stage6 upsert")],
     ));
+    force_stage_6_backpressure_pause(&tmp, tenant_id);
     assert_stage_6_backpressure_error(manager.add_documents_insert(
         tenant_id,
         vec![text_document("insert_doc", "title", "stage6 insert")],
     ));
+    force_stage_6_backpressure_pause(&tmp, tenant_id);
     assert_stage_6_backpressure_error(manager.add_documents_for_replication(
         tenant_id,
         vec![text_document(
@@ -541,13 +807,17 @@ async fn backpressure_pauses_every_write_queue_entrypoint_before_task_allocation
             "stage6 replicated add",
         )],
     ));
+    force_stage_6_backpressure_pause(&tmp, tenant_id);
     assert_stage_6_backpressure_error(
         manager.delete_documents(tenant_id, vec!["upsert_doc".to_string()]),
     );
+    force_stage_6_backpressure_pause(&tmp, tenant_id);
     assert_stage_6_backpressure_error(
         manager.delete_documents_for_replication(tenant_id, vec!["replicated_doc".to_string()]),
     );
+    force_stage_6_backpressure_pause(&tmp, tenant_id);
     assert_stage_6_backpressure_error(manager.compact_index(tenant_id));
+    force_stage_6_backpressure_pause(&tmp, tenant_id);
     assert_stage_6_backpressure_error(
         manager
             .add_documents_durable(
@@ -556,6 +826,7 @@ async fn backpressure_pauses_every_write_queue_entrypoint_before_task_allocation
             )
             .await,
     );
+    force_stage_6_backpressure_pause(&tmp, tenant_id);
     assert_stage_6_backpressure_error(
         manager
             .delete_documents_durable(tenant_id, vec!["durable_doc".to_string()])
