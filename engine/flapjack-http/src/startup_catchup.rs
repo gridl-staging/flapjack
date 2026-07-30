@@ -878,6 +878,7 @@ mod tests {
             )
             .await
             .unwrap();
+        source_manager.graceful_shutdown().await;
         let snapshot_bytes = export_to_bytes(&source_manager.base_path.join(tenant_id)).unwrap();
 
         let destination_tmp = TempDir::new().unwrap();

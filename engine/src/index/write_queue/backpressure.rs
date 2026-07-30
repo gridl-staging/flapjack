@@ -377,6 +377,90 @@ fn current_time_ms() -> u64 {
         .as_millis() as u64
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn segment_observation_for_test(
+    live_segment_count: usize,
+    index_bytes: u64,
+    orphan_file_set_count: usize,
+) -> super::segment_observation::SegmentObservation {
+    let live_segment_ids = (0..live_segment_count)
+        .map(|index| format!("{index:032x}"))
+        .collect::<std::collections::BTreeSet<_>>();
+    let per_segment_doc_counts = live_segment_ids
+        .iter()
+        .map(|segment_id| (segment_id.clone(), 1))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let orphan_file_set_ids = (0..orphan_file_set_count)
+        .map(|index| format!("{:032x}", index + 10_000))
+        .collect::<std::collections::BTreeSet<_>>();
+
+    super::segment_observation::SegmentObservation {
+        live_segment_count,
+        live_segment_ids,
+        live_docs: live_segment_count as u64,
+        per_segment_doc_counts,
+        managed_index_file_count: live_segment_count as u64,
+        index_bytes,
+        orphan_file_set_ids,
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) struct TestBackpressurePauseGuard {
+    base_path: PathBuf,
+    tenant_id: String,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for TestBackpressurePauseGuard {
+    fn drop(&mut self) {
+        clear_for_test(&self.base_path, &self.tenant_id);
+    }
+}
+
+/// Hold the production write-backpressure state using the same bounded,
+/// non-improving observation rule as the live sampler.
+///
+/// Existing test state is cleared first so the synthetic observation window is
+/// deterministic. Any setup error drops the guard and clears partial state.
+///
+/// HTTP integration tests cannot manufacture `SegmentObservation` because its
+/// fields are intentionally crate-private. Keeping the fixture here makes the
+/// backpressure owner the single source of truth for how a deterministic pause
+/// is established and cleared.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn hold_non_improving_pause_for_test(
+    base_path: &Path,
+    tenant_id: &str,
+) -> crate::error::Result<TestBackpressurePauseGuard> {
+    clear_for_test(base_path, tenant_id);
+    let pause_guard = TestBackpressurePauseGuard {
+        base_path: base_path.to_path_buf(),
+        tenant_id: tenant_id.to_string(),
+    };
+    let live_segment_count = super::SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2;
+
+    for _ in 0..BACKPRESSURE_WINDOW_SIZE {
+        record_observation_result(
+            base_path,
+            tenant_id,
+            Ok(segment_observation_for_test(live_segment_count, 40_000, 0)),
+        )?;
+    }
+
+    match ensure_bulk_admission_allowed(base_path, tenant_id) {
+        Err(FlapjackError::IndexPaused(_)) => {}
+        Ok(()) => {
+            return Err(FlapjackError::Tantivy(
+                "test-support observations did not establish write backpressure".to_string(),
+            ));
+        }
+        Err(error) => return Err(error),
+    }
+
+    Ok(pause_guard)
+}
+
 #[cfg(test)]
 pub(crate) fn record_observation_result_for_test(
     base_path: &Path,
@@ -386,7 +470,7 @@ pub(crate) fn record_observation_result_for_test(
     record_observation_result(base_path, tenant_id, result)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn clear_for_test(base_path: &Path, tenant_id: &str) {
     remove_tenant_state(base_path, tenant_id);
     let _ = std::fs::remove_file(pause_artifact_path(base_path, tenant_id));

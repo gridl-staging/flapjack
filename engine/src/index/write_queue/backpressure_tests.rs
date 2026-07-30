@@ -1,30 +1,3 @@
-fn stage_6_segment_observation(
-    live_segment_count: usize,
-    index_bytes: u64,
-    orphan_file_set_count: usize,
-) -> segment_observation::SegmentObservation {
-    let live_segment_ids = (0..live_segment_count)
-        .map(|index| format!("{index:032x}"))
-        .collect::<BTreeSet<_>>();
-    let per_segment_doc_counts = live_segment_ids
-        .iter()
-        .map(|segment_id| (segment_id.clone(), 1))
-        .collect::<BTreeMap<_, _>>();
-    let orphan_file_set_ids = (0..orphan_file_set_count)
-        .map(|index| format!("{:032x}", index + 10_000))
-        .collect::<BTreeSet<_>>();
-
-    segment_observation::SegmentObservation {
-        live_segment_count,
-        live_segment_ids,
-        live_docs: live_segment_count as u64,
-        per_segment_doc_counts,
-        managed_index_file_count: live_segment_count as u64,
-        index_bytes,
-        orphan_file_set_ids,
-    }
-}
-
 fn record_stage_6_observation(
     tmp: &tempfile::TempDir,
     tenant_id: &str,
@@ -60,6 +33,246 @@ fn assert_stage_6_pause_artifact(tmp: &tempfile::TempDir, tenant_id: &str, decis
     );
 }
 
+fn sorted_stage_1_latencies(samples: &[(u64, std::time::Duration)]) -> Vec<std::time::Duration> {
+    let mut latencies = samples
+        .iter()
+        .map(|(_, latency)| *latency)
+        .collect::<Vec<_>>();
+    latencies.sort_unstable();
+    latencies
+}
+
+fn stage_1_latency_ms(latencies: &[std::time::Duration]) -> Vec<u128> {
+    latencies
+        .iter()
+        .map(std::time::Duration::as_millis)
+        .collect()
+}
+
+fn stage_1_p99(latencies: &[std::time::Duration]) -> std::time::Duration {
+    let rank = (99 * latencies.len()).div_ceil(100);
+    latencies[rank - 1]
+}
+
+const STAGE_1_COUNT_STALL_RED_THRESHOLD: std::time::Duration =
+    std::time::Duration::from_millis(1_000);
+
+fn stage_1_count_stall_detected(count_max: std::time::Duration) -> bool {
+    count_max > STAGE_1_COUNT_STALL_RED_THRESHOLD
+}
+
+fn sample_counts_until_task_terminal(
+    sample_interval: std::time::Duration,
+    mut task_is_terminal: impl FnMut() -> bool,
+    mut read_count: impl FnMut() -> u64,
+) -> Vec<(u64, std::time::Duration)> {
+    let mut samples = Vec::new();
+    while !task_is_terminal() {
+        let count_started = std::time::Instant::now();
+        let count = read_count();
+        samples.push((count, count_started.elapsed()));
+        std::thread::sleep(sample_interval);
+    }
+    samples
+}
+
+async fn wait_for_stage_1_task_processing(
+    manager: &crate::index::manager::IndexManager,
+    task_id: &str,
+) {
+    let processing_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let task = manager.get_task(task_id).unwrap();
+        if matches!(task.status, crate::types::TaskStatus::Processing) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < processing_deadline,
+            "delayed write never entered processing; task={task:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+fn hold_stage_1_backpressure_pause(
+    tmp: &tempfile::TempDir,
+    tenant_id: &str,
+    manager: &crate::index::manager::IndexManager,
+) -> impl Drop {
+    let pause_guard =
+        backpressure::hold_non_improving_pause_for_test(tmp.path(), tenant_id).unwrap();
+    assert_stage_6_backpressure_error(manager.add_documents(
+        tenant_id,
+        vec![text_document("paused_doc", "title", "stage1 paused")],
+    ));
+    pause_guard
+}
+
+fn assert_stage_1_count_samples(
+    manager: &crate::index::manager::IndexManager,
+    tenant_id: &str,
+    count_samples: &[(u64, std::time::Duration)],
+    overlap_elapsed: std::time::Duration,
+) {
+    assert!(
+        count_samples.len() >= 25,
+        "overlap sample denominator too small: count_samples={} overlap_ms={}",
+        count_samples.len(),
+        overlap_elapsed.as_millis()
+    );
+    assert_eq!(
+        manager.tenant_doc_count(tenant_id),
+        Some(2),
+        "delayed write must publish after the measured overlap"
+    );
+    assert!(
+        count_samples.iter().any(|(count, _)| *count == 1),
+        "overlap count samples must include the pre-existing published reader state: {count_samples:?}"
+    );
+    assert!(
+        count_samples.iter().all(|(count, _)| *count == 1 || *count == 2),
+        "count samples must be either the pre-existing reader state or the final published state at the terminal boundary: {count_samples:?}"
+    );
+}
+
+#[test]
+fn count_sampler_keeps_read_that_started_before_task_became_terminal() {
+    let task_is_terminal = std::cell::Cell::new(false);
+
+    let samples = sample_counts_until_task_terminal(
+        std::time::Duration::ZERO,
+        || task_is_terminal.get(),
+        || {
+            task_is_terminal.set(true);
+            2
+        },
+    );
+
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].0, 2);
+}
+
+#[test]
+fn count_stall_threshold_only_fires_above_one_second() {
+    assert!(!stage_1_count_stall_detected(
+        STAGE_1_COUNT_STALL_RED_THRESHOLD
+    ));
+    assert!(stage_1_count_stall_detected(
+        STAGE_1_COUNT_STALL_RED_THRESHOLD + std::time::Duration::from_millis(1)
+    ));
+}
+
+#[test]
+fn failed_test_pause_setup_clears_in_memory_state() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_id = "failed_test_pause_setup";
+    std::fs::write(tmp.path().join(tenant_id), b"blocks artifact directory").unwrap();
+
+    let result = backpressure::hold_non_improving_pause_for_test(tmp.path(), tenant_id);
+
+    assert!(result.is_err(), "artifact persistence must fail");
+    assert!(
+        backpressure::ensure_bulk_admission_allowed(tmp.path(), tenant_id).is_ok(),
+        "failed setup must not leave a pause without a cleanup guard"
+    );
+}
+
+#[test]
+fn stage_1_p99_uses_nearest_rank() {
+    let latencies = (1..=100)
+        .map(std::time::Duration::from_millis)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        stage_1_p99(&latencies),
+        std::time::Duration::from_millis(99)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_count_stays_live_while_backpressure_pause_and_commit_overlap() {
+    const COMMIT_DELAY: std::time::Duration = std::time::Duration::from_millis(1_500);
+    const SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tenant_id = "stage1_pause_commit_count_live";
+    let manager = crate::index::manager::IndexManager::new(tmp.path());
+    manager.create_tenant(tenant_id).unwrap();
+    manager
+        .add_documents_durable(
+            tenant_id,
+            vec![text_document("seed_doc", "title", "stage1 seed")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(manager.tenant_doc_count(tenant_id), Some(1));
+
+    let _delay = delay_commits_for_test(tenant_id, COMMIT_DELAY);
+    let delayed_task = manager
+        .add_documents(
+            tenant_id,
+            vec![text_document(
+                "delayed_doc",
+                "title",
+                "stage1 delayed commit",
+            )],
+        )
+        .expect("delayed write must be admitted before pause is held");
+
+    wait_for_stage_1_task_processing(&manager, &delayed_task.id).await;
+    let _pause_guard = hold_stage_1_backpressure_pause(&tmp, tenant_id, &manager);
+
+    let overlap_started = std::time::Instant::now();
+    let sampler = std::thread::spawn({
+        let manager = Arc::clone(&manager);
+        let delayed_task_id = delayed_task.id.clone();
+        move || {
+            sample_counts_until_task_terminal(
+                SAMPLE_INTERVAL,
+                || {
+                    matches!(
+                        manager.get_task(&delayed_task_id).unwrap().status,
+                        crate::types::TaskStatus::Succeeded | crate::types::TaskStatus::Failed(_)
+                    )
+                },
+                || {
+                    manager
+                        .tenant_doc_count(tenant_id)
+                        .expect("count tenant must remain loaded during overlap")
+                },
+            )
+        }
+    });
+
+    manager
+        .wait_for_write_durable(&delayed_task.id)
+        .await
+        .unwrap();
+    let overlap_elapsed = overlap_started.elapsed();
+    let count_samples = sampler.join().unwrap();
+
+    assert_stage_1_count_samples(&manager, tenant_id, &count_samples, overlap_elapsed);
+
+    let count_latencies = sorted_stage_1_latencies(&count_samples);
+    let count_p99 = stage_1_p99(&count_latencies);
+    let count_max = *count_latencies.last().unwrap();
+    let count_stall_detected = stage_1_count_stall_detected(count_max);
+    eprintln!(
+        "Stage 1 pause+commit count characterization: overlap_samples={} overlap_ms={} count={:?} count_p99_ms={} count_max_ms={} count_stall_detected={}",
+        count_samples.len(),
+        overlap_elapsed.as_millis(),
+        stage_1_latency_ms(&count_latencies),
+        count_p99.as_millis(),
+        count_max.as_millis(),
+        count_stall_detected
+    );
+    assert!(
+        !count_stall_detected,
+        "documents_count exceeded the Stage 1 red threshold during overlap: count_max={count_max:?}, distribution_ms={:?}",
+        stage_1_latency_ms(&count_latencies)
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn bulk_admission_pauses_when_segment_ceiling_persists_without_improvement() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -72,7 +285,7 @@ async fn bulk_admission_pauses_when_segment_ceiling_persists_without_improvement
         record_stage_6_observation(
             &tmp,
             tenant_id,
-            Ok(stage_6_segment_observation(
+            Ok(backpressure::segment_observation_for_test(
                 SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 3,
                 bytes,
                 1,
@@ -118,7 +331,9 @@ async fn backpressure_does_not_fire_while_state_is_improving() {
         record_stage_6_observation(
             &tmp,
             tenant_id,
-            Ok(stage_6_segment_observation(segments, bytes, 0)),
+            Ok(backpressure::segment_observation_for_test(
+                segments, bytes, 0,
+            )),
         );
     }
 
@@ -153,7 +368,7 @@ async fn reads_stay_live_while_bulk_admission_is_paused() {
         record_stage_6_observation(
             &tmp,
             &tenant_id,
-            Ok(stage_6_segment_observation(
+            Ok(backpressure::segment_observation_for_test(
                 SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2,
                 bytes,
                 0,
@@ -218,7 +433,7 @@ async fn backpressure_clears_when_segment_count_recovers_below_selected_band() {
         record_stage_6_observation(
             &tmp,
             tenant_id,
-            Ok(stage_6_segment_observation(
+            Ok(backpressure::segment_observation_for_test(
                 SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2,
                 bytes,
                 0,
@@ -233,7 +448,7 @@ async fn backpressure_clears_when_segment_count_recovers_below_selected_band() {
     record_stage_6_observation(
         &tmp,
         tenant_id,
-        Ok(stage_6_segment_observation(
+        Ok(backpressure::segment_observation_for_test(
             SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.0 - 1,
             5_000,
             0,
@@ -265,7 +480,7 @@ async fn deleting_tenant_removes_stale_backpressure_state() {
         record_stage_6_observation(
             &tmp,
             tenant_id,
-            Ok(stage_6_segment_observation(
+            Ok(backpressure::segment_observation_for_test(
                 SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2,
                 bytes,
                 0,
@@ -302,7 +517,7 @@ async fn backpressure_pauses_every_write_queue_entrypoint_before_task_allocation
         record_stage_6_observation(
             &tmp,
             tenant_id,
-            Ok(stage_6_segment_observation(
+            Ok(backpressure::segment_observation_for_test(
                 SELECTED_MERGE_POLICY_SETTLED_SEGMENT_BAND.1 + 2,
                 bytes,
                 0,
