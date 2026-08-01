@@ -12,9 +12,9 @@ fn fixture_path() -> PathBuf {
         .join("../tests/fixtures/2026_07_26_m0b_typesense_migration/expected_bundle.json")
 }
 
-fn m0b_evidence_receipt_path() -> PathBuf {
+fn m0b_public_contract_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../docs2/4_EVIDENCE/2026_07_29_jul29_12pm_2_source_fixture_integrity_receipt.md")
+        .join("../docs2/3_IMPLEMENTATION/2026_07_26_m0b_typesense_source_contract.md")
 }
 
 fn expected_bundle() -> Value {
@@ -254,10 +254,10 @@ fn typesense_malformed_unsupported_setting_values_fail_closed() {
 }
 
 #[test]
-fn typesense_contract_imports_m0b_fixture_and_receipt_without_copying_shell_kat() {
+fn typesense_contract_imports_m0b_fixture_and_public_contract_without_copying_shell_kat() {
     let bundle = expected_bundle();
-    let receipt =
-        std::fs::read_to_string(m0b_evidence_receipt_path()).expect("M0B receipt is readable");
+    let public_contract = std::fs::read_to_string(m0b_public_contract_path())
+        .expect("M0B public contract is readable");
 
     assert_eq!(
         bundle["contract"]["fixture_version"],
@@ -267,12 +267,14 @@ fn typesense_contract_imports_m0b_fixture_and_receipt_without_copying_shell_kat(
         .as_bool()
         .unwrap());
     assert!(
-        receipt.contains("engine/tests/fixtures/2026_07_26_m0b_typesense_migration/"),
-        "M0B receipt must own the committed Typesense fixture inventory"
+        public_contract.contains(
+            "engine/tests/fixtures/2026_07_26_m0b_typesense_migration/expected_bundle.json"
+        ),
+        "M0B public contract must own the committed Typesense fixture oracle"
     );
     assert!(
-        receipt.contains("Typesense KAT: `Results: 44/44 passed`."),
-        "M0B receipt must preserve the Typesense oracle denominator"
+        public_contract.contains("Typesense KAT: `Results: 44/44 passed`."),
+        "M0B public contract must preserve the Typesense oracle denominator"
     );
 }
 
