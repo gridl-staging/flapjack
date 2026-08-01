@@ -1,4 +1,5 @@
 use axum::{
+    body::Bytes,
     extract::{Extension, Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
     Json,
@@ -23,6 +24,8 @@ pub mod bulk_replace;
 mod export;
 mod import;
 mod job_runner;
+#[allow(dead_code)]
+mod meilisearch_client;
 mod source_identity_partitions;
 mod source_reader;
 mod source_snapshot;
@@ -30,6 +33,11 @@ mod source_snapshot;
 mod source_test_support;
 pub(crate) mod spool;
 mod translation;
+mod typesense_client;
+#[cfg(test)]
+mod typesense_client_tests;
+#[cfg(test)]
+mod typesense_contract_tests;
 
 use super::AppState;
 use crate::auth::AuthenticatedAppId;
@@ -61,6 +69,7 @@ const MIGRATION_CANCEL_TOO_LATE_MESSAGE: &str =
     "Migration job has already reached the publication commit boundary";
 const SOURCE_PROVIDER_UNSUPPORTED_CODE: &str = "source_provider_unsupported";
 const SOURCE_PROVIDER_UNSUPPORTED_MESSAGE: &str = "Source provider is not supported";
+const SOURCE_PROVIDER_PAYLOAD_MISMATCH_CODE: &str = "source_provider_payload_mismatch";
 const PRIVACY_SCRUB_UNKNOWN_TARGET_CODE: &str = "privacy_scrub_unknown_target";
 const PRIVACY_SCRUB_STALE_GENERATION_CODE: &str = "privacy_scrub_stale_generation";
 const PRIVACY_SCRUB_MISMATCHED_INTENT_CODE: &str = "privacy_scrub_mismatched_intent";
@@ -71,6 +80,10 @@ const MIGRATION_ACK_TOO_EARLY_MESSAGE: &str =
 const MIGRATION_ACK_STALE_GENERATION_CODE: &str = "migration_ack_stale_generation";
 const MIGRATION_ACK_STALE_GENERATION_MESSAGE: &str =
     "Migration publication generation evidence is stale or unavailable";
+const MIGRATION_RESUME_CLAIM_CONFLICT_CODE: &str = "migration_resume_claim_conflict";
+const MIGRATION_RESUME_CLAIM_CONFLICT_MESSAGE: &str = "Migration resume was already claimed";
+const MIGRATION_RESUME_NOT_AVAILABLE_CODE: &str = "migration_resume_not_available";
+const MIGRATION_RESUME_NOT_AVAILABLE_MESSAGE: &str = "Migration resume is not available";
 
 /// Request payload for migrating an index from Algolia to Flapjack.
 ///
@@ -82,6 +95,48 @@ const MIGRATION_ACK_STALE_GENERATION_MESSAGE: &str =
 pub struct MigrateFromAlgoliaRequest {
     #[serde(rename = "appId")]
     pub app_id: String,
+
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
+
+    #[serde(rename = "sourceIndex")]
+    pub source_index: String,
+
+    #[serde(rename = "targetIndex")]
+    pub target_index: Option<String>,
+
+    /// Replace the target index only on node-local migration endpoints. HA
+    /// imports still refuse overwrite requests.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// Request payload for migrating an index from Meilisearch Cloud to Flapjack.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MigrateFromMeilisearchRequest {
+    pub endpoint: String,
+
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
+
+    #[serde(rename = "sourceIndex")]
+    pub source_index: String,
+
+    #[serde(rename = "targetIndex")]
+    pub target_index: Option<String>,
+
+    /// Replace the target index only on node-local migration endpoints. HA
+    /// imports still refuse overwrite requests.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// Request payload for migrating a Typesense Cloud collection to Flapjack.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MigrateFromTypesenseRequest {
+    pub node: String,
 
     #[serde(rename = "apiKey")]
     pub api_key: String,
@@ -126,6 +181,10 @@ impl AsyncMigrationSourceProvider {
             "typesense" => Some(Self::Typesense),
             _ => None,
         }
+    }
+
+    fn is_supported_source(&self) -> bool {
+        matches!(self, Self::Algolia | Self::Meilisearch | Self::Typesense)
     }
 
     fn is_algolia(&self) -> bool {
@@ -256,6 +315,12 @@ pub struct AsyncMigrationStatusResponse {
     pub rules_imported: Option<MigrateCount>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<MigrateWarning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resumable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(rename = "resumeHandle", skip_serializing_if = "Option::is_none")]
+    pub resume_handle: Option<String>,
 }
 
 impl From<MigrationImportWarning> for MigrateWarning {
@@ -311,6 +376,9 @@ impl From<MigrationPhaseRecord> for AsyncMigrationStatusResponse {
             synonyms_imported,
             rules_imported,
             warnings,
+            resumable: None,
+            operation: None,
+            resume_handle: None,
         }
     }
 }
@@ -323,6 +391,20 @@ impl AsyncMigrationStatusResponse {
         let mut response = Self::from(record);
         response.target_index = Some(metadata.target_index.clone());
         response.topology = metadata.topology;
+        response
+    }
+
+    fn with_metadata_and_resume_handle(
+        record: MigrationPhaseRecord,
+        metadata: &spool::AsyncMigrationMetadata,
+        resume_handle: Option<String>,
+    ) -> Self {
+        let mut response = Self::with_metadata(record, metadata);
+        if let Some(handle) = resume_handle {
+            response.resumable = Some(true);
+            response.operation = Some("resume".to_string());
+            response.resume_handle = Some(handle);
+        }
         response
     }
 }
@@ -397,6 +479,51 @@ pub async fn list_algolia_indexes(
 
 type MigrateError = (StatusCode, Json<serde_json::Value>);
 
+#[cfg(test)]
+type TestMigrationSourceReaderBuilder = dyn Fn(
+        AsyncMigrationSourceProvider,
+    ) -> Result<Box<dyn source_reader::MigrationSourceReader + Send>, AlgoliaClientError>
+    + Send
+    + Sync;
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestMigrationSourceReaderFactory {
+    build: Arc<TestMigrationSourceReaderBuilder>,
+}
+
+#[cfg(test)]
+impl TestMigrationSourceReaderFactory {
+    fn new(
+        build: impl Fn(
+                AsyncMigrationSourceProvider,
+            )
+                -> Result<Box<dyn source_reader::MigrationSourceReader + Send>, AlgoliaClientError>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        Self {
+            build: Arc::new(build),
+        }
+    }
+
+    fn build(
+        &self,
+        source_provider: AsyncMigrationSourceProvider,
+    ) -> Result<Box<dyn source_reader::MigrationSourceReader + Send>, AlgoliaClientError> {
+        (self.build)(source_provider)
+    }
+}
+
+fn parse_submit_payload<P>(body: &[u8]) -> Result<P, MigrateError>
+where
+    P: for<'de> Deserialize<'de>,
+{
+    serde_json::from_slice(body)
+        .map_err(|_| json_error_parts(StatusCode::BAD_REQUEST, "Invalid migration request body"))
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct PrivacyScrubRequest {
     #[serde(rename = "scrubId")]
@@ -430,6 +557,44 @@ pub(super) enum MigrationPublicationMode {
 pub(super) struct AdmittedMigration {
     target_index: String,
     publication_mode: MigrationPublicationMode,
+}
+
+pub(super) trait AsyncMigrationSubmitPayload {
+    fn admit_async(
+        &self,
+        manager: &Arc<flapjack::IndexManager>,
+        replication_manager: Option<&Arc<flapjack_replication::manager::ReplicationManager>>,
+    ) -> Result<AdmittedMigration, MigrateError>;
+}
+
+impl AsyncMigrationSubmitPayload for MigrateFromAlgoliaRequest {
+    fn admit_async(
+        &self,
+        manager: &Arc<flapjack::IndexManager>,
+        replication_manager: Option<&Arc<flapjack_replication::manager::ReplicationManager>>,
+    ) -> Result<AdmittedMigration, MigrateError> {
+        admit_migration_payload(manager, replication_manager, self)
+    }
+}
+
+impl AsyncMigrationSubmitPayload for MigrateFromMeilisearchRequest {
+    fn admit_async(
+        &self,
+        manager: &Arc<flapjack::IndexManager>,
+        replication_manager: Option<&Arc<flapjack_replication::manager::ReplicationManager>>,
+    ) -> Result<AdmittedMigration, MigrateError> {
+        admit_meilisearch_migration_payload(manager, replication_manager, self)
+    }
+}
+
+impl AsyncMigrationSubmitPayload for MigrateFromTypesenseRequest {
+    fn admit_async(
+        &self,
+        manager: &Arc<flapjack::IndexManager>,
+        replication_manager: Option<&Arc<flapjack_replication::manager::ReplicationManager>>,
+    ) -> Result<AdmittedMigration, MigrateError> {
+        admit_typesense_migration_payload(manager, replication_manager, self)
+    }
 }
 
 /// One-click migration from Algolia to Flapjack.
@@ -466,17 +631,20 @@ pub async fn migrate_from_algolia(
 macro_rules! define_source_migration_openapi_lifecycle {
     (
         $provider:ident,
+        request: $request_ty:ty,
+        source_reader: $source_reader:path,
         submit: $submit_fn:ident => $submit_path:literal,
         status: $status_fn:ident => $status_path:literal,
         cancel: $cancel_fn:ident => $cancel_path:literal,
-        acknowledge: $acknowledge_fn:ident => $acknowledge_path:literal
+        acknowledge: $acknowledge_fn:ident => $acknowledge_path:literal,
+        resume: $resume_fn:ident => $resume_path:literal
     ) => {
         /// Submit an asynchronous source migration.
         #[utoipa::path(
             post,
             path = $submit_path,
             tag = "migration",
-            request_body = MigrateFromAlgoliaRequest,
+            request_body = $request_ty,
             responses(
                 (status = 202, description = "Async source migration admitted", body = AsyncMigrationStatusResponse),
                 (status = 400, description = "Invalid migration request or unsupported source payload"),
@@ -489,14 +657,14 @@ macro_rules! define_source_migration_openapi_lifecycle {
         pub async fn $submit_fn(
             State(state): State<Arc<AppState>>,
             Extension(AuthenticatedAppId(authenticated_app_id)): Extension<AuthenticatedAppId>,
-            Json(payload): Json<MigrateFromAlgoliaRequest>,
+            Json(payload): Json<$request_ty>,
         ) -> Result<(StatusCode, Json<AsyncMigrationStatusResponse>), MigrateError> {
-            submit_algolia_migration_impl(
+            submit_source_migration_impl(
                 AsyncMigrationSourceProvider::$provider,
                 state,
                 authenticated_app_id,
                 payload,
-                algolia_source_reader,
+                $source_reader,
             )
             .await
         }
@@ -593,48 +761,218 @@ macro_rules! define_source_migration_openapi_lifecycle {
             )
             .await
         }
+
+        /// Resume an interrupted asynchronous Algolia source migration.
+        #[utoipa::path(
+            post,
+            path = $resume_path,
+            tag = "migration",
+            request_body = $request_ty,
+            params(
+                ("job_id" = Uuid, Path, description = "Migration job UUID")
+            ),
+            responses(
+                (status = 202, description = "Async source migration resume admitted", body = AsyncMigrationStatusResponse),
+                (status = 400, description = "Invalid migration job UUID, request body, or unsupported source provider"),
+                (status = 404, description = "No durable migration phase record is currently retained for the UUID"),
+                (status = 409, description = "migration_resume_claim_conflict or migration_resume_not_available"),
+                (status = 500, description = "Migration resume claim could not be persisted")
+            ),
+            security(("api_key" = []))
+        )]
+        pub async fn $resume_fn(
+            State(state): State<Arc<AppState>>,
+            Extension(AuthenticatedAppId(authenticated_app_id)): Extension<AuthenticatedAppId>,
+            headers: HeaderMap,
+            AxumPath(job_id): AxumPath<String>,
+            Json(payload): Json<MigrateFromAlgoliaRequest>,
+        ) -> Result<(StatusCode, Json<AsyncMigrationStatusResponse>), MigrateError> {
+            resume_source_migration(
+                state,
+                authenticated_owner_identity(authenticated_app_id, &headers),
+                AsyncMigrationSourceProvider::$provider,
+                job_id,
+                payload,
+                algolia_source_reader,
+            )
+            .await
+        }
     };
 }
 
 define_source_migration_openapi_lifecycle!(
     Algolia,
+    request: MigrateFromAlgoliaRequest,
+    source_reader: algolia_source_reader,
     submit: submit_algolia_migration => "/1/migrations/algolia",
     status: get_algolia_migration_status => "/1/migrations/algolia/{job_id}",
     cancel: cancel_algolia_migration => "/1/migrations/algolia/{job_id}/cancel",
-    acknowledge: acknowledge_algolia_migration => "/1/migrations/algolia/{job_id}/acknowledge"
+    acknowledge: acknowledge_algolia_migration => "/1/migrations/algolia/{job_id}/acknowledge",
+    resume: resume_algolia_migration => "/1/migrations/algolia/{job_id}/resume"
 );
 define_source_migration_openapi_lifecycle!(
     Meilisearch,
+    request: MigrateFromMeilisearchRequest,
+    source_reader: meilisearch_source_reader,
     submit: submit_meilisearch_migration => "/1/migrations/meilisearch",
     status: get_meilisearch_migration_status => "/1/migrations/meilisearch/{job_id}",
     cancel: cancel_meilisearch_migration => "/1/migrations/meilisearch/{job_id}/cancel",
-    acknowledge: acknowledge_meilisearch_migration => "/1/migrations/meilisearch/{job_id}/acknowledge"
+    acknowledge: acknowledge_meilisearch_migration => "/1/migrations/meilisearch/{job_id}/acknowledge",
+    resume: resume_meilisearch_migration => "/1/migrations/meilisearch/{job_id}/resume"
 );
 define_source_migration_openapi_lifecycle!(
     Typesense,
+    request: MigrateFromTypesenseRequest,
+    source_reader: typesense_source_reader,
     submit: submit_typesense_migration => "/1/migrations/typesense",
     status: get_typesense_migration_status => "/1/migrations/typesense/{job_id}",
     cancel: cancel_typesense_migration => "/1/migrations/typesense/{job_id}/cancel",
-    acknowledge: acknowledge_typesense_migration => "/1/migrations/typesense/{job_id}/acknowledge"
+    acknowledge: acknowledge_typesense_migration => "/1/migrations/typesense/{job_id}/acknowledge",
+    resume: resume_typesense_migration => "/1/migrations/typesense/{job_id}/resume"
 );
 
 pub(crate) async fn submit_algolia_migration_http(
     State(state): State<Arc<AppState>>,
     Extension(AuthenticatedAppId(authenticated_app_id)): Extension<AuthenticatedAppId>,
     source_provider: Option<Extension<AsyncMigrationSourceProvider>>,
+    #[cfg(test)] test_source_factory: Option<Extension<TestMigrationSourceReaderFactory>>,
     headers: HeaderMap,
-    Json(payload): Json<MigrateFromAlgoliaRequest>,
+    body: Bytes,
 ) -> Result<(StatusCode, Json<AsyncMigrationStatusResponse>), MigrateError> {
-    submit_algolia_migration_impl(
-        source_provider
-            .map(|Extension(provider)| provider)
-            .unwrap_or_default(),
+    let source_provider = source_provider
+        .map(|Extension(provider)| provider)
+        .unwrap_or_default();
+    let owner = authenticated_owner_identity(authenticated_app_id, &headers);
+    match source_provider {
+        AsyncMigrationSourceProvider::Algolia => {
+            let payload = parse_submit_payload(&body)?;
+            #[cfg(test)]
+            if let Some(Extension(factory)) = test_source_factory.as_ref() {
+                return submit_source_migration_impl(
+                    source_provider,
+                    state,
+                    owner,
+                    payload,
+                    |_: &MigrateFromAlgoliaRequest| factory.build(source_provider),
+                )
+                .await;
+            }
+            submit_source_migration_impl(
+                source_provider,
+                state,
+                owner,
+                payload,
+                algolia_source_reader,
+            )
+            .await
+        }
+        AsyncMigrationSourceProvider::Meilisearch => {
+            let payload = parse_submit_payload(&body)?;
+            #[cfg(test)]
+            if let Some(Extension(factory)) = test_source_factory.as_ref() {
+                return submit_source_migration_impl(
+                    source_provider,
+                    state,
+                    owner,
+                    payload,
+                    |_: &MigrateFromMeilisearchRequest| factory.build(source_provider),
+                )
+                .await;
+            }
+            submit_source_migration_impl(
+                source_provider,
+                state,
+                owner,
+                payload,
+                meilisearch_source_reader,
+            )
+            .await
+        }
+        AsyncMigrationSourceProvider::Typesense => {
+            let payload = parse_typesense_submit_payload(&body)?;
+            #[cfg(test)]
+            if let Some(Extension(factory)) = test_source_factory.as_ref() {
+                return submit_source_migration_impl(
+                    source_provider,
+                    state,
+                    owner,
+                    payload,
+                    |_: &MigrateFromTypesenseRequest| factory.build(source_provider),
+                )
+                .await;
+            }
+            submit_source_migration_impl(
+                source_provider,
+                state,
+                owner,
+                payload,
+                typesense_source_reader,
+            )
+            .await
+        }
+    }
+}
+
+pub(crate) async fn resume_algolia_migration_http(
+    State(state): State<Arc<AppState>>,
+    Extension(AuthenticatedAppId(authenticated_app_id)): Extension<AuthenticatedAppId>,
+    source_provider: Option<Extension<AsyncMigrationSourceProvider>>,
+    #[cfg(test)] test_source_factory: Option<Extension<TestMigrationSourceReaderFactory>>,
+    headers: HeaderMap,
+    AxumPath(job_id): AxumPath<String>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<AsyncMigrationStatusResponse>), MigrateError> {
+    let source_provider = source_provider
+        .map(|Extension(provider)| provider)
+        .unwrap_or_default();
+    ensure_resume_source_provider_supported(source_provider)?;
+    let payload: MigrateFromAlgoliaRequest = parse_submit_payload(&body)?;
+    let owner = authenticated_owner_identity(authenticated_app_id, &headers);
+    #[cfg(test)]
+    if let Some(Extension(factory)) = test_source_factory.as_ref() {
+        return resume_source_migration(
+            state,
+            owner,
+            source_provider,
+            job_id,
+            payload,
+            |_: &MigrateFromAlgoliaRequest| factory.build(source_provider),
+        )
+        .await;
+    }
+    resume_source_migration(
         state,
-        authenticated_owner_identity(authenticated_app_id, &headers),
+        owner,
+        source_provider,
+        job_id,
         payload,
         algolia_source_reader,
     )
     .await
+}
+
+async fn resume_source_migration<F, R>(
+    state: Arc<AppState>,
+    owner: String,
+    source_provider: AsyncMigrationSourceProvider,
+    job_id: String,
+    payload: MigrateFromAlgoliaRequest,
+    source_factory: F,
+) -> Result<(StatusCode, Json<AsyncMigrationStatusResponse>), MigrateError>
+where
+    F: FnOnce(&MigrateFromAlgoliaRequest) -> Result<R, AlgoliaClientError>,
+    R: source_reader::MigrationSourceReader + Send + 'static,
+{
+    ensure_resume_source_provider_supported(source_provider)?;
+    let (job_uuid, checkpoint_handle) = resumable_algolia_job(&state, &owner, &job_id)?;
+    let phase_record = state
+        .migration_runner
+        .resume_algolia_import(job_uuid, checkpoint_handle, payload, source_factory)
+        .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(AsyncMigrationStatusResponse::from(phase_record)),
+    ))
 }
 
 #[cfg(test)]
@@ -670,7 +1008,7 @@ where
     F: FnOnce(&MigrateFromAlgoliaRequest) -> Result<R, AlgoliaClientError>,
     R: source_reader::MigrationSourceReader + Send + 'static,
 {
-    submit_algolia_migration_impl(
+    submit_source_migration_impl(
         source_provider,
         state,
         authenticated_app_id,
@@ -680,21 +1018,27 @@ where
     .await
 }
 
-async fn submit_algolia_migration_impl<F, R>(
+async fn submit_source_migration_impl<P, F, R>(
     source_provider: AsyncMigrationSourceProvider,
     state: Arc<AppState>,
     authenticated_app_id: String,
-    payload: MigrateFromAlgoliaRequest,
+    payload: P,
     source_factory: F,
 ) -> Result<(StatusCode, Json<AsyncMigrationStatusResponse>), MigrateError>
 where
-    F: FnOnce(&MigrateFromAlgoliaRequest) -> Result<R, AlgoliaClientError>,
+    P: AsyncMigrationSubmitPayload,
+    F: FnOnce(&P) -> Result<R, AlgoliaClientError>,
     R: source_reader::MigrationSourceReader + Send + 'static,
 {
     ensure_source_provider_supported(source_provider)?;
     let (_job_uuid, phase_record) = state
         .migration_runner
-        .submit_algolia_import_for_owner(payload, Some(authenticated_app_id), source_factory)
+        .submit_source_import_for_owner(
+            source_provider,
+            payload,
+            Some(authenticated_app_id),
+            source_factory,
+        )
         .await?;
     Ok((
         StatusCode::ACCEPTED,
@@ -881,10 +1225,16 @@ pub(super) async fn get_source_migration_status(
     let phase_record = spool
         .read_migration_phase(job_uuid)
         .map_err(migration_status_spool_error)?;
-    Ok(Json(AsyncMigrationStatusResponse::with_metadata(
-        phase_record,
-        &metadata,
-    )))
+    let resume_handle = spool
+        .resumable_export_handle(job_uuid)
+        .map_err(migration_status_spool_error)?;
+    Ok(Json(
+        AsyncMigrationStatusResponse::with_metadata_and_resume_handle(
+            phase_record,
+            &metadata,
+            resume_handle,
+        ),
+    ))
 }
 
 pub(super) async fn cancel_source_migration(
@@ -1048,12 +1398,54 @@ fn admit_migration_payload(
     })
 }
 
-pub(super) fn admit_async_migration_payload(
+fn admit_meilisearch_migration_payload(
     manager: &Arc<flapjack::IndexManager>,
     replication_manager: Option<&Arc<flapjack_replication::manager::ReplicationManager>>,
-    payload: &MigrateFromAlgoliaRequest,
+    payload: &MigrateFromMeilisearchRequest,
 ) -> Result<AdmittedMigration, MigrateError> {
-    admit_migration_payload(manager, replication_manager, payload)
+    validate_meilisearch_migration_request(payload)?;
+    let target_index = meilisearch_target_index(payload).to_string();
+    if replication_manager.is_some_and(|manager| manager.peer_count() > 0) {
+        return Err(migration_ha_unsupported());
+    }
+    if payload.overwrite {
+        let staging_baseline = manager
+            .capture_replacement_staging_baseline(&target_index)
+            .map_err(|error| json_error_parts(StatusCode::BAD_REQUEST, error.to_string()))?;
+        return Ok(AdmittedMigration {
+            target_index,
+            publication_mode: MigrationPublicationMode::ReplaceExisting { staging_baseline },
+        });
+    }
+    Ok(AdmittedMigration {
+        target_index,
+        publication_mode: MigrationPublicationMode::CreateOnly,
+    })
+}
+
+fn admit_typesense_migration_payload(
+    manager: &Arc<flapjack::IndexManager>,
+    replication_manager: Option<&Arc<flapjack_replication::manager::ReplicationManager>>,
+    payload: &MigrateFromTypesenseRequest,
+) -> Result<AdmittedMigration, MigrateError> {
+    validate_typesense_migration_request(payload)?;
+    let target_index = typesense_target_index(payload).to_string();
+    if replication_manager.is_some_and(|manager| manager.peer_count() > 0) {
+        return Err(migration_ha_unsupported());
+    }
+    if payload.overwrite {
+        let staging_baseline = manager
+            .capture_replacement_staging_baseline(&target_index)
+            .map_err(|error| json_error_parts(StatusCode::BAD_REQUEST, error.to_string()))?;
+        return Ok(AdmittedMigration {
+            target_index,
+            publication_mode: MigrationPublicationMode::ReplaceExisting { staging_baseline },
+        });
+    }
+    Ok(AdmittedMigration {
+        target_index,
+        publication_mode: MigrationPublicationMode::CreateOnly,
+    })
 }
 
 fn algolia_source_reader(
@@ -1064,6 +1456,46 @@ fn algolia_source_reader(
         &payload.api_key,
         &payload.source_index,
     )
+}
+
+fn meilisearch_source_reader(
+    payload: &MigrateFromMeilisearchRequest,
+) -> Result<
+    source_reader::MeilisearchSourceReader<meilisearch_client::MeilisearchClient>,
+    AlgoliaClientError,
+> {
+    source_reader::MeilisearchSourceReader::new(
+        &payload.endpoint,
+        &payload.api_key,
+        &payload.source_index,
+    )
+}
+
+fn typesense_source_reader(
+    payload: &MigrateFromTypesenseRequest,
+) -> Result<
+    source_reader::TypesenseSourceReader<typesense_client::TypesenseClient>,
+    AlgoliaClientError,
+> {
+    source_reader::TypesenseSourceReader::new(
+        &payload.node,
+        &payload.api_key,
+        &payload.source_index,
+    )
+}
+
+fn parse_typesense_submit_payload(
+    body: &[u8],
+) -> Result<MigrateFromTypesenseRequest, MigrateError> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| json_error_parts(StatusCode::BAD_REQUEST, "Invalid migration request body"))?;
+    if value.get("endpoint").is_some() && value.get("node").is_none() {
+        return Err(source_provider_payload_mismatch(
+            "Typesense payload does not match source_provider",
+        ));
+    }
+    serde_json::from_value(value)
+        .map_err(|_| json_error_parts(StatusCode::BAD_REQUEST, "Invalid migration request body"))
 }
 
 fn validate_migration_request(payload: &MigrateFromAlgoliaRequest) -> Result<(), MigrateError> {
@@ -1082,7 +1514,58 @@ fn validate_migration_request(payload: &MigrateFromAlgoliaRequest) -> Result<(),
         .map_err(|error| json_error_parts(StatusCode::BAD_REQUEST, error.to_string()))
 }
 
+fn validate_meilisearch_migration_request(
+    payload: &MigrateFromMeilisearchRequest,
+) -> Result<(), MigrateError> {
+    if payload.endpoint.is_empty() || payload.api_key.is_empty() || payload.source_index.is_empty()
+    {
+        return Err(json_error_parts(
+            StatusCode::BAD_REQUEST,
+            "endpoint, apiKey, and sourceIndex are required",
+        ));
+    }
+
+    let target_index = payload
+        .target_index
+        .as_deref()
+        .unwrap_or(payload.source_index.as_str());
+    validate_index_name(target_index)
+        .map_err(|error| json_error_parts(StatusCode::BAD_REQUEST, error.to_string()))
+}
+
+fn validate_typesense_migration_request(
+    payload: &MigrateFromTypesenseRequest,
+) -> Result<(), MigrateError> {
+    if payload.node.is_empty() || payload.api_key.is_empty() || payload.source_index.is_empty() {
+        return Err(json_error_parts(
+            StatusCode::BAD_REQUEST,
+            "node, apiKey, and sourceIndex are required",
+        ));
+    }
+
+    let target_index = payload
+        .target_index
+        .as_deref()
+        .unwrap_or(payload.source_index.as_str());
+    validate_index_name(target_index)
+        .map_err(|error| json_error_parts(StatusCode::BAD_REQUEST, error.to_string()))
+}
+
 fn migration_target_index(payload: &MigrateFromAlgoliaRequest) -> &str {
+    payload
+        .target_index
+        .as_deref()
+        .unwrap_or(payload.source_index.as_str())
+}
+
+fn meilisearch_target_index(payload: &MigrateFromMeilisearchRequest) -> &str {
+    payload
+        .target_index
+        .as_deref()
+        .unwrap_or(payload.source_index.as_str())
+}
+
+fn typesense_target_index(payload: &MigrateFromTypesenseRequest) -> &str {
     payload
         .target_index
         .as_deref()
@@ -1117,7 +1600,17 @@ fn algolia_error(error: AlgoliaClientError) -> (StatusCode, Json<serde_json::Val
 fn ensure_source_provider_supported(
     source_provider: AsyncMigrationSourceProvider,
 ) -> Result<(), MigrateError> {
-    if source_provider.is_algolia() {
+    if source_provider.is_supported_source() {
+        Ok(())
+    } else {
+        Err(source_provider_unsupported())
+    }
+}
+
+fn ensure_resume_source_provider_supported(
+    source_provider: AsyncMigrationSourceProvider,
+) -> Result<(), MigrateError> {
+    if source_provider == AsyncMigrationSourceProvider::Algolia {
         Ok(())
     } else {
         Err(source_provider_unsupported())
@@ -1129,6 +1622,14 @@ fn source_provider_unsupported() -> MigrateError {
         StatusCode::BAD_REQUEST,
         SOURCE_PROVIDER_UNSUPPORTED_CODE,
         SOURCE_PROVIDER_UNSUPPORTED_MESSAGE,
+    )
+}
+
+fn source_provider_payload_mismatch(message: &'static str) -> MigrateError {
+    json_error_parts_with_code(
+        StatusCode::BAD_REQUEST,
+        SOURCE_PROVIDER_PAYLOAD_MISMATCH_CODE,
+        message,
     )
 }
 
@@ -1163,6 +1664,7 @@ fn spool_error(error: SpoolError) -> MigrateError {
         | SpoolErrorKind::CancelRequested
         | SpoolErrorKind::JobTerminal
         | SpoolErrorKind::JobNotAccepted
+        | SpoolErrorKind::JobNotInterrupted
         | SpoolErrorKind::UnsupportedArtifactKind
         | SpoolErrorKind::InvalidPhaseTransition
         | SpoolErrorKind::PrivacyScrubIntentCollision => StatusCode::BAD_REQUEST,
@@ -1186,6 +1688,16 @@ fn migration_status_spool_error(error: spool::SpoolError) -> MigrateError {
         );
     }
     spool_error(error)
+}
+
+pub(super) fn resume_spool_error(error: spool::SpoolError) -> MigrateError {
+    match error.kind() {
+        SpoolErrorKind::JobNotInterrupted => migration_resume_claim_conflict(),
+        SpoolErrorKind::JobNotFound | SpoolErrorKind::CheckpointHandleNotFound => {
+            migration_resume_not_available()
+        }
+        _ => spool_error(error),
+    }
 }
 
 fn ensure_async_migration_owner(
@@ -1235,6 +1747,67 @@ fn owned_async_migration_job(
     let spool = import::spool_for_manager(&state.manager)?;
     ensure_async_migration_owner(&spool, job_uuid, owner_identity)?;
     Ok((spool, job_uuid))
+}
+
+fn resumable_algolia_job(
+    state: &AppState,
+    owner_identity: &str,
+    job_id: &str,
+) -> Result<(Uuid, String), MigrateError> {
+    let job_uuid = Uuid::parse_str(job_id)
+        .map_err(|_| json_error_parts(StatusCode::BAD_REQUEST, "job_id must be a valid UUID"))?;
+    let spool = import::spool_for_manager(&state.manager)?;
+    let metadata = spool
+        .read_async_migration_metadata(job_uuid)
+        .map_err(|error| match error.kind() {
+            SpoolErrorKind::JobNotFound => migration_resume_not_available(),
+            _ => migration_status_spool_error(error),
+        })?;
+    if metadata
+        .authenticated_app_id
+        .as_deref()
+        .is_some_and(|owner| owner != owner_identity)
+        || metadata.source_provider != AsyncMigrationSourceProvider::Algolia
+        || metadata.operation_kind != spool::AsyncMigrationOperationKind::SourceImport
+    {
+        return Err(migration_job_not_found());
+    }
+    if let Some(handle) = spool
+        .resumable_export_handle(job_uuid)
+        .map_err(resume_spool_error)?
+    {
+        return Ok((job_uuid, handle));
+    }
+    let phase = spool
+        .read_migration_phase(job_uuid)
+        .map_err(resume_spool_error)?;
+    if phase.phase == MigrationPhase::Exporting
+        && phase.disposition == MigrationDisposition::Running
+        && phase.terminal_at.is_none()
+        && spool
+            .export_lifecycle_is_running(job_uuid)
+            .map_err(resume_spool_error)?
+        && state.migration_runner.resume_claim_is_active(job_uuid)
+    {
+        return Err(migration_resume_claim_conflict());
+    }
+    Err(migration_resume_not_available())
+}
+
+fn migration_resume_claim_conflict() -> MigrateError {
+    json_error_parts_with_code(
+        StatusCode::CONFLICT,
+        MIGRATION_RESUME_CLAIM_CONFLICT_CODE,
+        MIGRATION_RESUME_CLAIM_CONFLICT_MESSAGE,
+    )
+}
+
+fn migration_resume_not_available() -> MigrateError {
+    json_error_parts_with_code(
+        StatusCode::CONFLICT,
+        MIGRATION_RESUME_NOT_AVAILABLE_CODE,
+        MIGRATION_RESUME_NOT_AVAILABLE_MESSAGE,
+    )
 }
 
 fn verify_async_migration_ack_generation(
@@ -1700,6 +2273,14 @@ mod source_identity_partitions_tests;
 #[cfg(test)]
 #[path = "import_contract_tests.rs"]
 mod import_contract_tests;
+
+#[cfg(test)]
+#[path = "meilisearch_contract_tests.rs"]
+mod meilisearch_contract_tests;
+
+#[cfg(test)]
+#[path = "meilisearch_client_tests.rs"]
+mod meilisearch_client_tests;
 
 #[cfg(test)]
 #[path = "source_reader_tests.rs"]

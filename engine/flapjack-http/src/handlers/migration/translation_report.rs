@@ -69,6 +69,11 @@ pub(in crate::handlers::migration) enum ReportCode {
     ReplicaPrimaryRelevancyStrictnessDropped,
     ReplicaRelevancyStrictnessSemanticMismatch,
     ReplicaMatchingCriticalFieldDiverges,
+    MeilisearchDocumentOrderNotContractual,
+    MeilisearchSearchPaginationNotExportBound,
+    MeilisearchSettingNotMigrated,
+    MeilisearchSettingValueNormalized,
+    TypesenseSettingNotMigrated,
 }
 
 pub(super) fn non_portable_product_entries() -> Vec<TranslationReportEntry> {
@@ -200,6 +205,21 @@ pub(in crate::handlers::migration) fn warning_message(code: ReportCode) -> Optio
         ReportCode::ReplicaMatchingCriticalFieldDiverges => {
             "Replica setting changes matching-critical behavior that virtual replicas cannot independently reproduce."
         }
+        ReportCode::MeilisearchDocumentOrderNotContractual => {
+            "Meilisearch document order is not contractual; stable IDs preserve source identity."
+        }
+        ReportCode::MeilisearchSearchPaginationNotExportBound => {
+            "Meilisearch search pagination limits do not bound document export traversal."
+        }
+        ReportCode::MeilisearchSettingNotMigrated => {
+            "Meilisearch setting has no proven Flapjack equivalent and was not migrated."
+        }
+        ReportCode::MeilisearchSettingValueNormalized => {
+            "Meilisearch setting value was normalized to the proven Flapjack representation."
+        }
+        ReportCode::TypesenseSettingNotMigrated => {
+            "Typesense setting has no receipt-proved Flapjack equivalent and was not migrated."
+        }
         ReportCode::ProductNotMigrated
         | ReportCode::UnsupportedSourceField
         | ReportCode::UnsupportedRuleSchema
@@ -298,5 +318,10 @@ fn report_code_rank(code: ReportCode) -> u8 {
         ReportCode::ReplicaPrimaryRelevancyStrictnessDropped => 15,
         ReportCode::ReplicaRelevancyStrictnessSemanticMismatch => 16,
         ReportCode::ReplicaMatchingCriticalFieldDiverges => 17,
+        ReportCode::MeilisearchDocumentOrderNotContractual => 18,
+        ReportCode::MeilisearchSearchPaginationNotExportBound => 19,
+        ReportCode::MeilisearchSettingNotMigrated => 20,
+        ReportCode::MeilisearchSettingValueNormalized => 21,
+        ReportCode::TypesenseSettingNotMigrated => 22,
     }
 }

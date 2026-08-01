@@ -3104,6 +3104,66 @@
         ]
       }
     },
+    "/1/migrations/algolia/{job_id}/resume": {
+      "post": {
+        "tags": [
+          "migration"
+        ],
+        "summary": "Resume an interrupted asynchronous Algolia source migration.",
+        "operationId": "resume_algolia_migration",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Migration job UUID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateFromAlgoliaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Async source migration resume admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AsyncMigrationStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid migration job UUID, request body, or unsupported source provider"
+          },
+          "404": {
+            "description": "No durable migration phase record is currently retained for the UUID"
+          },
+          "409": {
+            "description": "migration_resume_claim_conflict or migration_resume_not_available"
+          },
+          "500": {
+            "description": "Migration resume claim could not be persisted"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/1/migrations/bulk-replace": {
       "post": {
         "tags": [
@@ -3178,7 +3238,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MigrateFromAlgoliaRequest"
+                "$ref": "#/components/schemas/MigrateFromMeilisearchRequest"
               }
             }
           },
@@ -3346,6 +3406,66 @@
           },
           "500": {
             "description": "Migration cancel request could not be persisted"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/1/migrations/meilisearch/{job_id}/resume": {
+      "post": {
+        "tags": [
+          "migration"
+        ],
+        "summary": "Resume an interrupted asynchronous Algolia source migration.",
+        "operationId": "resume_meilisearch_migration",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Migration job UUID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateFromMeilisearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Async source migration resume admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AsyncMigrationStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid migration job UUID, request body, or unsupported source provider"
+          },
+          "404": {
+            "description": "No durable migration phase record is currently retained for the UUID"
+          },
+          "409": {
+            "description": "migration_resume_claim_conflict or migration_resume_not_available"
+          },
+          "500": {
+            "description": "Migration resume claim could not be persisted"
           }
         },
         "security": [
@@ -3578,6 +3698,66 @@
           },
           "500": {
             "description": "Migration cancel request could not be persisted"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/1/migrations/typesense/{job_id}/resume": {
+      "post": {
+        "tags": [
+          "migration"
+        ],
+        "summary": "Resume an interrupted asynchronous Algolia source migration.",
+        "operationId": "resume_typesense_migration",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Migration job UUID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateFromAlgoliaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Async source migration resume admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AsyncMigrationStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid migration job UUID, request body, or unsupported source provider"
+          },
+          "404": {
+            "description": "No durable migration phase record is currently retained for the UUID"
+          },
+          "409": {
+            "description": "migration_resume_claim_conflict or migration_resume_not_available"
+          },
+          "500": {
+            "description": "Migration resume claim could not be persisted"
           }
         },
         "security": [
@@ -7388,8 +7568,26 @@
               }
             ]
           },
+          "operation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "phase": {
             "$ref": "#/components/schemas/AsyncMigrationPhase"
+          },
+          "resumable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "resumeHandle": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "rulesImported": {
             "oneOf": [
@@ -9542,6 +9740,37 @@
             }
           }
         }
+      },
+      "MigrateFromMeilisearchRequest": {
+        "type": "object",
+        "description": "Request payload for migrating an index from Meilisearch Cloud to Flapjack.",
+        "required": [
+          "endpoint",
+          "apiKey",
+          "sourceIndex"
+        ],
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Replace the target index only on node-local migration endpoints. HA\nimports still refuse overwrite requests."
+          },
+          "sourceIndex": {
+            "type": "string"
+          },
+          "targetIndex": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "MigrateWarning": {
         "type": "object",

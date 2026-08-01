@@ -184,6 +184,12 @@ fn assert_async_migration_lifecycle_is_documented(doc: &serde_json::Value, provi
     assert_path_method(doc, &acknowledge_path, "post");
     assert_migration_operation_uses_api_key(doc, &acknowledge_path, "post");
     assert_async_migration_acknowledge_documents_contract(doc, &acknowledge_path);
+
+    let resume_path = format!("{status_path}/resume");
+    assert_path_exists(doc, &resume_path);
+    assert_path_method(doc, &resume_path, "post");
+    assert_migration_operation_uses_api_key(doc, &resume_path, "post");
+    assert_async_migration_resume_documents_contract(doc, &resume_path);
 }
 
 fn operation_responses<'a>(
@@ -335,6 +341,32 @@ fn assert_async_migration_acknowledge_documents_contract(doc: &serde_json::Value
     assert!(
         conflict_description.contains("migration_ack_too_early"),
         "async migration acknowledge 409 should document migration_ack_too_early"
+    );
+}
+
+fn assert_async_migration_resume_documents_contract(doc: &serde_json::Value, path: &str) {
+    let responses = operation_responses(doc, path, "post");
+
+    for status in ["202", "400", "404", "409", "500"] {
+        assert!(
+            responses.contains_key(status),
+            "{path} POST should document {status} response"
+        );
+    }
+    assert_eq!(
+        response_schema_ref(doc, path, "post", "202"),
+        Some("#/components/schemas/AsyncMigrationStatusResponse"),
+        "{path} POST 202 should return AsyncMigrationStatusResponse"
+    );
+    let conflict_description = responses
+        .get("409")
+        .and_then(|response| response.get("description"))
+        .and_then(serde_json::Value::as_str)
+        .expect("async migration resume 409 should have a description");
+    assert!(
+        conflict_description.contains("migration_resume_claim_conflict")
+            && conflict_description.contains("migration_resume_not_available"),
+        "async migration resume 409 should document stable resume refusal codes"
     );
 }
 

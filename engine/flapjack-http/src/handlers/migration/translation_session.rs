@@ -1,6 +1,7 @@
 use super::translation_bundle::{
     translate_and_apply_primary_replicas, translate_document, translate_serde_value,
-    translate_settings, ReplicaSettingsTranslation, TranslationBundle, TypedTranslationFailure,
+    translate_settings_for_provider, ReplicaSettingsTranslation, SettingsSourceProvider,
+    TranslationBundle, TypedTranslationFailure,
 };
 use super::translation_report::{
     contains_hard_rejection, finalize_report, non_portable_product_entries,
@@ -18,6 +19,7 @@ use crate::handlers::migration::source_snapshot::{
 #[cfg(test)]
 use crate::handlers::migration::source_test_support::identity_config_for_test;
 use crate::handlers::migration::spool::{AcceptedSpoolPage, AcceptedSpoolReader, SpoolError};
+use crate::handlers::migration::AsyncMigrationSourceProvider;
 use flapjack::index::settings::IndexSettings;
 use flapjack::types::Document;
 use serde::de::DeserializeOwned;
@@ -35,6 +37,7 @@ const MAX_DOCUMENT_BATCH_SIZE: usize =
 struct TranslationSettingsInput {
     source_index_name: String,
     target_index_name: String,
+    source_provider: AsyncMigrationSourceProvider,
     settings: Value,
     replica_settings: BTreeMap<String, Value>,
 }
@@ -46,6 +49,7 @@ type TranslationStreamResult<T, E> = Result<T, TranslationStreamError<E>>;
 pub(in crate::handlers::migration) struct SpoolTranslationInput {
     pub(super) source_index_name: String,
     pub(super) target_index_name: String,
+    pub(super) source_provider: AsyncMigrationSourceProvider,
     pub(super) settings: Value,
     pub(super) document_pages: Vec<Vec<Value>>,
     pub(super) rule_pages: Vec<Vec<Value>>,
@@ -130,11 +134,13 @@ pub(in crate::handlers::migration) fn translate_accepted_spool_payload<E>(
     should_cancel: impl FnMut() -> Result<bool, SpoolError>,
     emit_documents: impl FnMut(Vec<Document>) -> Result<(), E>,
 ) -> TranslationStreamResult<TranslationOutcome, E> {
+    let source_provider = accepted_settings_source_provider(reader.source_provider()?);
     let settings = reader.settings()?;
     translate_pages(
         TranslationSettingsInput {
             source_index_name,
             target_index_name,
+            source_provider,
             settings,
             replica_settings,
         },
@@ -153,7 +159,10 @@ pub(in crate::handlers::migration) fn translate_accepted_spool_payload<E>(
 pub(in crate::handlers::migration) fn translate_accepted_spool_settings(
     reader: &AcceptedSpoolReader,
 ) -> Result<SettingsTranslationOutcome, SpoolError> {
-    let initial = translate_initial_settings(reader.settings()?);
+    let initial = translate_initial_settings(
+        reader.settings()?,
+        accepted_settings_source_provider(reader.source_provider()?),
+    );
     if contains_hard_rejection(&initial.entries) {
         return Ok(SettingsTranslationOutcome::Rejected(finalize_report(
             initial.entries,
@@ -175,6 +184,7 @@ pub(in crate::handlers::migration) fn translate_spool_input<E>(
         TranslationSettingsInput {
             source_index_name: input.source_index_name,
             target_index_name: input.target_index_name,
+            source_provider: input.source_provider,
             settings: input.settings,
             replica_settings: input.replica_settings,
         },
@@ -207,12 +217,22 @@ struct TranslationSessionOptions {
     document_batch_size: usize,
 }
 
-fn translate_initial_settings(settings: Value) -> InitialSettingsTranslation {
+fn translate_initial_settings(
+    settings: Value,
+    source_provider: AsyncMigrationSourceProvider,
+) -> InitialSettingsTranslation {
     let mut entries = non_portable_product_entries();
-    validate_settings_payload(&settings, &mut entries);
+    if source_provider == AsyncMigrationSourceProvider::Algolia {
+        validate_settings_payload(&settings, &mut entries);
+    }
 
     let mut failures = Vec::new();
-    let translated_settings = translate_settings(&settings, &mut failures);
+    let translated_settings = translate_settings_for_provider(
+        &settings,
+        settings_source_provider(source_provider),
+        &mut failures,
+        &mut entries,
+    );
     push_typed_failures(&mut entries, failures);
 
     InitialSettingsTranslation {
@@ -303,6 +323,7 @@ where
         let TranslationSettingsInput {
             source_index_name,
             target_index_name,
+            source_provider,
             settings,
             replica_settings,
         } = settings_input;
@@ -314,10 +335,17 @@ where
         let mut snapshot_builder = SourceSnapshotBuilder::new(options.identity_config)
             .map_err(TranslationStreamError::Identity)?;
         snapshot_builder.record_settings(&settings);
-        validate_settings_payload(&settings, &mut entries);
+        if source_provider == AsyncMigrationSourceProvider::Algolia {
+            validate_settings_payload(&settings, &mut entries);
+        }
 
         let mut failures = Vec::new();
-        let mut translated_settings = translate_settings(&settings, &mut failures);
+        let mut translated_settings = translate_settings_for_provider(
+            &settings,
+            settings_source_provider(source_provider),
+            &mut failures,
+            &mut entries,
+        );
         push_typed_failures(&mut entries, failures);
         let mut translated_replica_settings = Vec::new();
         if let Some(translated_settings) = &mut translated_settings {
@@ -540,6 +568,27 @@ where
                 .push(source_snapshot_violation_entry(violation));
         }
         Ok(())
+    }
+}
+
+fn settings_source_provider(
+    source_provider: AsyncMigrationSourceProvider,
+) -> SettingsSourceProvider {
+    match source_provider {
+        AsyncMigrationSourceProvider::Algolia => SettingsSourceProvider::Algolia,
+        AsyncMigrationSourceProvider::Meilisearch => SettingsSourceProvider::Meilisearch,
+        AsyncMigrationSourceProvider::Typesense => SettingsSourceProvider::Typesense,
+    }
+}
+
+fn accepted_settings_source_provider(
+    source_provider: AsyncMigrationSourceProvider,
+) -> AsyncMigrationSourceProvider {
+    match source_provider {
+        AsyncMigrationSourceProvider::Typesense => AsyncMigrationSourceProvider::Typesense,
+        AsyncMigrationSourceProvider::Algolia | AsyncMigrationSourceProvider::Meilisearch => {
+            AsyncMigrationSourceProvider::Algolia
+        }
     }
 }
 

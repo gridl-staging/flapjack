@@ -73,6 +73,7 @@ fn default_output_path_targets_engine_docs2_openapi_json() {
     );
 }
 
+#[cfg(not(feature = "fault-injection"))]
 #[test]
 fn committed_docs2_openapi_matches_export_output() {
     let committed_path = crate::openapi_export::default_docs2_output_path();
@@ -102,6 +103,7 @@ fn committed_docs2_openapi_matches_export_output() {
     );
 }
 
+#[cfg(not(feature = "fault-injection"))]
 #[test]
 fn committed_demo_openapi_matches_export_output() {
     let committed_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -159,6 +161,74 @@ fn export_output_declares_closed_source_provider_status_paths() {
     assert_eq!(
         actual_status_paths, expected_status_paths,
         "fjcloud derives the closed source_provider union from provider-specific status GET paths"
+    );
+}
+
+#[test]
+fn export_output_declares_closed_source_provider_resume_paths() {
+    let doc = exported_openapi_doc();
+    let expected_resume_paths = BTreeSet::from([
+        "/1/migrations/algolia/{job_id}/resume",
+        "/1/migrations/meilisearch/{job_id}/resume",
+        "/1/migrations/typesense/{job_id}/resume",
+    ]);
+    let actual_resume_paths: BTreeSet<&str> = doc
+        .get("paths")
+        .and_then(|paths| paths.as_object())
+        .expect("exported openapi must contain paths")
+        .iter()
+        .filter_map(|(path, operation)| operation.get("post").is_some().then_some(path.as_str()))
+        .filter(|path| {
+            path.strip_prefix("/1/migrations/")
+                .and_then(|tail| tail.strip_suffix("/{job_id}/resume"))
+                .is_some_and(|provider| !provider.contains('/'))
+        })
+        .collect();
+
+    assert_eq!(
+        actual_resume_paths, expected_resume_paths,
+        "fjcloud derives the closed resume source_provider union from provider-specific resume POST paths"
+    );
+    for path in expected_resume_paths {
+        let responses = doc
+            .pointer(&format!(
+                "/paths/{}/post/responses",
+                path.replace('/', "~1")
+            ))
+            .and_then(serde_json::Value::as_object)
+            .unwrap_or_else(|| panic!("{path} resume POST should document responses"));
+        for status in ["202", "400", "404", "409", "500"] {
+            assert!(
+                responses.contains_key(status),
+                "{path} resume POST should document {status}"
+            );
+        }
+        assert_eq!(
+            responses
+                .get("202")
+                .and_then(|response| response.pointer("/content/application~1json/schema/$ref"))
+                .and_then(serde_json::Value::as_str),
+            Some("#/components/schemas/AsyncMigrationStatusResponse")
+        );
+    }
+}
+
+#[test]
+fn export_output_declares_meilisearch_submit_payload_schema() {
+    let doc = exported_openapi_doc();
+
+    assert!(
+        doc.pointer("/components/schemas/MigrateFromMeilisearchRequest")
+            .is_some(),
+        "Meilisearch submit payload must be registered as a reusable ApiDoc component"
+    );
+    assert_eq!(
+        schema_ref(
+            &doc,
+            "/paths/~11~1migrations~1meilisearch/post/requestBody/content/application~1json/schema"
+        ),
+        Some("#/components/schemas/MigrateFromMeilisearchRequest"),
+        "Meilisearch submit route must reference its provider-specific request body"
     );
 }
 #[test]

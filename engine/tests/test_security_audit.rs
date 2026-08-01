@@ -6,6 +6,11 @@ use flapjack::analytics::{AnalyticsCollector, AnalyticsConfig, AnalyticsQueryEng
 use flapjack::index::settings::IndexSettings;
 use flapjack::types::{Document, FieldValue};
 use flapjack_http::analytics_cluster::AnalyticsClusterClient;
+use flapjack_http::auth::{
+    generate_secured_api_key, index_pattern_matches, referer_matches,
+    validate_restrict_sources_csv, validate_restrict_sources_entries, validate_secured_key,
+    KeyStore,
+};
 use flapjack_http::startup::{
     cors_origins_from_value, validate_startup_auth_policy, CorsMode, StartupAuthValidationError,
     StartupAuthValidationOutcome,
@@ -376,6 +381,170 @@ async fn malformed_secured_keys_return_canonical_403_without_decode_leaks() {
             "malformed secured key must not leak decode/parse internals in error payload",
         );
     }
+}
+
+/// SEC-G1 regression: a byte length >= 64 does not imply byte offset 64 is a
+/// UTF-8 char boundary. The parser must split the fixed-width ASCII HMAC prefix
+/// as bytes before validating the parameter suffix as UTF-8.
+///
+/// The pre-auth contract is that any malformed key is rejected (returns `None`)
+/// without crashing the parser. This test prevents regressions to fixed-offset
+/// `str` slicing.
+#[test]
+fn a07_secured_key_validation_survives_non_char_boundary_payload() {
+    // Layout: 63 ASCII bytes, then `é` (2 UTF-8 bytes at offsets 63 and 64),
+    // then trailing ASCII. Byte offset 64 lands on the `é` continuation byte,
+    // so it is NOT a char boundary even though the string is well past 64 bytes.
+    let payload = format!("{}{}{}", "a".repeat(63), 'é', "trailing_ascii_params");
+    assert!(
+        !payload.is_char_boundary(64),
+        "reproducer invariant: byte offset 64 must fall off a UTF-8 char boundary",
+    );
+
+    let tmp = TempDir::new().expect("keystore tempdir");
+    let key_store = KeyStore::load_or_create(tmp.path(), ADMIN_KEY);
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
+
+    // catch_unwind so the panic at the byte-index slice becomes an assertable
+    // Err(..) rather than aborting the test binary. Ok(None) is the only
+    // acceptable outcome: parsed, rejected, no crash.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        validate_secured_key(&encoded, &key_store)
+    }));
+
+    assert!(
+        matches!(result, Ok(None)),
+        "validate_secured_key must reject a non-char-boundary secured key by \
+         returning None, not panic at the decoded_str[..64] byte slice (SEC-G1)",
+    );
+}
+
+#[test]
+fn a07_secured_key_validation_rejects_invalid_utf8_parameters() {
+    let tmp = TempDir::new().expect("keystore tempdir");
+    let key_store = KeyStore::load_or_create(tmp.path(), ADMIN_KEY);
+    let search_key = key_store
+        .list_all()
+        .into_iter()
+        .find_map(|key| key.hmac_key)
+        .expect("default search key must retain HMAC material");
+
+    // Make the HMAC valid for the lossy interpretation of 0xFF. A parser that
+    // silently replaces invalid UTF-8 would therefore accept this credential.
+    let mut payload = base64::engine::general_purpose::STANDARD
+        .decode(generate_secured_api_key(&search_key, "\u{FFFD}"))
+        .expect("generated secured key must be valid base64");
+    payload.truncate(64);
+    payload.push(0xFF);
+    assert!(
+        payload[..64].iter().all(u8::is_ascii_hexdigit),
+        "fixture HMAC prefix must reach parameter UTF-8 validation",
+    );
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        validate_secured_key(&encoded, &key_store)
+    }));
+
+    assert!(
+        matches!(result, Ok(None)),
+        "invalid UTF-8 parameters must be rejected, not replaced or accepted",
+    );
+}
+
+// Stage 3 parser sweep: auth public seams. These keep private secured-key and
+// referer helpers private while exercising hostile inputs through stable API
+// boundaries.
+#[test]
+fn stage3_secured_key_restrictions_round_trip_multibyte_and_empty_values() {
+    let tmp = TempDir::new().expect("keystore tempdir");
+    let key_store = KeyStore::load_or_create(tmp.path(), ADMIN_KEY);
+    let search_key = key_store
+        .list_all()
+        .into_iter()
+        .find_map(|key| key.hmac_key)
+        .expect("default search key must retain HMAC material");
+
+    let params = concat!(
+        "filters=category%3Acr%C3%A8me+br%C3%BBl%C3%A9e",
+        "&restrictIndices=%5B%22prod_cafe_%C3%A9%22%2C%22tenant_%E6%9D%B1%E4%BA%AC%22%5D",
+        "&userToken=%E7%94%A8%E6%88%B7-123",
+        "&hitsPerPage=184467440737095516160",
+        "&restrictSources="
+    );
+    let secured_key = generate_secured_api_key(&search_key, &params);
+
+    let (_api_key, restrictions) =
+        validate_secured_key(&secured_key, &key_store).expect("valid HMAC must parse");
+    assert_eq!(
+        restrictions.filters.as_deref(),
+        Some("category:crème brûlée")
+    );
+    assert_eq!(restrictions.user_token.as_deref(), Some("用户-123"));
+    assert_eq!(
+        restrictions.restrict_indices,
+        Some(vec!["prod_cafe_é".to_string(), "tenant_東京".to_string()])
+    );
+    assert_eq!(
+        restrictions.hits_per_page, None,
+        "overflowing unsigned hitsPerPage must be ignored rather than wrapped"
+    );
+    assert_eq!(restrictions.restrict_sources.as_deref(), Some(""));
+}
+
+#[test]
+fn stage3_secured_key_rejects_empty_and_one_byte_short_decoded_values() {
+    let tmp = TempDir::new().expect("keystore tempdir");
+    let key_store = KeyStore::load_or_create(tmp.path(), ADMIN_KEY);
+
+    for decoded in [Vec::new(), vec![b'a'; 63]] {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(decoded);
+        assert!(
+            validate_secured_key(&encoded, &key_store).is_none(),
+            "short decoded secured-key payloads must reject without panic"
+        );
+    }
+}
+
+#[test]
+fn stage3_referer_and_index_globs_handle_multibyte_and_empty_inputs() {
+    let referer_patterns = vec![
+        "https://shop.example.com/*".to_string(),
+        "*пример.рф".to_string(),
+    ];
+    assert!(referer_matches(
+        "https://shop.example.com/café?item=東京",
+        &referer_patterns
+    ));
+    assert!(referer_matches("https://пример.рф/путь", &referer_patterns));
+    assert!(!referer_matches("", &referer_patterns));
+    assert!(referer_matches("", &[]));
+
+    let index_patterns = vec!["prod_*".to_string(), "*東京".to_string()];
+    assert!(index_pattern_matches(&index_patterns, "prod_café"));
+    assert!(index_pattern_matches(&index_patterns, "tenant_東京"));
+    assert!(!index_pattern_matches(&index_patterns, ""));
+    assert!(index_pattern_matches(&[], ""));
+}
+
+#[test]
+fn stage3_restrict_sources_public_validators_reject_hostile_entries() {
+    assert!(validate_restrict_sources_csv(" ,127.0.0.1, 10.0.0.0/8 ").is_ok());
+    assert_eq!(
+        validate_restrict_sources_csv("../keys").unwrap_err(),
+        "../keys"
+    );
+
+    let entries = vec![
+        "192.168.1.0/24".to_string(),
+        "https://shop.example.com/*".to_string(),
+        "bad source".to_string(),
+    ];
+    assert_eq!(
+        validate_restrict_sources_entries(&entries).unwrap_err(),
+        "bad source"
+    );
 }
 
 #[tokio::test]

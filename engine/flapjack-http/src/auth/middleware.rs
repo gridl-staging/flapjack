@@ -9,6 +9,7 @@ use std::net::IpAddr;
 
 use crate::error_response::json_error;
 
+use super::route_acl::RouteAcl;
 use super::{
     api_key_restrict_sources_match, invalid_api_credentials_error, key_allows_index,
     referer_matches, request_application_id, required_acl_for_route, restrict_sources_match,
@@ -77,7 +78,7 @@ pub(crate) fn extract_index_name(path: &str) -> Option<String> {
 
 /// Extract API key from request headers or query string.
 ///
-/// First checks the `x-algolia-api-key` header. If not found and the path is `/metrics`, returns `None` to prevent credential leakage via logs, shell history, or proxy access logs. Otherwise attempts to extract the key from the `x-algolia-api-key` query string parameter.
+/// First checks the `x-algolia-api-key` header. If not found and the route requires admin ACL, returns `None` to prevent credential leakage via logs, shell history, proxy access logs, or referrer-like surfaces. Otherwise attempts to extract the key from the `x-algolia-api-key` query string parameter.
 ///
 /// # Arguments
 ///
@@ -90,12 +91,14 @@ fn extract_api_key(request: &Request) -> Option<String> {
     if let Some(val) = request.headers().get("x-algolia-api-key") {
         return val.to_str().ok().map(|s| s.to_string());
     }
-    // `/metrics` is an operational admin endpoint, not an Algolia-compatible route.
-    // Reject URL-borne credentials here so admin keys do not leak via logs,
-    // shell history, proxy access logs, or referrer-like surfaces.
-    if request.uri().path() == "/metrics" {
+
+    // Admin-ACL routes reject URL-borne credentials so sensitive keys do not
+    // leak via logs, shell history, proxy access logs, or referrer-like surfaces.
+    if required_acl_for_route(request.method(), request.uri().path()) == RouteAcl::Required("admin")
+    {
         return None;
     }
+
     if let Some(query) = request.uri().query() {
         for pair in query.split('&') {
             if let Some(val) = pair.strip_prefix("x-algolia-api-key=") {
@@ -159,12 +162,14 @@ fn ensure_route_acl_allows_request(
     method: &Method,
     path: &str,
 ) -> Option<Response> {
-    let required_acl = required_acl_for_route(method, path)?;
-
-    let has_access = if required_acl == "admin" {
-        key_store.is_admin(api_key_value) || is_own_key_read_request(method, path, api_key_value)
-    } else {
-        api_key.acl.iter().any(|acl| acl == required_acl)
+    let has_access = match required_acl_for_route(method, path) {
+        RouteAcl::Public => return None,
+        RouteAcl::Unmapped => false,
+        RouteAcl::Required("admin") => {
+            key_store.is_admin(api_key_value)
+                || is_own_key_read_request(method, path, api_key_value)
+        }
+        RouteAcl::Required(required_acl) => api_key.acl.iter().any(|acl| acl == required_acl),
     };
 
     if has_access {

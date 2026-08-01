@@ -93,6 +93,32 @@ async fn openapi_membership_contract_is_served_when_auth_is_enabled() {
 }
 
 #[tokio::test]
+async fn openapi_migration_status_schema_includes_resume_fields() {
+    let (_tmp, app) = build_auth_test_app();
+    let response = send_empty_request(&app, Method::GET, "/api-docs/openapi.json").await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = body_json(response).await;
+    let properties = document
+        .pointer("/components/schemas/AsyncMigrationStatusResponse/properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("AsyncMigrationStatusResponse schema must expose its properties");
+
+    assert_eq!(
+        properties.get("resumable"),
+        Some(&serde_json::json!({"type": ["boolean", "null"]}))
+    );
+    assert_eq!(
+        properties.get("operation"),
+        Some(&serde_json::json!({"type": ["string", "null"]}))
+    );
+    assert_eq!(
+        properties.get("resumeHandle"),
+        Some(&serde_json::json!({"type": ["string", "null"]}))
+    );
+}
+
+#[tokio::test]
 async fn openapi_membership_contract_is_hidden_when_auth_is_disabled() {
     let (_tmp, app) = build_no_auth_test_app();
     let response = send_empty_request(&app, Method::GET, "/api-docs/openapi.json").await;
@@ -346,6 +372,18 @@ async fn assert_migration_job_not_found_response(resp: axum::response::Response)
     );
 }
 
+async fn assert_migration_resume_not_available_response(resp: axum::response::Response) {
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(resp).await,
+        serde_json::json!({
+            "message": "Migration resume is not available",
+            "status": 409,
+            "code": "migration_resume_not_available"
+        })
+    );
+}
+
 async fn assert_source_migration_alias_admin_contract(
     app: &axum::Router,
     source_provider: AsyncMigrationSourceProvider,
@@ -378,9 +416,9 @@ async fn assert_source_migration_alias_admin_contract(
     assert_migration_job_not_found_response(get_request(app, &job_path, Some("admin-key")).await)
         .await;
 
-    assert_migration_job_action_contract(app, &job_path, non_admin_keys).await;
+    assert_migration_job_action_contract(app, &job_path, non_admin_keys, source_provider).await;
 
-    if source_provider != AsyncMigrationSourceProvider::Algolia {
+    if source_provider == AsyncMigrationSourceProvider::Typesense {
         let recognized_provider =
             post_json(app, &submit_path, Some("admin-key"), submit_payload).await;
         assert_eq!(recognized_provider.status(), StatusCode::BAD_REQUEST);
@@ -399,23 +437,41 @@ async fn assert_migration_job_action_contract(
     app: &axum::Router,
     job_path: &str,
     non_admin_keys: [&str; 2],
+    source_provider: AsyncMigrationSourceProvider,
 ) {
-    for action in ["cancel", "acknowledge"] {
+    let mut actions = vec![
+        ("cancel", serde_json::json!({}), false),
+        ("acknowledge", serde_json::json!({}), false),
+    ];
+    if source_provider == AsyncMigrationSourceProvider::Algolia {
+        actions.push((
+            "resume",
+            serde_json::json!({
+                "appId": "APPID",
+                "apiKey": "source-key",
+                "sourceIndex": "products"
+            }),
+            true,
+        ));
+    }
+    for (action, payload, resume_not_available_for_missing_job) in actions {
         let action_path = format!("{job_path}/{action}");
         assert_invalid_credentials_response(
-            post_json(app, &action_path, None, serde_json::json!({})).await,
+            post_json(app, &action_path, None, payload.clone()).await,
         )
         .await;
         for api_key in non_admin_keys {
             assert_method_not_allowed_response(
-                post_json(app, &action_path, Some(api_key), serde_json::json!({})).await,
+                post_json(app, &action_path, Some(api_key), payload.clone()).await,
             )
             .await;
         }
-        assert_migration_job_not_found_response(
-            post_json(app, &action_path, Some("admin-key"), serde_json::json!({})).await,
-        )
-        .await;
+        let missing_job_response = post_json(app, &action_path, Some("admin-key"), payload).await;
+        if resume_not_available_for_missing_job {
+            assert_migration_resume_not_available_response(missing_job_response).await;
+        } else {
+            assert_migration_job_not_found_response(missing_job_response).await;
+        }
     }
 }
 

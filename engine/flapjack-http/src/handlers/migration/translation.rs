@@ -1,5 +1,7 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
+#[path = "meilisearch_settings.rs"]
+mod meilisearch_settings;
 #[path = "translation_bundle.rs"]
 mod translation_bundle;
 #[path = "translation_report.rs"]
@@ -9,11 +11,13 @@ mod translation_schema;
 #[path = "translation_session.rs"]
 mod translation_session;
 
-pub(super) use self::translation_bundle::ReplicaSettingsTranslation;
 use self::translation_bundle::TypedTranslationFailure;
-use self::translation_report::{hard_entry, warning_entry, ReportCode, ReportResource};
+pub(super) use self::translation_bundle::{
+    translate_settings_for_provider, ReplicaSettingsTranslation, SettingsSourceProvider,
+};
+use self::translation_report::{hard_entry, warning_entry, ReportResource};
 pub(super) use self::translation_report::{
-    warning_message, TranslationReport, TranslationReportEntry,
+    warning_message, ReportCode, TranslationReport, TranslationReportEntry,
 };
 #[cfg(test)]
 pub(super) use self::translation_session::translate_spool_input;
@@ -660,7 +664,7 @@ fn resolve_matching_row(
 // Algolia standard and virtual replicas both migrate as Flapjack virtual replicas.
 // Flapjack sorts at query time, so a physical replica would duplicate the corpus without benefit.
 static STAGE1_MATRIX: &[CompatibilityRow] = &[
-    exact_settings("attributesForFaceting"),
+    persisted_no_behavior_setting("attributesForFaceting"),
     exact_settings("searchableAttributes"),
     transformed_settings("attributesToIndex"),
     exact_settings("ranking"),
