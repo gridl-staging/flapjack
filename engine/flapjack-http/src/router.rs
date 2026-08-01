@@ -24,9 +24,9 @@ use crate::handlers::analytics;
 use crate::handlers::insights::GdprDeleteState;
 use crate::handlers::migration::{
     acknowledge_algolia_migration_http, cancel_algolia_migration_http, cancel_bulk_replace_http,
-    get_algolia_migration_status_http, get_bulk_replace_status_http, resume_algolia_migration_http,
-    submit_algolia_migration_http, submit_bulk_replace_http, submit_privacy_scrub_http,
-    AsyncMigrationSourceProvider,
+    get_algolia_migration_status_http, get_bulk_replace_status_http,
+    preview_algolia_migration_http, resume_algolia_migration_http, submit_algolia_migration_http,
+    submit_bulk_replace_http, submit_privacy_scrub_http, AsyncMigrationSourceProvider,
 };
 use crate::handlers::{
     add_documents, add_record_auto_id, append_security_source, batch_search, browse_index,
@@ -217,9 +217,14 @@ fn register_source_migration_routes(mut router: Router<Arc<AppState>>) -> Router
             .as_str()
             .expect("every public migration provider must have a route segment");
         let provider_path = format!("/1/migrations/{provider}");
+        let preview_path = format!("{provider_path}/preview");
         let job_path = format!("{provider_path}/:job_id");
 
         router = router
+            .route(
+                &preview_path,
+                post(preview_algolia_migration_http).layer(Extension(source_provider)),
+            )
             .route(
                 &provider_path,
                 post(submit_algolia_migration_http).layer(Extension(source_provider)),

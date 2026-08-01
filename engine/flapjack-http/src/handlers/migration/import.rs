@@ -483,6 +483,8 @@ where
     .await
 }
 
+// Test-only hooks add an eighth parameter under `--all-targets`; production has seven.
+#[allow(clippy::too_many_arguments)]
 async fn import_accepted_export_inner(
     state_manager: &Arc<IndexManager>,
     spool: &SpoolStore,

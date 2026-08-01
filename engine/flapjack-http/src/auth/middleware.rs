@@ -8,6 +8,7 @@ use axum::{
 use std::net::IpAddr;
 
 use crate::error_response::json_error;
+use crate::security_audit::{self, Actor, AuditPath, Target};
 
 use super::route_acl::RouteAcl;
 use super::{
@@ -130,14 +131,8 @@ fn classify_auth_attempt_type(key_store: &KeyStore, api_key_value: &str) -> &'st
     "direct"
 }
 
-fn log_auth_failure(path: &str, auth_attempt_type: &str, reason: &str) {
-    tracing::warn!(
-        event = "security_audit_auth_failure",
-        auth_attempt_type,
-        reason,
-        path,
-        "security event: auth failure"
-    );
+fn log_auth_failure(path: &str, auth_attempt_type: &'static str, reason: &'static str) {
+    security_audit::emit_auth_failure(AuditPath::for_auth_route(path), auth_attempt_type, reason);
 }
 
 fn ensure_key_is_not_expired(api_key: &ApiKey) -> Option<Response> {
@@ -369,6 +364,13 @@ pub async fn authenticate_and_authorize(
         ensure_index_access_is_allowed(&path, &api_key, secured_restrictions.as_ref())
     {
         return Err(response);
+    }
+
+    let successful_admin_target = (key_store.is_admin(&api_key_value)
+        && required_acl_for_route(request.method(), &path) == RouteAcl::Required("admin"))
+    .then(|| Target::route_pattern(AuditPath::for_auth_route(&path)));
+    if let Some(target) = successful_admin_target {
+        security_audit::emit_auth_success(Actor::admin_api_key(), target);
     }
 
     let mut request = request;

@@ -616,7 +616,7 @@ fn resume_expected_target_ids() -> HashSet<String> {
         .collect()
 }
 
-fn migration_auth_headers<'a>(api_key: &'a str) -> [(&'static str, &'a str); 2] {
+fn migration_auth_headers(api_key: &str) -> [(&'static str, &str); 2] {
     [
         ("x-algolia-application-id", RESUME_MIGRATION_OWNER_APP_ID),
         ("x-algolia-api-key", api_key),

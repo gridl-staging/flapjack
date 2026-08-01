@@ -26,6 +26,8 @@ mod import;
 mod job_runner;
 #[allow(dead_code)]
 mod meilisearch_client;
+#[cfg(test)]
+mod preview_tests;
 mod source_identity_partitions;
 mod source_reader;
 mod source_snapshot;
@@ -153,6 +155,81 @@ pub struct MigrateFromTypesenseRequest {
     pub overwrite: bool,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationPreviewResponse {
+    report: MigrationPreviewReport,
+    source_counts: MigrationPreviewSourceCounts,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MigrationPreviewSourceCounts {
+    indexes: usize,
+    records: usize,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationPreviewReport {
+    entries: Vec<MigrationPreviewReportEntry>,
+    summary: MigrationPreviewReportSummary,
+    report_digest: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationPreviewReportSummary {
+    total_entries: usize,
+    hard_rejections: usize,
+    warnings: usize,
+    scope_gaps: usize,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationPreviewReportEntry {
+    severity: translation::ReportSeverity,
+    code: translation::ReportCode,
+    resource: translation::ReportResource,
+    page_index: Option<usize>,
+    item_index: Option<usize>,
+    json_path: String,
+}
+
+impl From<translation::TranslationReport> for MigrationPreviewReport {
+    fn from(report: translation::TranslationReport) -> Self {
+        Self {
+            entries: report.entries.into_iter().map(Into::into).collect(),
+            summary: report.summary.into(),
+            report_digest: report.report_digest,
+        }
+    }
+}
+
+impl From<translation::TranslationReportSummary> for MigrationPreviewReportSummary {
+    fn from(summary: translation::TranslationReportSummary) -> Self {
+        Self {
+            total_entries: summary.total_entries,
+            hard_rejections: summary.hard_rejections,
+            warnings: summary.warnings,
+            scope_gaps: summary.scope_gaps,
+        }
+    }
+}
+
+impl From<translation::TranslationReportEntry> for MigrationPreviewReportEntry {
+    fn from(entry: translation::TranslationReportEntry) -> Self {
+        Self {
+            severity: entry.severity,
+            code: entry.code,
+            resource: entry.resource,
+            page_index: entry.page_index,
+            item_index: entry.item_index,
+            json_path: entry.json_path,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AsyncMigrationSourceProvider {
@@ -185,6 +262,10 @@ impl AsyncMigrationSourceProvider {
 
     fn is_supported_source(&self) -> bool {
         matches!(self, Self::Algolia | Self::Meilisearch | Self::Typesense)
+    }
+
+    fn supports_preview(&self) -> bool {
+        matches!(self, Self::Algolia | Self::Meilisearch)
     }
 
     fn is_algolia(&self) -> bool {
@@ -567,6 +648,40 @@ pub(super) trait AsyncMigrationSubmitPayload {
     ) -> Result<AdmittedMigration, MigrateError>;
 }
 
+trait MigrationPreviewPayload {
+    fn validate_preview(&self) -> Result<(), MigrateError>;
+    fn source_index(&self) -> &str;
+    fn target_index(&self) -> &str;
+}
+
+impl MigrationPreviewPayload for MigrateFromAlgoliaRequest {
+    fn validate_preview(&self) -> Result<(), MigrateError> {
+        validate_migration_request(self)
+    }
+
+    fn source_index(&self) -> &str {
+        &self.source_index
+    }
+
+    fn target_index(&self) -> &str {
+        migration_target_index(self)
+    }
+}
+
+impl MigrationPreviewPayload for MigrateFromMeilisearchRequest {
+    fn validate_preview(&self) -> Result<(), MigrateError> {
+        validate_meilisearch_migration_request(self)
+    }
+
+    fn source_index(&self) -> &str {
+        &self.source_index
+    }
+
+    fn target_index(&self) -> &str {
+        meilisearch_target_index(self)
+    }
+}
+
 impl AsyncMigrationSubmitPayload for MigrateFromAlgoliaRequest {
     fn admit_async(
         &self,
@@ -631,14 +746,41 @@ pub async fn migrate_from_algolia(
 macro_rules! define_source_migration_openapi_lifecycle {
     (
         $provider:ident,
+        preview_request: $preview_request_ty:ty,
+        preview_source_reader: $preview_source_reader:path,
         request: $request_ty:ty,
         source_reader: $source_reader:path,
+        preview: $preview_fn:ident => $preview_path:literal,
         submit: $submit_fn:ident => $submit_path:literal,
         status: $status_fn:ident => $status_path:literal,
         cancel: $cancel_fn:ident => $cancel_path:literal,
         acknowledge: $acknowledge_fn:ident => $acknowledge_path:literal,
         resume: $resume_fn:ident => $resume_path:literal
     ) => {
+        /// Preview source migration translation without admitting or publishing a job.
+        #[utoipa::path(
+            post,
+            path = $preview_path,
+            tag = "migration",
+            request_body = $preview_request_ty,
+            responses(
+                (status = 200, description = "Advisory source migration translation report", body = MigrationPreviewResponse),
+                (status = 400, description = "Invalid migration request or unsupported source provider"),
+                (status = 502, description = "Upstream source provider request failed")
+            ),
+            security(("api_key" = []))
+        )]
+        pub async fn $preview_fn(
+            Json(payload): Json<$preview_request_ty>,
+        ) -> Result<Json<MigrationPreviewResponse>, MigrateError> {
+            preview_source_migration(
+                AsyncMigrationSourceProvider::$provider,
+                payload,
+                $preview_source_reader,
+            )
+            .await
+        }
+
         /// Submit an asynchronous source migration.
         #[utoipa::path(
             post,
@@ -802,8 +944,11 @@ macro_rules! define_source_migration_openapi_lifecycle {
 
 define_source_migration_openapi_lifecycle!(
     Algolia,
+    preview_request: MigrateFromAlgoliaRequest,
+    preview_source_reader: algolia_source_reader,
     request: MigrateFromAlgoliaRequest,
     source_reader: algolia_source_reader,
+    preview: preview_algolia_migration => "/1/migrations/algolia/preview",
     submit: submit_algolia_migration => "/1/migrations/algolia",
     status: get_algolia_migration_status => "/1/migrations/algolia/{job_id}",
     cancel: cancel_algolia_migration => "/1/migrations/algolia/{job_id}/cancel",
@@ -812,8 +957,11 @@ define_source_migration_openapi_lifecycle!(
 );
 define_source_migration_openapi_lifecycle!(
     Meilisearch,
+    preview_request: MigrateFromMeilisearchRequest,
+    preview_source_reader: meilisearch_source_reader,
     request: MigrateFromMeilisearchRequest,
     source_reader: meilisearch_source_reader,
+    preview: preview_meilisearch_migration => "/1/migrations/meilisearch/preview",
     submit: submit_meilisearch_migration => "/1/migrations/meilisearch",
     status: get_meilisearch_migration_status => "/1/migrations/meilisearch/{job_id}",
     cancel: cancel_meilisearch_migration => "/1/migrations/meilisearch/{job_id}/cancel",
@@ -822,14 +970,54 @@ define_source_migration_openapi_lifecycle!(
 );
 define_source_migration_openapi_lifecycle!(
     Typesense,
+    preview_request: MigrateFromAlgoliaRequest,
+    preview_source_reader: algolia_source_reader,
     request: MigrateFromTypesenseRequest,
     source_reader: typesense_source_reader,
+    preview: preview_typesense_migration => "/1/migrations/typesense/preview",
     submit: submit_typesense_migration => "/1/migrations/typesense",
     status: get_typesense_migration_status => "/1/migrations/typesense/{job_id}",
     cancel: cancel_typesense_migration => "/1/migrations/typesense/{job_id}/cancel",
     acknowledge: acknowledge_typesense_migration => "/1/migrations/typesense/{job_id}/acknowledge",
     resume: resume_typesense_migration => "/1/migrations/typesense/{job_id}/resume"
 );
+
+pub(crate) async fn preview_algolia_migration_http(
+    source_provider: Option<Extension<AsyncMigrationSourceProvider>>,
+    #[cfg(test)] test_source_factory: Option<Extension<TestMigrationSourceReaderFactory>>,
+    body: Bytes,
+) -> Result<Json<MigrationPreviewResponse>, MigrateError> {
+    let source_provider = source_provider
+        .map(|Extension(provider)| provider)
+        .unwrap_or_default();
+    ensure_source_provider_preview_supported(source_provider)?;
+
+    match source_provider {
+        AsyncMigrationSourceProvider::Algolia => {
+            let payload = parse_submit_payload(&body)?;
+            #[cfg(test)]
+            if let Some(Extension(factory)) = test_source_factory.as_ref() {
+                return preview_source_migration(source_provider, payload, |_| {
+                    factory.build(source_provider)
+                })
+                .await;
+            }
+            preview_source_migration(source_provider, payload, algolia_source_reader).await
+        }
+        AsyncMigrationSourceProvider::Meilisearch => {
+            let payload = parse_submit_payload(&body)?;
+            #[cfg(test)]
+            if let Some(Extension(factory)) = test_source_factory.as_ref() {
+                return preview_source_migration(source_provider, payload, |_| {
+                    factory.build(source_provider)
+                })
+                .await;
+            }
+            preview_source_migration(source_provider, payload, meilisearch_source_reader).await
+        }
+        AsyncMigrationSourceProvider::Typesense => Err(source_provider_unsupported()),
+    }
+}
 
 pub(crate) async fn submit_algolia_migration_http(
     State(state): State<Arc<AppState>>,
@@ -1016,6 +1204,120 @@ where
         source_factory,
     )
     .await
+}
+
+#[derive(Default)]
+struct PreviewSourceExport {
+    settings: serde_json::Value,
+    document_pages: Vec<Vec<serde_json::Value>>,
+    rule_pages: Vec<Vec<serde_json::Value>>,
+    synonym_pages: Vec<Vec<serde_json::Value>>,
+}
+
+impl PreviewSourceExport {
+    fn settings(&self) -> &serde_json::Value {
+        &self.settings
+    }
+
+    fn record_count(&self) -> usize {
+        self.document_pages.iter().map(Vec::len).sum()
+    }
+
+    fn into_translation_input(
+        self,
+        source_index_name: String,
+        target_index_name: String,
+        source_provider: AsyncMigrationSourceProvider,
+        replica_settings: std::collections::BTreeMap<String, serde_json::Value>,
+    ) -> translation::SpoolTranslationInput {
+        translation::SpoolTranslationInput {
+            source_index_name,
+            target_index_name,
+            source_provider,
+            settings: self.settings,
+            document_pages: self.document_pages,
+            rule_pages: self.rule_pages,
+            synonym_pages: self.synonym_pages,
+            replica_settings,
+        }
+    }
+}
+
+impl source_reader::SourceExportSink for PreviewSourceExport {
+    fn commit_settings(&mut self, settings: &serde_json::Value) -> Result<(), AlgoliaClientError> {
+        self.settings = settings.clone();
+        Ok(())
+    }
+
+    fn commit_document_page(
+        &mut self,
+        page: &[serde_json::Value],
+    ) -> Result<(), AlgoliaClientError> {
+        self.document_pages.push(page.to_vec());
+        Ok(())
+    }
+
+    fn commit_rule_page(&mut self, page: &[serde_json::Value]) -> Result<(), AlgoliaClientError> {
+        self.rule_pages.push(page.to_vec());
+        Ok(())
+    }
+
+    fn commit_synonym_page(
+        &mut self,
+        page: &[serde_json::Value],
+    ) -> Result<(), AlgoliaClientError> {
+        self.synonym_pages.push(page.to_vec());
+        Ok(())
+    }
+}
+
+async fn preview_source_migration<P, F, R>(
+    source_provider: AsyncMigrationSourceProvider,
+    payload: P,
+    source_factory: F,
+) -> Result<Json<MigrationPreviewResponse>, MigrateError>
+where
+    P: MigrationPreviewPayload,
+    F: FnOnce(&P) -> Result<R, AlgoliaClientError>,
+    R: source_reader::MigrationSourceReader + Send,
+{
+    ensure_source_provider_preview_supported(source_provider)?;
+    payload.validate_preview()?;
+    let source_index_name = payload.source_index().to_string();
+    let target_index_name = payload.target_index().to_string();
+    let mut reader = source_factory(&payload).map_err(algolia_error)?;
+
+    reader
+        .wait_for_quiescent_source()
+        .await
+        .map_err(algolia_error)?;
+    let mut export = PreviewSourceExport::default();
+    source_reader::read_source_snapshot(&mut reader, &mut export)
+        .await
+        .map_err(algolia_error)?;
+    let replica_settings = source_reader::collect_replica_settings(&mut reader, export.settings())
+        .await
+        .map_err(algolia_error)?;
+    let records = export.record_count();
+    let input = export.into_translation_input(
+        source_index_name,
+        target_index_name,
+        source_provider,
+        replica_settings,
+    );
+    let report = translation::translate_spool_report(input).map_err(|error| {
+        json_error_parts(StatusCode::INTERNAL_SERVER_ERROR, error.safe_message())
+    })?;
+
+    // Preview ends before import.rs::import_accepted_export_inner enters
+    // BulkBuildService::{prepare_publication,create_staging,activate}, and before job/spool admission.
+    Ok(Json(MigrationPreviewResponse {
+        report: report.into(),
+        source_counts: MigrationPreviewSourceCounts {
+            indexes: 1,
+            records,
+        },
+    }))
 }
 
 async fn submit_source_migration_impl<P, F, R>(
@@ -1489,6 +1791,9 @@ fn parse_typesense_submit_payload(
 ) -> Result<MigrateFromTypesenseRequest, MigrateError> {
     let value: serde_json::Value = serde_json::from_slice(body)
         .map_err(|_| json_error_parts(StatusCode::BAD_REQUEST, "Invalid migration request body"))?;
+    if value.get("appId").is_some() && value.get("node").is_none() {
+        return Err(source_provider_unsupported());
+    }
     if value.get("endpoint").is_some() && value.get("node").is_none() {
         return Err(source_provider_payload_mismatch(
             "Typesense payload does not match source_provider",
@@ -1601,6 +1906,16 @@ fn ensure_source_provider_supported(
     source_provider: AsyncMigrationSourceProvider,
 ) -> Result<(), MigrateError> {
     if source_provider.is_supported_source() {
+        Ok(())
+    } else {
+        Err(source_provider_unsupported())
+    }
+}
+
+fn ensure_source_provider_preview_supported(
+    source_provider: AsyncMigrationSourceProvider,
+) -> Result<(), MigrateError> {
+    if source_provider.supports_preview() {
         Ok(())
     } else {
         Err(source_provider_unsupported())

@@ -160,12 +160,38 @@ fn assert_migration_operation_uses_api_key(doc: &serde_json::Value, path: &str, 
     );
 }
 
+fn expected_async_migration_request_schema(provider: &str) -> &'static str {
+    match provider {
+        "algolia" | "typesense" => "#/components/schemas/MigrateFromAlgoliaRequest",
+        "meilisearch" => "#/components/schemas/MigrateFromMeilisearchRequest",
+        provider => {
+            panic!("{provider} must declare its provider-specific migration request schema")
+        }
+    }
+}
+
 fn assert_async_migration_lifecycle_is_documented(doc: &serde_json::Value, provider: &str) {
     let submit_path = format!("/1/migrations/{provider}");
     assert_path_exists(doc, &submit_path);
     assert_path_method(doc, &submit_path, "post");
     assert_migration_operation_uses_api_key(doc, &submit_path, "post");
     assert_async_migration_post_documents_contract(doc, &submit_path);
+
+    let preview_path = format!("{submit_path}/preview");
+    assert_path_exists(doc, &preview_path);
+    assert_path_method(doc, &preview_path, "post");
+    assert_migration_operation_uses_api_key(doc, &preview_path, "post");
+    assert_eq!(
+        schema_ref(
+            doc,
+            &format!(
+                "/paths/{}/post/requestBody/content/application~1json/schema",
+                preview_path.replace('/', "~1")
+            )
+        ),
+        Some(expected_async_migration_request_schema(provider)),
+        "{preview_path} POST should document its provider-specific JSON request body schema"
+    );
 
     let status_path = format!("{submit_path}/{{job_id}}");
     assert_path_exists(doc, &status_path);

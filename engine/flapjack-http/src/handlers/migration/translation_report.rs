@@ -3,6 +3,7 @@ use super::super::source_snapshot::{
     SourceSnapshotResource, SourceSnapshotSchemaViolation, SourceSnapshotSchemaViolationKind,
 };
 use serde::Serialize;
+use utoipa::ToSchema;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(in crate::handlers::migration) struct TranslationReport {
@@ -29,14 +30,14 @@ pub(in crate::handlers::migration) struct TranslationReportEntry {
     pub(in crate::handlers::migration) json_path: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 pub(in crate::handlers::migration) enum ReportSeverity {
     ScopeGap,
     Warning,
     HardRejection,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 pub(in crate::handlers::migration) enum ReportResource {
     Analytics,
     ApiKeys,
@@ -49,7 +50,7 @@ pub(in crate::handlers::migration) enum ReportResource {
     Synonym,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
 pub(in crate::handlers::migration) enum ReportCode {
     ProductNotMigrated,
     PersistedNoBehaviorSetting,

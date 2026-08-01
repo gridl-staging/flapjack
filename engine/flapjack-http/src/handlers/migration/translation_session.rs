@@ -47,16 +47,16 @@ type TranslationStreamResult<T, E> = Result<T, TranslationStreamError<E>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(in crate::handlers::migration) struct SpoolTranslationInput {
-    pub(super) source_index_name: String,
-    pub(super) target_index_name: String,
-    pub(super) source_provider: AsyncMigrationSourceProvider,
-    pub(super) settings: Value,
-    pub(super) document_pages: Vec<Vec<Value>>,
-    pub(super) rule_pages: Vec<Vec<Value>>,
-    pub(super) synonym_pages: Vec<Vec<Value>>,
+    pub(in crate::handlers::migration) source_index_name: String,
+    pub(in crate::handlers::migration) target_index_name: String,
+    pub(in crate::handlers::migration) source_provider: AsyncMigrationSourceProvider,
+    pub(in crate::handlers::migration) settings: Value,
+    pub(in crate::handlers::migration) document_pages: Vec<Vec<Value>>,
+    pub(in crate::handlers::migration) rule_pages: Vec<Vec<Value>>,
+    pub(in crate::handlers::migration) synonym_pages: Vec<Vec<Value>>,
     /// Replica-owned source settings carried to the translation entry point.
     /// Observation-only in Stage 1: counted, never applied to settings.
-    pub(super) replica_settings: BTreeMap<String, Value>,
+    pub(in crate::handlers::migration) replica_settings: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +123,30 @@ pub(in crate::handlers::migration) fn translate_spool_payload(
             panic!("in-memory translation identity infrastructure failed: {error:?}")
         }
     }
+}
+
+/// Runs the in-memory translation owner and returns its finalized advisory
+/// report without exposing translated resources to a caller that cannot publish.
+pub(in crate::handlers::migration) fn translate_spool_report(
+    input: SpoolTranslationInput,
+) -> Result<TranslationReport, SourceIdentityError> {
+    let mut instrumentation = TranslationSessionInstrumentation::default();
+    let outcome =
+        match translate_spool_input(input, &mut instrumentation, |_| Ok::<(), Infallible>(())) {
+            Ok(outcome) => outcome,
+            Err(TranslationStreamError::Identity(error)) => return Err(error),
+            Err(TranslationStreamError::Emit(never)) => match never {},
+            Err(TranslationStreamError::Spool(error)) => {
+                unreachable!("in-memory translation pages cannot fail: {error}")
+            }
+            Err(TranslationStreamError::Cancelled) => {
+                unreachable!("in-memory translation never requests cancellation")
+            }
+        };
+    Ok(match outcome {
+        TranslationOutcome::Translated(translated) => translated.report,
+        TranslationOutcome::Rejected(report) => report,
+    })
 }
 
 pub(in crate::handlers::migration) fn translate_accepted_spool_payload<E>(

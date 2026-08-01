@@ -130,3 +130,7 @@ docs2/0_META/OPEN_SOURCE_REPO_TRANSFER_GUIDE.md
 # Stage 5 live ops-contract harness runtime artifacts (harness-owned, not committed)
 tests/results/ops_contract_live/
 tests/results/ops_contract_live.txt
+
+# S3 SSE served-probe runtime evidence (harness-owned, not committed)
+tests/results/s3_sse_http_probe_*/
+tests/results/s3_sse_evidence/

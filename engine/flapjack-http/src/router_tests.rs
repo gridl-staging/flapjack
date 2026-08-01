@@ -698,6 +698,113 @@ async fn migration_routes_preserve_admin_contract() {
 }
 
 #[tokio::test]
+async fn migration_preview_route_preserves_admin_contract() {
+    let tmp = TempDir::new().unwrap();
+    let key_store = Arc::new(KeyStore::load_or_create(tmp.path(), "admin-key"));
+    let search_key = search_only_key_value(&key_store);
+    let write_key = create_test_key_with_acl(&key_store, "addObject");
+    let app = build_test_router(&tmp, Some(key_store));
+    let payload = serde_json::json!({
+        "appId": "APPID",
+        "apiKey": "source-key",
+        "sourceIndex": "products",
+        "targetIndex": "products_copy"
+    });
+
+    for source_provider in AsyncMigrationSourceProvider::PUBLIC {
+        let provider = source_provider.as_str().unwrap();
+        let path = format!("/1/migrations/{provider}/preview");
+        assert_invalid_credentials_response(post_json(&app, &path, None, payload.clone()).await)
+            .await;
+        for api_key in [&search_key, &write_key] {
+            assert_method_not_allowed_response(
+                post_json(&app, &path, Some(api_key), payload.clone()).await,
+            )
+            .await;
+        }
+    }
+
+    for source_provider in AsyncMigrationSourceProvider::PUBLIC {
+        let provider = source_provider.as_str().unwrap();
+        // Only supported source providers reach body validation. The async submit
+        // lifecycle rejects recognized-but-unsupported providers (typesense) with
+        // `source_provider_unsupported` before parsing the request body, so their
+        // preview lane never reaches the "Invalid migration request body" contract.
+        // That closed refusal is asserted separately by
+        // `migration_preview_refuses_typesense_and_unknown_source_providers`.
+        if !matches!(
+            source_provider,
+            AsyncMigrationSourceProvider::Algolia | AsyncMigrationSourceProvider::Meilisearch
+        ) {
+            continue;
+        }
+        let routed_admin_request = post_json(
+            &app,
+            &format!("/1/migrations/{provider}/preview"),
+            Some("admin-key"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(
+            routed_admin_request.status(),
+            StatusCode::BAD_REQUEST,
+            "{provider} preview must route admin-key requests to body validation"
+        );
+        assert_eq!(
+            body_json(routed_admin_request).await,
+            serde_json::json!({
+                "message": "Invalid migration request body",
+                "status": 400
+            }),
+            "{provider} preview must share the migration body validation contract"
+        );
+    }
+}
+
+#[tokio::test]
+async fn migration_preview_refuses_typesense_and_unknown_source_providers() {
+    let tmp = TempDir::new().unwrap();
+    let key_store = Arc::new(KeyStore::load_or_create(tmp.path(), "admin-key"));
+    let app = build_test_router(&tmp, Some(key_store));
+    let payload = serde_json::json!({
+        "appId": "APPID",
+        "apiKey": "source-key",
+        "sourceIndex": "products",
+        "targetIndex": "products_copy"
+    });
+
+    let unknown = post_json(
+        &app,
+        "/1/migrations/not-a-provider/preview",
+        Some("admin-key"),
+        payload.clone(),
+    )
+    .await;
+    assert_eq!(
+        unknown.status(),
+        StatusCode::NOT_FOUND,
+        "unknown provider segments must remain outside the closed migration router"
+    );
+
+    let typesense = post_json(
+        &app,
+        "/1/migrations/typesense/preview",
+        Some("admin-key"),
+        payload,
+    )
+    .await;
+    assert_eq!(typesense.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(typesense).await,
+        serde_json::json!({
+            "message": "Source provider is not supported",
+            "status": 400,
+            "code": "source_provider_unsupported"
+        })
+    );
+}
+
+#[tokio::test]
 async fn bulk_replace_rejects_unauthenticated_use() {
     let tmp = TempDir::new().unwrap();
     let key_store = Arc::new(KeyStore::load_or_create(tmp.path(), "admin-key"));

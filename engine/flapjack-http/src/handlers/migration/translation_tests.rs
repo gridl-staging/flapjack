@@ -34,7 +34,7 @@ struct AcceptedSpoolFixture {
     reader: AcceptedSpoolReader,
 }
 
-fn spool_payload(
+pub(in crate::handlers::migration) fn spool_payload(
     settings: serde_json::Value,
     document_pages: Vec<Vec<serde_json::Value>>,
     rule_pages: Vec<Vec<serde_json::Value>>,
