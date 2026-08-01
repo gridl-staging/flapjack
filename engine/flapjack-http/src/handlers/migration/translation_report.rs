@@ -50,6 +50,7 @@ pub(in crate::handlers::migration) enum ReportResource {
     Synonym,
 }
 
+/// Stable machine-readable classification for migration translation outcomes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
 pub(in crate::handlers::migration) enum ReportCode {
     ProductNotMigrated,

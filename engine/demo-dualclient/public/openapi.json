@@ -10719,7 +10719,7 @@
       },
       "ReportCode": {
         "type": "string",
-        "description": "TODO: Document ReportCode.",
+        "description": "Stable machine-readable classification for migration translation outcomes.",
         "enum": [
           "ProductNotMigrated",
           "PersistedNoBehaviorSetting",
