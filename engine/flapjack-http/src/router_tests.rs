@@ -1176,6 +1176,7 @@ async fn published_migration_paths_are_all_mounted() {
 
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
 async fn algolia_list_indexes_compat_contract_is_preserved() {
     // Algolia wire-compat guard for the legacy `/1/algolia-list-indexes` handler.
     // The neutral discovery route must not disturb it, so this exercises the
@@ -1242,16 +1243,17 @@ async fn algolia_list_indexes_compat_contract_is_preserved() {
     .await;
 
     let upstream_uri = upstream.uri();
-    let listed = with_test_algolia_base_url_override(Some(&upstream_uri), async {
-        post_json(
-            &app,
-            "/1/algolia-list-indexes",
-            Some("admin-key"),
-            serde_json::json!({ "appId": "COMPATAPP1", "apiKey": "compat-source-key" }),
-        )
-        .await
-    })
-    .await;
+    let listed =
+        with_test_algolia_base_url_override(Some("COMPATAPP1"), Some(&upstream_uri), async {
+            post_json(
+                &app,
+                "/1/algolia-list-indexes",
+                Some("admin-key"),
+                serde_json::json!({ "appId": "COMPATAPP1", "apiKey": "compat-source-key" }),
+            )
+            .await
+        })
+        .await;
     assert_eq!(
         listed.status(),
         StatusCode::OK,
@@ -1927,6 +1929,7 @@ async fn list_source_indexes_refuses_payload_mismatch() {
 
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
 async fn list_source_indexes_never_leaks_credentials() {
     // Exercise a successful upstream request for every public provider, then
     // sweep all externally observable and durable sinks. This is
@@ -2034,30 +2037,31 @@ async fn list_source_indexes_never_leaks_credentials() {
     );
 
     let algolia_uri = algolia.uri();
-    let responses = with_test_algolia_base_url_override(Some(&algolia_uri), async {
-        let _env_lock = ENV_MUTEX
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _meili_loopback =
-            EnvVarRestoreGuard::set("FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK", "1");
-        let _typesense_loopback =
-            EnvVarRestoreGuard::set("FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK", "1");
-        let subscriber = tracing_subscriber::registry().with(
-            tracing_subscriber::fmt::layer()
-                .without_time()
-                .with_ansi(false)
-                .with_writer(logs.clone()),
-        );
-        let _log_guard = tracing::subscriber::set_default(subscriber);
+    let responses =
+        with_test_algolia_base_url_override(Some("APP123"), Some(&algolia_uri), async {
+            let _env_lock = ENV_MUTEX
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _meili_loopback =
+                EnvVarRestoreGuard::set("FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK", "1");
+            let _typesense_loopback =
+                EnvVarRestoreGuard::set("FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK", "1");
+            let subscriber = tracing_subscriber::registry().with(
+                tracing_subscriber::fmt::layer()
+                    .without_time()
+                    .with_ansi(false)
+                    .with_writer(logs.clone()),
+            );
+            let _log_guard = tracing::subscriber::set_default(subscriber);
 
-        let mut responses = Vec::with_capacity(requests.len());
-        for (provider, path, request_body, expected_metadata) in requests {
-            let response = post_json(&app, path, Some("admin-key"), request_body).await;
-            responses.push((provider, response, expected_metadata));
-        }
-        responses
-    })
-    .await;
+            let mut responses = Vec::with_capacity(requests.len());
+            for (provider, path, request_body, expected_metadata) in requests {
+                let response = post_json(&app, path, Some("admin-key"), request_body).await;
+                responses.push((provider, response, expected_metadata));
+            }
+            responses
+        })
+        .await;
 
     // All process-global environment overrides are restored and their locks are
     // released before response or mock assertions can panic.

@@ -1,4 +1,7 @@
-use super::algolia_client::{AlgoliaClientError, AlgoliaErrorKind, AlgoliaIndexRecord};
+use super::algolia_client::{
+    install_test_algolia_validation_resolver, AlgoliaClientError, AlgoliaErrorKind,
+    AlgoliaIndexRecord, TEST_VETTED_ALGOLIA_IP,
+};
 use super::export::export_algolia_source;
 use super::meilisearch_client::{MeilisearchClientError, MeilisearchErrorKind};
 use super::source_identity_partitions::SourceIdentityVersion;
@@ -1157,7 +1160,17 @@ async fn source_reader_document_identity_changes_for_insert_delete_and_in_place_
 }
 
 #[test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
 fn source_reader_algolia_backend_is_constructed_only_through_algolia_client_validation() {
+    let _validation_resolver = install_test_algolia_validation_resolver(
+        "APPID",
+        Some(vec![TEST_VETTED_ALGOLIA_IP]),
+        |_host, _port| {},
+    );
+    let unrelated_error = flapjack::security::vet_outbound_url_target("https://localhost./", false)
+        .expect_err("the APPID fixture must preserve unrelated system DNS answers");
+    assert!(unrelated_error.contains("private or local destination"));
+
     let reader = AlgoliaSourceReader::new("APPID", "source-key", "products")
         .expect("valid Algolia source reader should construct");
     assert_eq!(reader.source_namespace(), Some("APPID"));

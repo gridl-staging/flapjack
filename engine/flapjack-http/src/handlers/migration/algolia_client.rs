@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::collections::HashSet;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -20,6 +21,10 @@ const MAX_BROWSE_ITEMS: usize = 10_000_000;
 const DEFAULT_QUIESCENCE_MAX_POLLS: usize = 1_200;
 const DEFAULT_QUIESCENCE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub(crate) const TEST_ALGOLIA_BASE_URL_ENV: &str = "FLAPJACK_TEST_ALGOLIA_BASE_URL";
+
+#[cfg(test)]
+pub(super) const TEST_VETTED_ALGOLIA_IP: std::net::IpAddr =
+    std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 0, 8));
 
 #[cfg(test)]
 mod test_algolia_base_url_env {
@@ -132,9 +137,17 @@ use test_algolia_base_url_env::AlgoliaBaseUrlEnvGuard;
 
 #[cfg(test)]
 pub(crate) async fn with_test_algolia_base_url_override<T>(
+    vetted_app_id: Option<&str>,
     base_url: Option<&str>,
     future: impl Future<Output = T>,
 ) -> T {
+    let _validation_resolver = vetted_app_id.map(|app_id| {
+        install_test_algolia_validation_resolver(
+            app_id,
+            Some(vec![TEST_VETTED_ALGOLIA_IP]),
+            |_host, _port| {},
+        )
+    });
     test_algolia_base_url_env::with_task_override(base_url, future).await
 }
 
@@ -267,6 +280,14 @@ pub(super) struct AlgoliaClient {
 }
 
 impl AlgoliaClient {
+    /// Build one source client for Algolia's data and control planes.
+    ///
+    /// The same `reqwest::Client` is reused for data-host requests
+    /// (`{app_id}-dsn.algolia.net` plus retry fallbacks) and control-host
+    /// requests (`{app_id}.algolia.net`). Any DNS rebinding defense therefore
+    /// has to vet and pin every host set that `plan_request*` can later put on
+    /// the wire; pinning only the data host would leave ACL/key checks on the
+    /// control host with a second connect-time resolution path.
     pub(super) fn new(app_id: &str, api_key: &str) -> Result<Self, AlgoliaClientError> {
         validate_app_id(app_id)?;
         if api_key.is_empty() {
@@ -276,11 +297,15 @@ impl AlgoliaClient {
             ));
         }
 
-        let client = reqwest::Client::builder()
+        let client_builder = reqwest::Client::builder()
             .connect_timeout(ALGOLIA_CONNECT_TIMEOUT)
             .timeout(ALGOLIA_REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
+            .no_proxy();
+        // This shared client can put data, fallback, and control hosts on the
+        // wire, so every one must reuse the address approved during validation.
+        let client_builder = pin_vetted_algolia_hosts(client_builder, app_id)?;
+        let client = apply_test_dns_resolver(client_builder)
             .build()
             .map_err(|_| {
                 AlgoliaClientError::new(
@@ -435,6 +460,144 @@ impl AlgoliaClient {
     fn index_path(&self, suffix: &str) -> Result<String, AlgoliaClientError> {
         Ok(index_path(self.source_index()?, suffix))
     }
+}
+
+fn algolia_outbound_destination_refused() -> AlgoliaClientError {
+    AlgoliaClientError::new(
+        AlgoliaErrorKind::Validation,
+        "Algolia outbound destination was refused by policy",
+    )
+}
+
+fn pin_vetted_algolia_hosts(
+    mut client_builder: reqwest::ClientBuilder,
+    app_id: &str,
+) -> Result<reqwest::ClientBuilder, AlgoliaClientError> {
+    for host in algolia_vendor_hosts(app_id)? {
+        let target =
+            flapjack::security::vet_outbound_url_target(&format!("https://{host}/"), false)
+                .map_err(|_| algolia_outbound_destination_refused())?
+                .ok_or_else(algolia_outbound_destination_refused)?;
+        let addresses = target.socket_addrs();
+        if addresses.is_empty() {
+            return Err(algolia_outbound_destination_refused());
+        }
+        client_builder = pin_resolved_algolia_host(client_builder, target.host, addresses);
+    }
+    Ok(client_builder)
+}
+
+fn pin_resolved_algolia_host(
+    client_builder: reqwest::ClientBuilder,
+    host: String,
+    addresses: Vec<SocketAddr>,
+) -> reqwest::ClientBuilder {
+    let client_builder = client_builder.resolve_to_addrs(&host, &addresses);
+    record_test_algolia_pin(&host, &addresses);
+    client_builder
+}
+
+#[cfg(test)]
+fn record_test_algolia_pin(host: &str, addresses: &[SocketAddr]) {
+    let observer = TEST_ALGOLIA_PIN_OBSERVER.with(|slot| slot.borrow().clone());
+    if let Some(observer) = observer {
+        observer
+            .lock()
+            .expect("Algolia test pin observation mutex poisoned")
+            .push((host.to_owned(), addresses.to_vec()));
+    }
+}
+
+#[cfg(not(test))]
+fn record_test_algolia_pin(_host: &str, _addresses: &[SocketAddr]) {}
+
+#[cfg(test)]
+type TestAlgoliaPinObserver = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<SocketAddr>)>>>;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_ALGOLIA_PIN_OBSERVER: std::cell::RefCell<Option<TestAlgoliaPinObserver>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) struct TestAlgoliaPinObserverGuard {
+    previous: Option<TestAlgoliaPinObserver>,
+}
+
+#[cfg(test)]
+impl Drop for TestAlgoliaPinObserverGuard {
+    fn drop(&mut self) {
+        TEST_ALGOLIA_PIN_OBSERVER.with(|slot| {
+            slot.replace(self.previous.take());
+        });
+    }
+}
+
+#[cfg(test)]
+pub(super) fn install_test_algolia_pin_observer(
+    observer: TestAlgoliaPinObserver,
+) -> TestAlgoliaPinObserverGuard {
+    let previous = TEST_ALGOLIA_PIN_OBSERVER.with(|slot| slot.replace(Some(observer)));
+    TestAlgoliaPinObserverGuard { previous }
+}
+
+#[cfg(test)]
+fn apply_test_dns_resolver(mut client_builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    if let Some(resolver) = take_test_dns_resolver() {
+        client_builder = client_builder
+            .dns_resolver2(resolver)
+            .connect_timeout(Duration::from_millis(250))
+            .timeout(Duration::from_millis(600));
+    }
+    client_builder
+}
+
+#[cfg(not(test))]
+fn apply_test_dns_resolver(client_builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    client_builder
+}
+
+#[cfg(test)]
+fn test_dns_resolver_slot(
+) -> &'static std::sync::Mutex<Option<std::sync::Arc<dyn reqwest::dns::Resolve>>> {
+    static SLOT: std::sync::OnceLock<
+        std::sync::Mutex<Option<std::sync::Arc<dyn reqwest::dns::Resolve>>>,
+    > = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+fn take_test_dns_resolver() -> Option<std::sync::Arc<dyn reqwest::dns::Resolve>> {
+    test_dns_resolver_slot()
+        .lock()
+        .expect("Algolia test DNS resolver slot mutex poisoned")
+        .clone()
+}
+
+#[cfg(test)]
+pub(super) struct TestDnsResolverGuard {
+    previous: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>,
+}
+
+#[cfg(test)]
+impl Drop for TestDnsResolverGuard {
+    fn drop(&mut self) {
+        *test_dns_resolver_slot()
+            .lock()
+            .expect("Algolia test DNS resolver slot mutex poisoned") = self.previous.take();
+    }
+}
+
+#[cfg(test)]
+pub(super) fn install_test_dns_resolver(
+    resolver: std::sync::Arc<dyn reqwest::dns::Resolve>,
+) -> TestDnsResolverGuard {
+    let mut slot = test_dns_resolver_slot()
+        .lock()
+        .expect("Algolia test DNS resolver slot mutex poisoned");
+    let previous = slot.replace(resolver);
+    TestDnsResolverGuard { previous }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -596,6 +759,44 @@ fn algolia_fallback_hosts(app_id: &str) -> Result<Vec<String>, AlgoliaClientErro
     Ok((1..=3)
         .map(|host_index| format!("{}-{}.algolianet.com", app_id, host_index))
         .collect())
+}
+
+pub(super) fn algolia_vendor_hosts(app_id: &str) -> Result<Vec<String>, AlgoliaClientError> {
+    let mut hosts = Vec::with_capacity(5);
+    hosts.push(algolia_host(app_id, AlgoliaHost::Data)?);
+    hosts.extend(algolia_fallback_hosts(app_id)?);
+    hosts.push(algolia_host(app_id, AlgoliaHost::Control)?);
+    Ok(hosts)
+}
+
+#[cfg(test)]
+pub(super) fn install_test_algolia_validation_resolver<F>(
+    app_id: &str,
+    app_id_result: Option<Vec<std::net::IpAddr>>,
+    observe_app_id_host: F,
+) -> flapjack::security::test_helpers::OutboundHostResolverGuard
+where
+    F: Fn(&str, Option<u16>) + Send + Sync + 'static,
+{
+    use std::net::ToSocketAddrs;
+
+    let app_id_hosts: HashSet<String> = algolia_vendor_hosts(app_id)
+        .expect("test Algolia app ID must produce vendor hosts")
+        .into_iter()
+        .map(|host| host.to_ascii_lowercase())
+        .collect();
+    flapjack::security::test_helpers::install_test_outbound_host_resolver(std::sync::Arc::new(
+        move |host, port| {
+            if app_id_hosts.contains(host) {
+                observe_app_id_host(host, port);
+                return app_id_result.clone();
+            }
+            (host, port.unwrap_or(0))
+                .to_socket_addrs()
+                .ok()
+                .map(|addresses| addresses.map(|address| address.ip()).collect())
+        },
+    ))
 }
 
 fn encoded_index(index_name: &str) -> String {
