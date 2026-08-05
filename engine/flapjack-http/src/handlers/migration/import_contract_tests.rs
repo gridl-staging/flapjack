@@ -1259,8 +1259,15 @@ impl MigrationSourceReader for ResumedResumeSourceReader {
         Box::pin(async move {
             self.quiescence_checks += 1;
             if self.quiescence_checks == 2 {
+                // Enrol on the release gate before announcing arrival: the test releases
+                // with `notify_waiters()`, which stores no permit, so a waiter that only
+                // registers after the announcement loses the wakeup and the traversal
+                // never resumes. Same ordering as `BlockingSourceReader` below.
+                let released = self.release.notified();
+                tokio::pin!(released);
+                released.as_mut().enable();
                 self.started.notify_one();
-                self.release.notified().await;
+                released.await;
             }
             let record = self.source_records.pop_front().ok_or_else(|| {
                 SourceExportError::new(

@@ -604,12 +604,20 @@ test.describe('Analytics', () => {
       await dialog.getByRole('button', { name: 'Clear', exact: true }).click();
 
       await expect(page.getByText('Analytics cleared')).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByTestId('error-state')).toContainText('Unable to load analytics data. Try again.');
-      await expect(page.getByTestId('kpi-total-searches')).toHaveCount(0);
-      await expect(page.getByTestId('kpi-unique-users')).toHaveCount(0);
-      await expect(page.getByTestId('kpi-no-result-rate')).toHaveCount(0);
-      await expect(page.getByTestId('search-volume-chart')).toHaveCount(0);
-      await expect(page.getByTestId('top-searches-overview')).toHaveCount(0);
+      // A cleared index now returns empty analytics (count 0, empty series) with a
+      // successful status rather than erroring the reads (engine commit 8d37d357a
+      // switched analytics status/reads from `dir.exists()` to a parquet-presence
+      // check). The Overview tab therefore renders its normal reset state with zeroed
+      // KPIs and empty-series charts — not the error state the pre-repair bug produced.
+      await expect(page.getByTestId('error-state')).toHaveCount(0);
+      await expect(page.getByTestId('kpi-total-searches')).toBeVisible();
+      await expect(page.getByTestId('kpi-total-searches').getByTestId('kpi-value')).toHaveText('0');
+      await expect(page.getByTestId('kpi-unique-users')).toBeVisible();
+      await expect(page.getByTestId('kpi-unique-users').getByTestId('kpi-value')).toHaveText('0');
+      await expect(page.getByTestId('kpi-no-result-rate')).toBeVisible();
+      await expect(page.getByTestId('search-volume-chart')).toBeVisible();
+      await expect(page.getByTestId('search-volume-chart')).toContainText('No search data yet');
+      await expect(page.getByTestId('top-searches-overview')).toBeVisible();
     } finally {
       await deleteIndex(request, isolatedIndex).catch(() => {});
     }
