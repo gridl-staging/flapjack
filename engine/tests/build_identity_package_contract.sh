@@ -74,6 +74,48 @@ package_binary() {
   "$source_dir/package/release_artifact_manifest" "$target_triple" "$binary_path" "$output_dir" >/dev/null
 }
 
+assert_foreign_target_host_exec_failure() {
+  local fixture_dir="$TMP_ROOT/foreign_target_fixture"
+  local output_dir="$TMP_ROOT/foreign_target_output"
+  local binary_path="$fixture_dir/flapjack"
+  local stdout="$fixture_dir/stdout.log"
+  local stderr="$fixture_dir/stderr.log"
+  local status=0
+
+  mkdir -p "$fixture_dir" "$output_dir"
+  python3 - "$binary_path" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_bytes(
+    b"\x7fELF"  # Linux ELF magic: executable to the mode check, foreign to this host.
+    b"\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    b"\x02\x00\xb7\x00\x01\x00\x00\x00"
+)
+PY
+  chmod +x "$binary_path"
+  [ -x "$binary_path" ] || die "foreign target fixture must satisfy the helper executable precondition"
+
+  set +e
+  "$PACKAGE_HELPER" aarch64-unknown-linux-musl "$binary_path" "$output_dir" >"$stdout" 2>"$stderr"
+  status=$?
+  set -e
+
+  if [ "$status" -ne 126 ]; then
+    cat "$stdout" "$stderr" >&2
+    die "foreign target package helper should fail with host exec status 126, got $status"
+  fi
+  if grep -q "binary path is not executable" "$stderr"; then
+    cat "$stderr" >&2
+    die "foreign target failure must pass the -x precondition and fail while executing the packaged binary"
+  fi
+  if ! grep -Eq "cannot execute binary file|Exec format error|Bad CPU type|cannot execute" "$stderr"; then
+    cat "$stderr" >&2
+    die "foreign target failure did not report a host exec error"
+  fi
+}
+
 copy_engine_tree() {
   local destination="$1"
   mkdir -p "$destination"
@@ -164,6 +206,8 @@ REVISION="$(git -C "$REPO_DIR" rev-parse HEAD)"
 if ! [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   die "git revision must be exactly 40 lowercase hex characters: $REVISION"
 fi
+
+assert_foreign_target_host_exec_failure
 
 TARGET_ONE="$TMP_ROOT/target_one"
 TARGET_TWO="$TMP_ROOT/target_two"
