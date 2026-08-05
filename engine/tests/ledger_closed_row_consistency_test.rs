@@ -250,8 +250,8 @@ fn no_closed_roadmap_row_is_still_listed_as_open_work() {
 }
 
 fn record_roadmap_state_conflicts(roadmap: &str, findings: &mut Vec<String>) {
-    let roadmap_ids = table_row_ids(&roadmap);
-    let closed_ids = closed_row_ids(&roadmap);
+    let roadmap_ids = table_row_ids(roadmap);
+    let closed_ids = closed_row_ids(roadmap);
 
     for id in NAMED_OPEN_ROWS {
         if !roadmap_ids.iter().any(|candidate| candidate == id) {
@@ -268,7 +268,7 @@ fn record_roadmap_state_conflicts(roadmap: &str, findings: &mut Vec<String>) {
         }
     }
     for id in NAMED_SHIPPED_ROWS {
-        let state = table_row(&roadmap, id).and_then(table_row_state);
+        let state = table_row(roadmap, id).and_then(table_row_state);
         if !state.is_some_and(|value| value.starts_with("**SHIPPED")) {
             findings.push(format!("  - `{id}` must be shipped in ROADMAP.md"));
         }
@@ -299,7 +299,7 @@ fn record_open_work_conflicts(
 }
 
 fn record_measured_owner_conflicts(roadmap: &str, features: &str, findings: &mut Vec<String>) {
-    let join_row = table_row(&roadmap, "JOIN-1").unwrap_or_default();
+    let join_row = table_row(roadmap, "JOIN-1").unwrap_or_default();
     require_text(findings, "ROADMAP.md row `JOIN-1`", join_row, "57 / 59");
     require_text(
         findings,
@@ -307,14 +307,14 @@ fn record_measured_owner_conflicts(roadmap: &str, features: &str, findings: &mut
         join_row,
         "2 capability-gated skips",
     );
-    let sec_w4_row = table_row(&roadmap, "SEC-W4").unwrap_or_default();
+    let sec_w4_row = table_row(roadmap, "SEC-W4").unwrap_or_default();
     require_text(
         findings,
         "ROADMAP.md row `SEC-W4`",
         sec_w4_row,
         "`SEC-G9` residuals closed",
     );
-    let pr13_row = table_row(&features, "PR-13").unwrap_or_default();
+    let pr13_row = table_row(features, "PR-13").unwrap_or_default();
     require_text(findings, "FEATURES.md row `PR-13`", pr13_row, "✅ Done");
     require_text(
         findings,
@@ -332,15 +332,15 @@ fn record_migration_attribution_conflicts(
     let migration_owners = [
         (
             "ROADMAP.md row `MIG-13`",
-            table_row(&roadmap, "MIG-13").unwrap_or_default(),
+            table_row(roadmap, "MIG-13").unwrap_or_default(),
         ),
         (
             "ROADMAP.md row `MIG-14`",
-            table_row(&roadmap, "MIG-14").unwrap_or_default(),
+            table_row(roadmap, "MIG-14").unwrap_or_default(),
         ),
         (
             "FEATURES.md source-migration owner",
-            section_body(&features, "## Source migration"),
+            section_body(features, "## Source migration"),
         ),
     ];
     for (owner, text) in migration_owners {
@@ -349,7 +349,7 @@ fn record_migration_attribution_conflicts(
         require_text(findings, owner, text, "local");
     }
     for id in ["MIG-13", "MIG-14"] {
-        let row = table_row(&roadmap, id).unwrap_or_default();
+        let row = table_row(roadmap, id).unwrap_or_default();
         for limitation in [
             "default-off",
             "settings",

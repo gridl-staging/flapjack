@@ -74,7 +74,7 @@ struct PlaintextConnection {
 }
 
 enum ClassifiedConnection {
-    Tls(HandshakedConnection),
+    Tls(Box<HandshakedConnection>),
     Plaintext(PlaintextConnection),
 }
 
@@ -139,6 +139,7 @@ impl ReloadableTlsResolver {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_from_paths(&self, paths: &TlsPaths) -> Result<(), String> {
         let validated_key = load_certified_key(paths)?;
         self.publish_validated_key(validated_key);
@@ -295,6 +296,34 @@ pub(crate) async fn run_tls_material_observer<Expiry, ExpiryFuture>(
     Expiry: FnMut() -> ExpiryFuture,
     ExpiryFuture: Future<Output = Option<i64>>,
 {
+    let Some(mut last_successful_generation) =
+        initialize_tls_material_observer(Arc::clone(&resolver), material_dir.clone()).await
+    else {
+        return;
+    };
+    let mut interval = tokio::time::interval(TLS_MATERIAL_OBSERVER_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        let Some((observation, successful_generation)) = observe_tls_material_in_background(
+            Arc::clone(&resolver),
+            material_dir.clone(),
+            last_successful_generation.clone(),
+        )
+        .await
+        else {
+            continue;
+        };
+        last_successful_generation = successful_generation;
+        report_tls_material_observation(&observation, &mut expiry_days).await;
+        observation_completed(&observation);
+    }
+}
+
+async fn initialize_tls_material_observer(
+    resolver: Arc<ReloadableTlsResolver>,
+    material_dir: PathBuf,
+) -> Option<Option<PathBuf>> {
     let initial_generation = tokio::task::spawn_blocking({
         let resolver = Arc::clone(&resolver);
         let material_dir = material_dir.clone();
@@ -307,57 +336,61 @@ pub(crate) async fn run_tls_material_observer<Expiry, ExpiryFuture>(
     .await
     .map_err(|error| format!("observer task failed: {error}"))
     .and_then(|result| result);
-    let mut last_successful_generation = match initial_generation {
-        Ok(generation) => generation,
+    match initial_generation {
+        Ok(generation) => Some(generation),
         Err(error) => {
             tracing::warn!(
                 material_dir = %material_dir.display(),
                 "[TLS] Certificate material observer disabled: {error}"
             );
-            return;
+            None
         }
-    };
-    let mut interval = tokio::time::interval(TLS_MATERIAL_OBSERVER_INTERVAL);
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        interval.tick().await;
-        let observation = tokio::task::spawn_blocking({
-            let resolver = Arc::clone(&resolver);
-            let material_dir = material_dir.clone();
-            let mut successful_generation = last_successful_generation.clone();
-            move || {
-                let observation =
-                    observe_tls_material_once(&material_dir, &resolver, &mut successful_generation);
-                (observation, successful_generation)
-            }
-        })
-        .await;
-        let (observation, successful_generation) = match observation {
-            Ok(result) => result,
-            Err(error) => {
-                tracing::warn!("[TLS] Certificate material observer task failed: {error}");
-                continue;
-            }
-        };
-        last_successful_generation = successful_generation;
-        match &observation {
-            TlsMaterialObservation::Published(generation) => {
-                let cert_expires_in_days = expiry_days().await;
-                tracing::info!(
-                    generation = %generation.display(),
-                    cert_expires_in_days = ?cert_expires_in_days,
-                    "[TLS] Published renewed certificate material"
-                );
-            }
-            TlsMaterialObservation::Rejected { generation, error } => {
-                tracing::warn!(
-                    generation = %generation.display(),
-                    "[TLS] Certificate material reload rejected; retaining previous key: {error}"
-                );
-            }
-            TlsMaterialObservation::Absent | TlsMaterialObservation::Unchanged(_) => {}
+    }
+}
+
+async fn observe_tls_material_in_background(
+    resolver: Arc<ReloadableTlsResolver>,
+    material_dir: PathBuf,
+    mut successful_generation: Option<PathBuf>,
+) -> Option<(TlsMaterialObservation, Option<PathBuf>)> {
+    match tokio::task::spawn_blocking(move || {
+        let observation =
+            observe_tls_material_once(&material_dir, &resolver, &mut successful_generation);
+        (observation, successful_generation)
+    })
+    .await
+    {
+        Ok(result) => Some(result),
+        Err(error) => {
+            tracing::warn!("[TLS] Certificate material observer task failed: {error}");
+            None
         }
-        observation_completed(&observation);
+    }
+}
+
+async fn report_tls_material_observation<Expiry, ExpiryFuture>(
+    observation: &TlsMaterialObservation,
+    expiry_days: &mut Expiry,
+) where
+    Expiry: FnMut() -> ExpiryFuture,
+    ExpiryFuture: Future<Output = Option<i64>>,
+{
+    match observation {
+        TlsMaterialObservation::Published(generation) => {
+            let cert_expires_in_days = expiry_days().await;
+            tracing::info!(
+                generation = %generation.display(),
+                cert_expires_in_days = ?cert_expires_in_days,
+                "[TLS] Published renewed certificate material"
+            );
+        }
+        TlsMaterialObservation::Rejected { generation, error } => {
+            tracing::warn!(
+                generation = %generation.display(),
+                "[TLS] Certificate material reload rejected; retaining previous key: {error}"
+            );
+        }
+        TlsMaterialObservation::Absent | TlsMaterialObservation::Unchanged(_) => {}
     }
 }
 
@@ -529,7 +562,7 @@ where
                 match completed_classified_connection(classified) {
                     Some(ClassifiedConnection::Tls(connection)) => {
                         spawn_tls_http_connection(
-                            connection,
+                            *connection,
                             make_service.clone(),
                             graceful.watcher(),
                         );
@@ -555,7 +588,7 @@ where
     while let Some(classified) = connections.join_next().await {
         match completed_classified_connection(Some(classified)) {
             Some(ClassifiedConnection::Tls(connection)) => {
-                spawn_tls_http_connection(connection, make_service.clone(), graceful.watcher());
+                spawn_tls_http_connection(*connection, make_service.clone(), graceful.watcher());
             }
             Some(ClassifiedConnection::Plaintext(connection)) => {
                 spawn_plaintext_http_connection(
@@ -622,10 +655,10 @@ async fn classify_connection(
     match stream.peek(&mut first_byte).await {
         Ok(0) => None,
         Ok(_) if first_byte[0] == TLS_RECORD_HANDSHAKE => match acceptor.accept(stream).await {
-            Ok(stream) => Some(ClassifiedConnection::Tls(HandshakedConnection {
+            Ok(stream) => Some(ClassifiedConnection::Tls(Box::new(HandshakedConnection {
                 stream,
                 peer_addr,
-            })),
+            }))),
             Err(error) => {
                 tracing::warn!(peer_addr = %peer_addr, "TLS handshake failed: {error}");
                 None

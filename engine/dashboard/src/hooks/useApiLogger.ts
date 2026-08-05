@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 
 export const API_LOG_REDACTED_VALUE = '[REDACTED]';
 
@@ -28,7 +28,7 @@ interface ApiLoggerStore {
 }
 
 function isSensitiveFieldName(fieldName: string): boolean {
-  const normalized = fieldName.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
+  const normalized = fieldName.toLowerCase().replace(/[^a-z0-9]/g, '');
   return normalized === 'authorization'
     || normalized === 'cookie'
     || normalized === 'setcookie'
@@ -206,18 +206,14 @@ export const useApiLogger = create<ApiLoggerStore>()(
     }),
     {
       name: 'flapjack-api-log',
-      storage: {
-        getItem: (name) => {
-          const value = sessionStorage.getItem(name);
-          return value ? sanitizePersistedApiLoggerStorageValue(JSON.parse(value)) : null;
-        },
-        setItem: (name, value) => {
-          sessionStorage.setItem(name, JSON.stringify(sanitizePersistedApiLoggerStorageValue(value)));
-        },
-        removeItem: (name) => {
-          sessionStorage.removeItem(name);
-        },
-      },
+      storage: createJSONStorage<ApiLoggerStore>(() => sessionStorage, {
+        reviver: (key, value) => (
+          key === '' ? sanitizePersistedApiLoggerStorageValue(value) : value
+        ),
+        replacer: (key, value) => (
+          key === '' ? sanitizePersistedApiLoggerStorageValue(value) : value
+        ),
+      }),
     }
   )
 );

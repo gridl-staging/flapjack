@@ -514,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn enabled_core_features_projects_default_capabilities_without_umbrella_label() {
+    fn enabled_core_features_excludes_umbrella_and_reports_concrete_features() {
         let mut expected = vec![
             "analytics",
             "axum-support",
@@ -523,8 +523,15 @@ mod tests {
             "s3-snapshots",
         ];
         if cfg!(feature = "memory-stats") {
-            expected.insert(3, "memory-stats");
+            expected.push("memory-stats");
         }
+        if cfg!(feature = "vector-search") {
+            expected.push("vector-search");
+        }
+        if cfg!(feature = "vector-search-local") {
+            expected.push("vector-search-local");
+        }
+        expected.sort_unstable();
 
         let features = enabled_core_features();
         assert!(
@@ -533,7 +540,7 @@ mod tests {
         );
         assert_eq!(
             features, expected,
-            "the default build must report only concrete capabilities"
+            "the build must report every enabled concrete capability"
         );
     }
 
