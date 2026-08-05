@@ -53,7 +53,6 @@ test.describe('Cluster peer management', () => {
 
   test('lets http:// reach the backend and renders the exact refusal message', async ({
     page,
-    seededCluster,
     clusterPeerOracle,
   }) => {
     await page.goto('/cluster');

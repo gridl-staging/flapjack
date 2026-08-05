@@ -141,6 +141,7 @@ export function buildDashboardRouteAudit(
         await expect(
           page.getByTestId('cluster-standalone-state')
             .or(page.getByTestId('cluster-peer-table'))
+            .or(page.getByTestId('cluster-ha-empty-state'))
             .or(page.getByTestId('cluster-error-state')),
         ).toBeVisible({ timeout: 15_000 });
       },

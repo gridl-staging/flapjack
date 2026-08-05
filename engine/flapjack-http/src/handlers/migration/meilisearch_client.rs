@@ -338,6 +338,20 @@ impl MeilisearchClient {
         let mut transport = ReqwestTransport { owner: self };
         list_indexes_with_transport(&mut transport, offset, limit).await
     }
+
+    pub(super) async fn read_index_document_count(
+        &self,
+        index_uid: &str,
+    ) -> Result<u64, MeilisearchClientError> {
+        validate_source_index(index_uid)?;
+        let mut transport = ReqwestTransport { owner: self };
+        let stats = read_index_stats(
+            &mut transport,
+            &format!("/indexes/{}/stats", encoded_index_uid(index_uid)),
+        )
+        .await?;
+        Ok(stats.number_of_documents as u64)
+    }
 }
 
 fn meilisearch_endpoint_not_allowed() -> MeilisearchClientError {

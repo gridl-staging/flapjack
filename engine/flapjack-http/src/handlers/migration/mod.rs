@@ -1281,17 +1281,22 @@ async fn list_meilisearch_source_indexes(
         .list_indexes(page.offset, page.limit)
         .await
         .map_err(meilisearch_error)?;
+    let mut indexes = Vec::with_capacity(listing.results.len());
+    for index in listing.results {
+        let document_count = client
+            .read_index_document_count(&index.uid)
+            .await
+            .map_err(meilisearch_error)?;
+        indexes.push(SourceIndexSummary {
+            primary_key: index.primary_key,
+            document_count: Some(document_count),
+            created_at: Some(SourceIndexCreatedAt::Rfc3339(index.created_at)),
+            updated_at: Some(index.updated_at),
+            ..SourceIndexSummary::named(index.uid)
+        });
+    }
     Ok(ListSourceIndexesResponse {
-        indexes: listing
-            .results
-            .into_iter()
-            .map(|index| SourceIndexSummary {
-                primary_key: index.primary_key,
-                created_at: Some(SourceIndexCreatedAt::Rfc3339(index.created_at)),
-                updated_at: Some(index.updated_at),
-                ..SourceIndexSummary::named(index.uid)
-            })
-            .collect(),
+        indexes,
         total: Some(listing.total),
         offset: Some(listing.offset),
         limit: Some(listing.limit),

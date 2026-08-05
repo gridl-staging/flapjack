@@ -10,11 +10,25 @@ const FULL_DENOMINATOR_SPEC_PATHS = [
   path.resolve(process.cwd(), 'tests/e2e-ui/jun04_pm_lane_c_audit.spec.ts'),
 ] as const;
 
+const ROUTE_AUDIT_MANIFEST_PATH = path.resolve(
+  process.cwd(),
+  'tests/e2e-ui/route_audit_manifest.ts',
+);
+
 function readFullDenominatorSpec(specPath: string): string {
   return fs.readFileSync(specPath, 'utf8');
 }
 
 describe('accessibility audit route scheduling', () => {
+  it('accepts every rendered cluster status branch as route-ready', () => {
+    const source = readFullDenominatorSpec(ROUTE_AUDIT_MANIFEST_PATH);
+
+    expect(source).toContain("page.getByTestId('cluster-standalone-state')");
+    expect(source).toContain("page.getByTestId('cluster-peer-table')");
+    expect(source).toContain("page.getByTestId('cluster-ha-empty-state')");
+    expect(source).toContain("page.getByTestId('cluster-error-state')");
+  });
+
   it.each(FULL_DENOMINATOR_SPEC_PATHS)(
     'keeps denominator route cases independently scheduled in %s',
     (specPath) => {

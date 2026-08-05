@@ -863,6 +863,26 @@ async fn start_discovery_upstream(
     server
 }
 
+async fn mount_meilisearch_stats_upstream(
+    server: &MockServer,
+    authorization: &str,
+    counts: &[(&str, u64)],
+) {
+    for (index_uid, document_count) in counts {
+        Mock::given(method_matcher("GET"))
+            .and(path_matcher(format!("/indexes/{index_uid}/stats")))
+            .and(header_matcher("authorization", authorization))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "numberOfDocuments": document_count,
+                "fieldDistribution": {},
+                "isIndexing": false
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+}
+
 fn read_file_tree(root: &Path) -> Vec<u8> {
     let mut paths = vec![root.to_path_buf()];
     let mut bytes = Vec::new();
@@ -947,11 +967,13 @@ impl<'a> ExpectedNeutralDiscoveryMetadata<'a> {
     fn meilisearch(
         name: &'a str,
         primary_key: Option<&'a str>,
+        document_count: u64,
         created_at: &'a str,
         updated_at: &'a str,
     ) -> Self {
         Self {
             primary_key,
+            document_count: Some(document_count),
             created_at: Some(serde_json::json!(created_at)),
             updated_at: Some(updated_at),
             ..Self::empty(name)
@@ -1289,6 +1311,16 @@ async fn list_source_indexes_returns_meilisearch_known_answer() {
         }),
     )
     .await;
+    mount_meilisearch_stats_upstream(
+        &upstream,
+        "Bearer m0a-source-key",
+        &[
+            ("ambiguous_pk", 0),
+            ("configured_pk", 3),
+            ("inferred_pk", 2),
+        ],
+    )
+    .await;
     let _env_lock = ENV_MUTEX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1336,18 +1368,21 @@ async fn list_source_indexes_returns_meilisearch_known_answer() {
             ExpectedNeutralDiscoveryMetadata::meilisearch(
                 "ambiguous_pk",
                 None,
+                0,
                 "2026-07-26T00:00:00Z",
                 "2026-07-26T00:00:00Z",
             ),
             ExpectedNeutralDiscoveryMetadata::meilisearch(
                 "configured_pk",
                 Some("sku"),
+                3,
                 "2026-07-26T00:00:01Z",
                 "2026-07-26T00:00:01Z",
             ),
             ExpectedNeutralDiscoveryMetadata::meilisearch(
                 "inferred_pk",
                 Some("book_id"),
+                2,
                 "2026-07-26T00:00:02Z",
                 "2026-07-26T00:00:02Z",
             ),
@@ -1938,6 +1973,12 @@ async fn list_source_indexes_never_leaks_credentials() {
         }),
     )
     .await;
+    mount_meilisearch_stats_upstream(
+        &meilisearch,
+        meilisearch_authorization.as_str(),
+        &[("meili_products", 1)],
+    )
+    .await;
     let typesense = start_discovery_upstream(
         "/collections",
         &[("exclude_fields", "fields"), ("limit", "1")],
@@ -1968,6 +2009,7 @@ async fn list_source_indexes_never_leaks_credentials() {
             vec![ExpectedNeutralDiscoveryMetadata::meilisearch(
                 "meili_products",
                 Some("id"),
+                1,
                 "2026-07-26T00:00:00Z",
                 "2026-07-26T00:00:00Z",
             )],
