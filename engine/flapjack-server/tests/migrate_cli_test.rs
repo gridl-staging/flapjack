@@ -14,6 +14,7 @@ use support::{flapjack_cmd, http_request_with_headers, RunningServer, TempDir};
 const FLAPJACK_API_KEY: &str = "fj_stage2_admin_secret";
 const ALGOLIA_API_KEY: &str = "algolia_stage2_source_secret";
 const SOURCE_API_KEY: &str = "provider_stage1_source_secret";
+const ALGOLIA_TEST_BASE_URL_ENV: &str = "FLAPJACK_TEST_ALGOLIA_BASE_URL";
 const JOB_ID: &str = "01890f8e-8b28-78e8-b542-8cfdcb2d4f24";
 const EXIT_CONFIG: i32 = 2;
 const EXIT_HTTP_REJECTION: i32 = 3;
@@ -22,6 +23,39 @@ const EXIT_FAILED_JOB: i32 = 5;
 const EXIT_CANCELLED_JOB: i32 = 6;
 const EXIT_CANCEL_TOO_LATE: i32 = 7;
 const EXIT_ACK_TOO_EARLY: i32 = 8;
+
+struct UnresponsiveAlgoliaFixture {
+    _listener: TcpListener,
+    endpoint: String,
+}
+
+impl UnresponsiveAlgoliaFixture {
+    fn start() -> Self {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").expect("bind unresponsive Algolia source fixture");
+        let endpoint = format!(
+            "http://{}",
+            listener
+                .local_addr()
+                .expect("unresponsive Algolia fixture address")
+        );
+        Self {
+            _listener: listener,
+            endpoint,
+        }
+    }
+
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
+
+fn spawn_auth_server_with_algolia_fixture(data_dir: &str, fixture_endpoint: &str) -> RunningServer {
+    RunningServer::spawn_auth_auto_port_with_env(
+        data_dir,
+        &[(ALGOLIA_TEST_BASE_URL_ENV, fixture_endpoint)],
+    )
+}
 
 #[test]
 fn startup_timeout_reaps_child_before_running_server_exists() {
@@ -321,7 +355,11 @@ fn cancel_and_ack_use_the_selected_provider_route() {
 #[test]
 fn migrate_exits_nonzero_and_names_the_server_error_on_failed_job() {
     let data = TempDir::new("migrate_failed_real_server");
-    let server = RunningServer::spawn_auth_auto_port(data.path());
+    let source_fixture = FakeMigrationServer::start(vec![StubResponse::text(
+        500,
+        "source fixture failure".to_string(),
+    )]);
+    let server = spawn_auth_server_with_algolia_fixture(data.path(), &source_fixture.endpoint());
     let admin_key = std::fs::read_to_string(data.root().join(".admin_key"))
         .expect("auth server should persist its admin key");
 
@@ -872,7 +910,8 @@ fn actions_reject_every_submit_only_flag() {
 #[test]
 fn cancel_of_a_real_owned_job_succeeds_without_stub_transport() {
     let data = TempDir::new("migrate_cancel_real_server");
-    let server = RunningServer::spawn_auth_auto_port(data.path());
+    let source_fixture = UnresponsiveAlgoliaFixture::start();
+    let server = spawn_auth_server_with_algolia_fixture(data.path(), source_fixture.endpoint());
     let admin_key = std::fs::read_to_string(data.root().join(".admin_key"))
         .expect("auth server should persist its admin key");
     let request_body = json!({
@@ -932,7 +971,8 @@ fn cancel_of_a_real_owned_job_succeeds_without_stub_transport() {
 #[test]
 fn real_server_wrong_provider_cancel_is_not_found_before_mutation() {
     let data = TempDir::new("migrate_wrong_provider_cancel_real_server");
-    let server = RunningServer::spawn_auth_auto_port(data.path());
+    let source_fixture = UnresponsiveAlgoliaFixture::start();
+    let server = spawn_auth_server_with_algolia_fixture(data.path(), source_fixture.endpoint());
     let admin_key = std::fs::read_to_string(data.root().join(".admin_key"))
         .expect("auth server should persist its admin key");
     let request_body = json!({
@@ -988,7 +1028,8 @@ fn real_server_wrong_provider_cancel_is_not_found_before_mutation() {
 #[test]
 fn real_server_wrong_provider_ack_is_not_found_before_mutation() {
     let data = TempDir::new("migrate_wrong_provider_ack_real_server");
-    let server = RunningServer::spawn_auth_auto_port(data.path());
+    let source_fixture = UnresponsiveAlgoliaFixture::start();
+    let server = spawn_auth_server_with_algolia_fixture(data.path(), source_fixture.endpoint());
     let admin_key = std::fs::read_to_string(data.root().join(".admin_key"))
         .expect("auth server should persist its admin key");
     let request_body = json!({

@@ -277,7 +277,8 @@ struct DayEvents {
     insights: Vec<InsightEvent>,
 }
 
-fn validate_seed_options(options: &AnalyticsSeedOptions) -> Result<(), String> {
+/// Validate caller-controlled seed options before any filesystem mutation.
+pub fn validate_seed_options(options: &AnalyticsSeedOptions) -> Result<(), String> {
     if options.days == 0 || options.days > 90 {
         return Err("days must be between 1 and 90".to_string());
     }
@@ -596,6 +597,16 @@ pub fn seed_analytics_with_options(
     options: &AnalyticsSeedOptions,
 ) -> Result<SeedResult, String> {
     validate_seed_options(options)?;
+    super::mutation::with_index_mutation(config, index_name, || {
+        seed_analytics_exclusively(config, index_name, options)
+    })
+}
+
+fn seed_analytics_exclusively(
+    config: &AnalyticsConfig,
+    index_name: &str,
+    options: &AnalyticsSeedOptions,
+) -> Result<SeedResult, String> {
     let queries = queries_for_index(index_name);
     let mut rng = Rng::new(
         index_name
@@ -666,6 +677,11 @@ pub fn seed_analytics_with_options(
     })
 }
 
+/// Clear search and insight analytics for one index without racing a seed.
+pub fn clear_analytics(config: &AnalyticsConfig, index_name: &str) -> Result<u64, String> {
+    super::mutation::clear_index(config, index_name)
+}
+
 /// Generate a realistic time-of-day offset in milliseconds.
 /// Traffic peaks around 10am-2pm and 7pm-10pm, low overnight.
 fn generate_time_of_day_ms(rng: &mut Rng) -> i64 {
@@ -702,7 +718,7 @@ fn write_search_events_to_partition(
     let schema = super::schema::search_event_schema();
     let batch = super::writer::search_events_to_batch(events, &schema)?;
     let path = partition_dir.join("seed_searches.parquet");
-    super::writer::write_parquet_file(&path, batch)
+    super::writer::write_parquet_file_atomic(&path, batch)
 }
 
 /// Write insight events to a specific date partition.
@@ -713,7 +729,7 @@ fn write_insight_events_to_partition(
     let schema = super::schema::insight_event_schema();
     let batch = super::writer::insight_events_to_batch(events, &schema)?;
     let path = partition_dir.join("seed_events.parquet");
-    super::writer::write_parquet_file(&path, batch)
+    super::writer::write_parquet_file_atomic(&path, batch)
 }
 
 #[cfg(test)]

@@ -1,4 +1,8 @@
 use super::*;
+use crate::analytics::AnalyticsQueryEngine;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Barrier};
+use tempfile::TempDir;
 
 #[test]
 fn rng_zero_seed_becomes_one() {
@@ -144,6 +148,362 @@ fn options_with_search_count(days: u32, search_count: u32) -> AnalyticsSeedOptio
         search_count: Some(search_count),
         ..AnalyticsSeedOptions::for_days(days)
     }
+}
+
+fn test_analytics_config(temp_dir: &TempDir) -> AnalyticsConfig {
+    AnalyticsConfig {
+        enabled: true,
+        data_dir: temp_dir.path().to_path_buf(),
+        flush_interval_secs: 60,
+        flush_size: 10_000,
+        retention_days: 90,
+    }
+}
+
+/// Same-index seed writers and readbacks overlap on the fixed
+/// `seed_searches.parquet` / `seed_events.parquet` destinations. Readers must
+/// never observe a truncated or corrupt parquet replacement, and completed seed
+/// operations must leave the requested row count readable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_same_index_seeds_never_break_readback() {
+    const EXPECTED_SEARCH_COUNT: u32 = 20_000;
+    const WRITER_COUNT: usize = 4;
+    const SEEDS_PER_WRITER: usize = 3;
+
+    let temp_dir = TempDir::new().unwrap();
+    let config = test_analytics_config(&temp_dir);
+    let index_name = "concurrent_seed_readback";
+    let options = options_with_search_count(1, EXPECTED_SEARCH_COUNT);
+    let initial_seed = seed_analytics_with_options(&config, index_name, &options).unwrap();
+    let seeded_date = initial_seed.seeded_dates[0].clone();
+    let engine = Arc::new(AnalyticsQueryEngine::new(config.clone()));
+
+    let initial_readback = engine
+        .search_count(index_name, &seeded_date, &seeded_date)
+        .await
+        .unwrap();
+    assert_eq!(initial_readback["count"], EXPECTED_SEARCH_COUNT);
+
+    let start = Arc::new(Barrier::new(WRITER_COUNT + 1));
+    let writers_remaining = Arc::new(AtomicUsize::new(WRITER_COUNT));
+    let mut writers = Vec::with_capacity(WRITER_COUNT);
+    for _ in 0..WRITER_COUNT {
+        let writer_config = config.clone();
+        let writer_options = options.clone();
+        let writer_start = Arc::clone(&start);
+        let writer_count = Arc::clone(&writers_remaining);
+        writers.push(std::thread::spawn(move || {
+            writer_start.wait();
+            let result = (0..SEEDS_PER_WRITER).try_for_each(|_| {
+                seed_analytics_with_options(&writer_config, index_name, &writer_options).map(|_| ())
+            });
+            writer_count.fetch_sub(1, Ordering::Release);
+            result
+        }));
+    }
+
+    let reader_engine = Arc::clone(&engine);
+    let reader_count = Arc::clone(&writers_remaining);
+    let reader_date = seeded_date.clone();
+    let readback = tokio::spawn(async move {
+        let mut successful_reads = 0;
+        while reader_count.load(Ordering::Acquire) > 0 {
+            let result = reader_engine
+                .search_count(index_name, &reader_date, &reader_date)
+                .await
+                .map_err(|error| format!("concurrent readback failed: {error}"))?;
+            if result["count"] != EXPECTED_SEARCH_COUNT {
+                return Err(format!(
+                    "concurrent readback returned {}, expected {EXPECTED_SEARCH_COUNT}",
+                    result["count"]
+                ));
+            }
+            successful_reads += 1;
+        }
+        Ok::<_, String>(successful_reads)
+    });
+
+    start.wait();
+    for writer in writers {
+        writer.join().unwrap().unwrap();
+    }
+    let successful_reads = readback.await.unwrap().unwrap();
+    assert!(successful_reads > 0, "readback must overlap seed writers");
+
+    let final_readback = engine
+        .search_count(index_name, &seeded_date, &seeded_date)
+        .await
+        .unwrap();
+    assert_eq!(final_readback["count"], EXPECTED_SEARCH_COUNT);
+}
+
+/// Same-index seed and clear operations must both use the analytics mutation
+/// coordinator. Holding that index's coordinator blocks both public operations;
+/// after release they complete in either valid serial order, never interleaved.
+#[tokio::test]
+async fn same_index_seed_and_clear_share_mutation_coordinator() {
+    const EXPECTED_SEARCH_COUNT: u32 = 100_000;
+
+    let temp_dir = TempDir::new().unwrap();
+    let config = test_analytics_config(&temp_dir);
+    let index_name = "concurrent_seed_clear";
+    let options = options_with_search_count(1, EXPECTED_SEARCH_COUNT);
+
+    let (coordinator_held_tx, coordinator_held_rx) = mpsc::channel();
+    let (release_coordinator_tx, release_coordinator_rx) = mpsc::channel();
+    let holder_config = config.clone();
+    let holder = std::thread::spawn(move || {
+        super::super::mutation::with_index_mutation(&holder_config, index_name, || {
+            coordinator_held_tx.send(()).unwrap();
+            release_coordinator_rx.recv().unwrap();
+            Ok(())
+        })
+    });
+    coordinator_held_rx.recv().unwrap();
+
+    let writer_config = config.clone();
+    let writer_options = options.clone();
+    let (writer_started_tx, writer_started_rx) = mpsc::channel();
+    let (writer_result_tx, writer_result_rx) = mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        writer_started_tx.send(()).unwrap();
+        writer_result_tx
+            .send(seed_analytics_with_options(
+                &writer_config,
+                index_name,
+                &writer_options,
+            ))
+            .unwrap();
+    });
+
+    let clear_config = config.clone();
+    let (clear_started_tx, clear_started_rx) = mpsc::channel();
+    let (clear_result_tx, clear_result_rx) = mpsc::channel();
+    let clearer = std::thread::spawn(move || {
+        clear_started_tx.send(()).unwrap();
+        clear_result_tx
+            .send(clear_analytics(&clear_config, index_name))
+            .unwrap();
+    });
+
+    writer_started_rx.recv().unwrap();
+    clear_started_rx.recv().unwrap();
+    let blocked_for = std::time::Duration::from_millis(100);
+    assert!(
+        matches!(
+            writer_result_rx.recv_timeout(blocked_for),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "seed must wait for the same-index mutation coordinator"
+    );
+    assert_eq!(
+        clear_result_rx.recv_timeout(blocked_for),
+        Err(mpsc::RecvTimeoutError::Timeout),
+        "clear must wait for the same-index mutation coordinator"
+    );
+
+    release_coordinator_tx.send(()).unwrap();
+    holder.join().unwrap().unwrap();
+    let seed_result = writer_result_rx.recv().unwrap().unwrap();
+    let removed = clear_result_rx.recv().unwrap().unwrap();
+    writer.join().unwrap();
+    clearer.join().unwrap();
+
+    assert_eq!(seed_result.total_searches, EXPECTED_SEARCH_COUNT as usize);
+    let seeded_date = &seed_result.seeded_dates[0];
+
+    let engine = AnalyticsQueryEngine::new(config);
+    let readback = engine
+        .search_count(index_name, seeded_date, seeded_date)
+        .await
+        .unwrap();
+    let serial_outcomes = [
+        (0, serde_json::json!(EXPECTED_SEARCH_COUNT)),
+        (2, serde_json::json!(0)),
+    ];
+    assert!(
+        serial_outcomes.contains(&(removed, readback["count"].clone())),
+        "seed and clear must produce one complete serial outcome"
+    );
+}
+
+#[tokio::test]
+async fn cleared_analytics_index_remains_readable_as_empty() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = test_analytics_config(&temp_dir);
+    let index_name = "cleared_analytics_readback";
+    let options = options_with_search_count(1, 10);
+    let seed_result = seed_analytics_with_options(&config, index_name, &options).unwrap();
+    let seeded_date = &seed_result.seeded_dates[0];
+
+    assert_eq!(clear_analytics(&config, index_name).unwrap(), 2);
+    let readback = AnalyticsQueryEngine::new(config)
+        .search_count(index_name, seeded_date, seeded_date)
+        .await
+        .unwrap();
+    assert_eq!(readback["count"], 0);
+    assert_eq!(readback["dates"], serde_json::json!([]));
+}
+
+/// Same-index clear and readback operations overlap while a clear-capable
+/// mutation is already in progress. Readbacks must wait for a stable analytics
+/// snapshot and then return either the complete pre-clear count or the empty
+/// post-clear result, never a discovery, registration, or execution error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_index_clear_and_search_count_share_query_snapshot_coordinator() {
+    const EXPECTED_SEARCH_COUNT: u32 = 10_000;
+
+    let temp_dir = TempDir::new().unwrap();
+    let config = test_analytics_config(&temp_dir);
+    let index_name = "concurrent_clear_readback";
+    let options = options_with_search_count(1, EXPECTED_SEARCH_COUNT);
+    let seed_result = seed_analytics_with_options(&config, index_name, &options).unwrap();
+    let seeded_date = seed_result.seeded_dates[0].clone();
+
+    let engine = AnalyticsQueryEngine::new(config.clone());
+    let initial = engine
+        .search_count(index_name, &seeded_date, &seeded_date)
+        .await
+        .unwrap();
+    assert_eq!(initial["count"], EXPECTED_SEARCH_COUNT);
+
+    let (coordinator_held_tx, coordinator_held_rx) = mpsc::channel();
+    let (release_coordinator_tx, release_coordinator_rx) = mpsc::channel();
+    let holder_config = config.clone();
+    let holder = std::thread::spawn(move || {
+        super::super::mutation::with_index_mutation(&holder_config, index_name, || {
+            coordinator_held_tx.send(()).unwrap();
+            release_coordinator_rx.recv().unwrap();
+            Ok(())
+        })
+    });
+    coordinator_held_rx.recv().unwrap();
+
+    let clear_config = config.clone();
+    let (clear_started_tx, clear_started_rx) = mpsc::channel();
+    let (clear_result_tx, clear_result_rx) = mpsc::channel();
+    let clearer = std::thread::spawn(move || {
+        clear_started_tx.send(()).unwrap();
+        clear_result_tx
+            .send(clear_analytics(&clear_config, index_name))
+            .unwrap();
+    });
+    clear_started_rx.recv().unwrap();
+
+    let reader_engine = AnalyticsQueryEngine::new(config.clone());
+    let reader_date = seeded_date.clone();
+    let (reader_started_tx, reader_started_rx) = mpsc::channel();
+    let mut readback = tokio::spawn(async move {
+        reader_started_tx.send(()).unwrap();
+        reader_engine
+            .search_count(index_name, &reader_date, &reader_date)
+            .await
+    });
+    reader_started_rx.recv().unwrap();
+
+    let blocked_for = std::time::Duration::from_millis(100);
+    assert_eq!(
+        clear_result_rx.recv_timeout(blocked_for),
+        Err(mpsc::RecvTimeoutError::Timeout),
+        "clear must wait for the same-index mutation coordinator"
+    );
+    assert!(
+        tokio::time::timeout(blocked_for, &mut readback)
+            .await
+            .is_err(),
+        "search_count must wait for the same-index analytics snapshot coordinator"
+    );
+
+    release_coordinator_tx.send(()).unwrap();
+    holder.join().unwrap().unwrap();
+    let removed = clear_result_rx.recv().unwrap().unwrap();
+    clearer.join().unwrap();
+    assert_eq!(removed, 2);
+
+    let readback = readback.await.unwrap().unwrap();
+    let valid_counts = [
+        serde_json::json!(EXPECTED_SEARCH_COUNT),
+        serde_json::json!(0),
+    ];
+    assert!(
+        valid_counts.contains(&readback["count"]),
+        "search_count returned {}, expected pre-clear {EXPECTED_SEARCH_COUNT} or post-clear 0",
+        readback["count"]
+    );
+}
+
+/// A raw analytics endpoint other than `search_count` must share the same-index
+/// snapshot coordinator with clear. It may return the complete pre-clear data or
+/// the empty post-clear data, but never race parquet discovery with removal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_index_clear_and_top_searches_share_query_snapshot_coordinator() {
+    const EXPECTED_SEARCH_COUNT: u32 = 100;
+
+    let temp_dir = TempDir::new().unwrap();
+    let config = test_analytics_config(&temp_dir);
+    let index_name = "concurrent_clear_top_searches";
+    let seed = seed_analytics_with_options(
+        &config,
+        index_name,
+        &options_with_search_count(1, EXPECTED_SEARCH_COUNT),
+    )
+    .unwrap();
+    let seeded_date = seed.seeded_dates[0].clone();
+
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let holder_config = config.clone();
+    let holder = std::thread::spawn(move || {
+        super::super::mutation::with_index_mutation(&holder_config, index_name, || {
+            held_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        })
+    });
+    held_rx.recv().unwrap();
+
+    let clear_config = config.clone();
+    let clearer = std::thread::spawn(move || clear_analytics(&clear_config, index_name));
+    for _ in 0..2_000 {
+        if super::super::mutation::waiting_writers(&config, index_name) == 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    let reader_engine = AnalyticsQueryEngine::new(config.clone());
+    let reader_date = seeded_date.clone();
+    let mut readback = tokio::spawn(async move {
+        let params = crate::analytics::AnalyticsQueryParams {
+            index_name,
+            start_date: &reader_date,
+            end_date: &reader_date,
+            limit: 1_000,
+            tags: None,
+        };
+        reader_engine.top_searches(&params, false, None).await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut readback)
+            .await
+            .is_err(),
+        "top_searches must wait behind the queued same-index clear"
+    );
+
+    release_tx.send(()).unwrap();
+    holder.join().unwrap().unwrap();
+    assert_eq!(clearer.join().unwrap().unwrap(), 2);
+    let result = readback.await.unwrap().unwrap();
+    let returned_count: u64 = result["searches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["count"].as_u64().unwrap())
+        .sum();
+    assert!(
+        [u64::from(EXPECTED_SEARCH_COUNT), 0].contains(&returned_count),
+        "top_searches returned partial count {returned_count}"
+    );
 }
 
 #[test]

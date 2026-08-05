@@ -266,6 +266,12 @@ const REBINDING_VETTED_IP: IpAddr = TEST_VETTED_ALGOLIA_IP;
 /// would dial a different socket.
 const ALGOLIA_VENDOR_PORT: u16 = 443;
 
+/// Single owner for the loopback port the test base-URL override fixture listens
+/// on. Both the override URL string and the expected pinned `SocketAddr` derive
+/// from this constant so a port change cannot silently desync the two halves of
+/// the pin-map contract.
+const TEST_FIXTURE_LOOPBACK_PORT: u16 = 18181;
+
 /// Recompute, from the same `flapjack::security` owner the constructor must
 /// use, the exact `(host, Vec<SocketAddr>)` map a correctly pinned client has
 /// to install. Runs under whatever validation resolver the caller installed, so
@@ -1260,6 +1266,52 @@ fn client_policy_pins_only_addresses_returned_by_outbound_validation() {
         observed_algolia_pins(&pin_observations),
         vetted_algolia_pin_map("APP123"),
         "reqwest must receive the exact host/address values returned by outbound validation"
+    );
+}
+
+#[test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+fn client_policy_pins_the_loopback_fixture_destination_when_the_base_url_override_is_active() {
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::overridden_to(&format!(
+        "http://127.0.0.1:{TEST_FIXTURE_LOOPBACK_PORT}/"
+    ));
+    let validation_resolver_calls = Arc::new(Mutex::new(Vec::new()));
+    let _validation_resolver =
+        install_unresolved_validation_resolver(Arc::clone(&validation_resolver_calls));
+    let pin_observations = Arc::new(Mutex::new(Vec::new()));
+    let _pin_observer = install_test_algolia_pin_observer(Arc::clone(&pin_observations));
+
+    AlgoliaClient::new("APP123", "key")
+        .expect("an active loopback fixture override should build an Algolia client");
+
+    // An active loopback override must short-circuit vendor vetting entirely: no
+    // `APP123-*` synthetic host may be handed to `vet_outbound_url_target`. The
+    // scoped resolver only records the five APP123 vendor hosts, so an empty call
+    // list is the achievable-correct value — the override's own `127.0.0.1` vet
+    // falls through to system resolution unrecorded. This fails a Stage 2 fix that
+    // keeps vetting the unresolvable vendor hosts and merely appends the loopback
+    // pin.
+    assert_eq!(
+        validation_calls(&validation_resolver_calls),
+        Vec::<(String, Option<u16>)>::new(),
+        "an active loopback override must not vet any synthetic Algolia vendor host"
+    );
+    // Defense-in-depth pin. `hyper-util`'s `HttpConnector` short-circuits
+    // IP-literal hosts through `dns::SocketAddrs::try_parse` before consulting the
+    // `resolve_to_addrs` map, and `test_algolia_base_url_override` rejects any
+    // non-literal-loopback base URL, so this pin never changes the socket hyper
+    // dials for the fixture — it documents the exact destination and guarantees no
+    // vendor host is pinned in its place.
+    assert_eq!(
+        observed_algolia_pins(&pin_observations),
+        vec![(
+            "127.0.0.1".to_string(),
+            vec![SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                TEST_FIXTURE_LOOPBACK_PORT
+            )]
+        )],
+        "reqwest must pin only the active loopback fixture destination"
     );
 }
 

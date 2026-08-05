@@ -302,8 +302,8 @@ impl AlgoliaClient {
             .timeout(ALGOLIA_REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy();
-        // This shared client can put data, fallback, and control hosts on the
-        // wire, so every one must reuse the address approved during validation.
+        // This shared client must pin the active destination: the explicitly
+        // vetted loopback fixture, or every data, fallback, and control host.
         let client_builder = pin_vetted_algolia_hosts(client_builder, app_id)?;
         let client = apply_test_dns_resolver(client_builder)
             .build()
@@ -473,18 +473,37 @@ fn pin_vetted_algolia_hosts(
     mut client_builder: reqwest::ClientBuilder,
     app_id: &str,
 ) -> Result<reqwest::ClientBuilder, AlgoliaClientError> {
-    for host in algolia_vendor_hosts(app_id)? {
-        let target =
-            flapjack::security::vet_outbound_url_target(&format!("https://{host}/"), false)
-                .map_err(|_| algolia_outbound_destination_refused())?
-                .ok_or_else(algolia_outbound_destination_refused)?;
-        let addresses = target.socket_addrs();
-        if addresses.is_empty() {
-            return Err(algolia_outbound_destination_refused());
-        }
-        client_builder = pin_resolved_algolia_host(client_builder, target.host, addresses);
+    for (host, addresses) in algolia_pin_targets(app_id)? {
+        client_builder = pin_resolved_algolia_host(client_builder, host, addresses);
     }
     Ok(client_builder)
+}
+
+fn algolia_pin_targets(app_id: &str) -> Result<Vec<(String, Vec<SocketAddr>)>, AlgoliaClientError> {
+    if let Some(base_url_override) = vetted_test_algolia_base_url_override()? {
+        return Ok(vec![algolia_pin_target(base_url_override.target)?]);
+    }
+
+    algolia_vendor_hosts(app_id)?
+        .into_iter()
+        .map(|host| {
+            let target =
+                flapjack::security::vet_outbound_url_target(&format!("https://{host}/"), false)
+                    .map_err(|_| algolia_outbound_destination_refused())?
+                    .ok_or_else(algolia_outbound_destination_refused)?;
+            algolia_pin_target(target)
+        })
+        .collect()
+}
+
+fn algolia_pin_target(
+    target: flapjack::security::VettedOutboundUrlTarget,
+) -> Result<(String, Vec<SocketAddr>), AlgoliaClientError> {
+    let addresses = target.socket_addrs();
+    if addresses.is_empty() {
+        return Err(algolia_outbound_destination_refused());
+    }
+    Ok((target.host, addresses))
 }
 
 fn pin_resolved_algolia_host(
@@ -717,7 +736,13 @@ fn validate_app_id(app_id: &str) -> Result<(), AlgoliaClientError> {
     Ok(())
 }
 
-fn test_algolia_base_url_override() -> Result<Option<String>, AlgoliaClientError> {
+struct VettedTestAlgoliaBaseUrlOverride {
+    base_url: String,
+    target: flapjack::security::VettedOutboundUrlTarget,
+}
+
+fn vetted_test_algolia_base_url_override(
+) -> Result<Option<VettedTestAlgoliaBaseUrlOverride>, AlgoliaClientError> {
     if !cfg!(debug_assertions) {
         return Ok(None);
     }
@@ -732,18 +757,29 @@ fn test_algolia_base_url_override() -> Result<Option<String>, AlgoliaClientError
     else {
         return Ok(None);
     };
-    let is_literal_loopback = flapjack::security::vet_outbound_url_target(&base_url, true)
+    let target = flapjack::security::vet_outbound_url_target(&base_url, true)
         .ok()
         .flatten()
-        .and_then(|target| target.host.parse::<std::net::IpAddr>().ok())
-        .is_some_and(|ip| ip.is_loopback());
-    if !is_literal_loopback {
+        .filter(|target| {
+            target
+                .host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        });
+    let Some(target) = target else {
         return Err(AlgoliaClientError::new(
             AlgoliaErrorKind::Validation,
             "Algolia test base URL must use a literal loopback address",
         ));
-    }
-    Ok(Some(base_url))
+    };
+    Ok(Some(VettedTestAlgoliaBaseUrlOverride { base_url, target }))
+}
+
+fn test_algolia_base_url_override() -> Result<Option<String>, AlgoliaClientError> {
+    Ok(
+        vetted_test_algolia_base_url_override()?
+            .map(|base_url_override| base_url_override.base_url),
+    )
 }
 
 fn algolia_host(app_id: &str, host: AlgoliaHost) -> Result<String, AlgoliaClientError> {

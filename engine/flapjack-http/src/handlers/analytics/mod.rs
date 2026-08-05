@@ -219,10 +219,17 @@ pub async fn seed_analytics(
         device_distribution: body.device_distribution,
         country_distribution: body.country_distribution,
     };
+    flapjack::analytics::seed::validate_seed_options(&options)
+        .map_err(|error| FlapjackError::InvalidQuery(format!("Seed error: {error}")))?;
 
-    let config = engine.config();
-    let result = flapjack::analytics::seed::seed_analytics_with_options(config, &index, &options)
-        .map_err(|e| FlapjackError::InvalidQuery(format!("Seed error: {}", e)))?;
+    let config = engine.config().clone();
+    let seed_index = index.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        flapjack::analytics::seed::seed_analytics_with_options(&config, &seed_index, &options)
+    })
+    .await
+    .map_err(|error| FlapjackError::Io(format!("Seed task error: {error}")))?
+    .map_err(|error| FlapjackError::Io(format!("Seed error: {error}")))?;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -272,27 +279,14 @@ pub async fn clear_analytics(
         .ok_or_else(|| FlapjackError::InvalidQuery("Missing 'index' field".to_string()))?;
     validate_analytics_index(&index)?;
 
-    let config = engine.config();
-    let searches_dir = config.searches_dir(&index);
-    let events_dir = config.events_dir(&index);
-
-    let mut removed = 0u64;
-    for dir in [&searches_dir, &events_dir] {
-        if dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        let _ = std::fs::remove_dir_all(&path);
-                        removed += 1;
-                    } else if path.is_file() {
-                        let _ = std::fs::remove_file(&path);
-                        removed += 1;
-                    }
-                }
-            }
-        }
-    }
+    let config = engine.config().clone();
+    let clear_index = index.clone();
+    let removed = tokio::task::spawn_blocking(move || {
+        flapjack::analytics::seed::clear_analytics(&config, &clear_index)
+    })
+    .await
+    .map_err(|error| FlapjackError::Io(format!("Clear task error: {error}")))?
+    .map_err(|error| FlapjackError::Io(format!("Clear error: {error}")))?;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
