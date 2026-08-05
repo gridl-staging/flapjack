@@ -19,7 +19,124 @@ const MAX_BROWSE_PAGES: usize = 1_000_000;
 const MAX_BROWSE_ITEMS: usize = 10_000_000;
 const DEFAULT_QUIESCENCE_MAX_POLLS: usize = 1_200;
 const DEFAULT_QUIESCENCE_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const TEST_ALGOLIA_BASE_URL_ENV: &str = "FLAPJACK_TEST_ALGOLIA_BASE_URL";
+pub(crate) const TEST_ALGOLIA_BASE_URL_ENV: &str = "FLAPJACK_TEST_ALGOLIA_BASE_URL";
+
+#[cfg(test)]
+mod test_algolia_base_url_env {
+    use super::TEST_ALGOLIA_BASE_URL_ENV;
+    // Enter the crate's single canonical process-global env-mutation owner rather
+    // than defining a second, uncoordinated mutex. A private mutex here would only
+    // serialize Algolia base-URL mutations against each other while still racing
+    // every other test that mutates `environ` (e.g. the source-identity guard), so
+    // a concurrent `getenv` (TempDir's `TMPDIR` read, `SourceIdentityConfig::from_env`)
+    // could observe a half-reallocated environment.
+    // The "does this thread already hold the env lock?" flag is NOT tracked
+    // here. It is owned by `test_helpers::EnvMutex` and maintained by every
+    // acquisition of `ENV_MUTEX`, including the ~60 tests that lock it
+    // directly. A copy kept next to this one guard type was the TEST-HANG-1
+    // defect: those direct lockers left it false, so `read_override` below
+    // re-locked a non-reentrant mutex on a thread that already held it and
+    // deadlocked the whole test binary at 0% CPU.
+    // Imported by its full canonical path on its own line: the SSOT guard
+    // `all_migration_env_mutation_shares_one_canonical_synchronization_owner`
+    // scans this file's source text for `test_helpers::ENV_MUTEX`, so folding
+    // it into the grouped import below would turn that guard red.
+    use crate::test_helpers::ENV_MUTEX;
+    use crate::test_helpers::{current_thread_holds_env_lock, EnvLockGuard};
+    use std::ffi::OsString;
+
+    tokio::task_local! {
+        static TASK_BASE_URL_OVERRIDE: Option<String>;
+    }
+
+    pub(super) struct AlgoliaBaseUrlEnvGuard {
+        previous_value: Option<OsString>,
+        _lock: EnvLockGuard,
+    }
+
+    impl AlgoliaBaseUrlEnvGuard {
+        pub(super) fn vendor_hosts() -> Self {
+            Self::replace_with(None)
+        }
+
+        pub(super) fn overridden_to(base_url: &str) -> Self {
+            Self::replace_with(Some(OsString::from(base_url)))
+        }
+
+        fn replace_with(value: Option<OsString>) -> Self {
+            assert!(
+                !current_thread_holds_env_lock(),
+                "Algolia base-URL environment guards must not be nested"
+            );
+            let lock = ENV_MUTEX
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let previous_value = std::env::var_os(TEST_ALGOLIA_BASE_URL_ENV);
+            set_value(value.as_ref());
+            Self {
+                previous_value,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for AlgoliaBaseUrlEnvGuard {
+        fn drop(&mut self) {
+            set_value(self.previous_value.as_ref());
+        }
+    }
+
+    pub(super) fn read_override() -> Option<String> {
+        if let Ok(base_url) = TASK_BASE_URL_OVERRIDE.try_with(Clone::clone) {
+            return base_url;
+        }
+        if current_thread_holds_env_lock() {
+            return std::env::var(TEST_ALGOLIA_BASE_URL_ENV).ok();
+        }
+
+        let _lock = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::env::var(TEST_ALGOLIA_BASE_URL_ENV).ok()
+    }
+
+    pub(super) fn current_value_for_test() -> Option<OsString> {
+        if current_thread_holds_env_lock() {
+            return std::env::var_os(TEST_ALGOLIA_BASE_URL_ENV);
+        }
+
+        let _lock = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::env::var_os(TEST_ALGOLIA_BASE_URL_ENV)
+    }
+
+    pub(super) async fn with_task_override<T>(
+        base_url: Option<&str>,
+        future: impl std::future::Future<Output = T>,
+    ) -> T {
+        TASK_BASE_URL_OVERRIDE
+            .scope(base_url.map(str::to_owned), future)
+            .await
+    }
+    fn set_value(value: Option<&OsString>) {
+        match value {
+            Some(value) => std::env::set_var(TEST_ALGOLIA_BASE_URL_ENV, value),
+            None => std::env::remove_var(TEST_ALGOLIA_BASE_URL_ENV),
+        }
+    }
+}
+
+#[cfg(test)]
+use test_algolia_base_url_env::AlgoliaBaseUrlEnvGuard;
+
+#[cfg(test)]
+pub(crate) async fn with_test_algolia_base_url_override<T>(
+    base_url: Option<&str>,
+    future: impl Future<Output = T>,
+) -> T {
+    test_algolia_base_url_env::with_task_override(base_url, future).await
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TraversalLimits {
@@ -441,8 +558,12 @@ fn test_algolia_base_url_override() -> Result<Option<String>, AlgoliaClientError
     if !cfg!(debug_assertions) {
         return Ok(None);
     }
-    let Some(base_url) = std::env::var(TEST_ALGOLIA_BASE_URL_ENV)
-        .ok()
+    #[cfg(test)]
+    let configured_base_url = test_algolia_base_url_env::read_override();
+    #[cfg(not(test))]
+    let configured_base_url = std::env::var(TEST_ALGOLIA_BASE_URL_ENV).ok();
+
+    let Some(base_url) = configured_base_url
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
     else {

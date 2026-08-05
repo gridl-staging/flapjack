@@ -207,9 +207,29 @@ impl AnalyticsQueryEngine {
     ) -> Result<serde_json::Value, String> {
         let start_ms = date_to_start_ms(start_date)?;
         let end_ms = date_to_end_ms(end_date)?;
-
-        // Discover all index directories
         let indices = self.list_analytics_indices()?;
+        self.overview_for_indices(&indices, start_ms, end_ms).await
+    }
+
+    /// Overview analytics for one index.
+    pub async fn overview_for_index(
+        &self,
+        index_name: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<serde_json::Value, String> {
+        let start_ms = date_to_start_ms(start_date)?;
+        let end_ms = date_to_end_ms(end_date)?;
+        let indices = vec![index_name.to_string()];
+        self.overview_for_indices(&indices, start_ms, end_ms).await
+    }
+
+    async fn overview_for_indices(
+        &self,
+        indices: &[String],
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<serde_json::Value, String> {
         if indices.is_empty() {
             return Ok(serde_json::json!({
                 "totalSearches": 0,
@@ -226,7 +246,7 @@ impl AnalyticsQueryEngine {
         let mut daily_searches: BTreeMap<i64, i64> = BTreeMap::new();
         let mut per_index: Vec<serde_json::Value> = Vec::new();
 
-        for index_name in &indices {
+        for index_name in indices {
             let metrics = self
                 .collect_overview_metrics_for_index(index_name, start_ms, end_ms)
                 .await?;
@@ -252,7 +272,6 @@ impl AnalyticsQueryEngine {
             .map(|(&ms, &count)| serde_json::json!({"date": ms_to_date_string(ms), "count": count}))
             .collect();
 
-        // Sort per_index by searches descending
         per_index.sort_by(|a, b| {
             let sa = a.get("searches").and_then(|v| v.as_i64()).unwrap_or(0);
             let sb = b.get("searches").and_then(|v| v.as_i64()).unwrap_or(0);

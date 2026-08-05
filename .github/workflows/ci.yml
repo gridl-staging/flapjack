@@ -25,6 +25,25 @@ jobs:
           else
             echo "is-public-repo=false" >> $GITHUB_OUTPUT
           fi
+  # Shape contracts for the release path. These are pure shell + python3 (no
+  # cargo, no network), so they cost seconds. They ran nowhere until 2026-08-04,
+  # which meant release.yml could drift out of contract silently — the release
+  # is the one pipeline where a defect is discovered only after it is public.
+  release-contracts:
+    name: Release contracts
+    needs: check-repo
+    if: needs.check-repo.outputs.is-public-repo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release workflow structure contract
+        run: bash engine/tests/test_release_workflow_structure.sh
+
+      - name: GHCR publish preflight contract
+        run: bash engine/tests/test_ghcr_publish_preflight.sh
+
   # ============================================================================
   # RUST ENGINE TESTS
   # ============================================================================

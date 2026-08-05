@@ -5,18 +5,7 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::Mutex;
 use std::thread;
-
-static ALGOLIA_BASE_URL_ENV_MUTEX: Mutex<()> = Mutex::new(());
-
-fn lock_clean_algolia_base_url_env() -> std::sync::MutexGuard<'static, ()> {
-    let guard = ALGOLIA_BASE_URL_ENV_MUTEX
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    std::env::remove_var(TEST_ALGOLIA_BASE_URL_ENV);
-    guard
-}
 
 #[derive(Debug, Clone)]
 struct ScriptedTransport {
@@ -71,6 +60,8 @@ fn request_urls(transport: &ScriptedTransport) -> Vec<&str> {
         .collect()
 }
 
+/// Plan a request without touching the base-URL guard. Callers must already
+/// hold either a vendor-host or override guard.
 fn request_for_test(
     app_id: &str,
     index_name: &str,
@@ -87,11 +78,31 @@ fn scripted_json_for_test(
     method: AlgoliaMethod,
     suffix: &str,
 ) -> Result<Value, AlgoliaClientError> {
-    let request = request_for_test(app_id, index_name, method, suffix)?;
-    tokio_test::block_on(execute_json_with_retry(transport, request))
+    let base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
+    execute_scripted_request_with_guard_for_test(
+        &base_url_env,
+        transport,
+        request_for_test(app_id, index_name, method, suffix),
+    )
+}
+
+fn execute_scripted_request_with_guard_for_test(
+    _base_url_env: &AlgoliaBaseUrlEnvGuard,
+    transport: &mut ScriptedTransport,
+    request: Result<PlannedRequest, AlgoliaClientError>,
+) -> Result<Value, AlgoliaClientError> {
+    tokio_test::block_on(execute_json_with_retry(transport, request?))
 }
 
 fn list_indexes_for_test(
+    transport: &mut ScriptedTransport,
+) -> Result<Vec<AlgoliaIndexRecord>, AlgoliaClientError> {
+    let base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
+    list_indexes_with_guard_for_test(&base_url_env, transport)
+}
+
+fn list_indexes_with_guard_for_test(
+    _base_url_env: &AlgoliaBaseUrlEnvGuard,
     transport: &mut ScriptedTransport,
 ) -> Result<Vec<AlgoliaIndexRecord>, AlgoliaClientError> {
     tokio_test::block_on(list_indexes_with_transport(transport, "APP123", "key"))
@@ -101,12 +112,14 @@ fn list_indexes_with_limits_for_test(
     transport: &mut ScriptedTransport,
     limits: TraversalLimits,
 ) -> Result<Vec<AlgoliaIndexRecord>, AlgoliaClientError> {
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     tokio_test::block_on(list_indexes_with_transport_and_limits(
         transport, "APP123", "key", limits,
     ))
 }
 
-fn key_allows_unretrievable_for_test(
+fn key_allows_unretrievable_with_guard_for_test(
+    _base_url_env: &AlgoliaBaseUrlEnvGuard,
     transport: &mut ScriptedTransport,
 ) -> Result<bool, AlgoliaClientError> {
     tokio_test::block_on(key_allows_unretrievable_with_transport(
@@ -118,6 +131,7 @@ fn require_unretrievable_access_for_test(
     transport: &mut ScriptedTransport,
     settings: &Value,
 ) -> Result<(), AlgoliaClientError> {
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     tokio_test::block_on(require_unretrievable_access_with_transport(
         transport, "APP123", "key", settings,
     ))
@@ -126,6 +140,7 @@ fn require_unretrievable_access_for_test(
 fn wait_for_quiescent_source_for_test(
     transport: &mut ScriptedTransport,
 ) -> Result<AlgoliaIndexRecord, AlgoliaClientError> {
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     tokio_test::block_on(wait_for_quiescent_source_with_transport(
         transport,
         "APP123",
@@ -168,6 +183,7 @@ fn paginated_raw_hits_for_test(
     transport: &mut ScriptedTransport,
     endpoint: &str,
 ) -> Result<Vec<Value>, AlgoliaClientError> {
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let mut delivered = Vec::new();
     let result = tokio_test::block_on(paginated_hits_with_transport(
         transport,
@@ -192,6 +208,7 @@ fn paginated_raw_hits_with_limits_for_test(
     endpoint: &str,
     limits: TraversalLimits,
 ) -> Result<Vec<Value>, AlgoliaClientError> {
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let mut delivered = Vec::new();
     let result = tokio_test::block_on(paginated_hits_with_transport_and_limits(
         transport,
@@ -215,6 +232,7 @@ fn paginated_raw_hits_with_limits_for_test(
 fn browse_documents_for_test(
     transport: &mut ScriptedTransport,
 ) -> Result<Vec<Value>, AlgoliaClientError> {
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let mut delivered = Vec::new();
     let result = tokio_test::block_on(browse_documents_with_transport(
         transport,
@@ -237,6 +255,7 @@ fn browse_documents_with_limits_for_test(
     transport: &mut ScriptedTransport,
     limits: TraversalLimits,
 ) -> Result<Vec<Value>, AlgoliaClientError> {
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let mut delivered = Vec::new();
     let result = tokio_test::block_on(browse_documents_with_transport_and_limits(
         transport,
@@ -258,7 +277,7 @@ fn browse_documents_with_limits_for_test(
 
 #[test]
 fn client_policy_validates_app_id_before_host_construction() {
-    let _env_lock = lock_clean_algolia_base_url_env();
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     for app_id in ["", "bad/id", "bad.example", "bad:443", "bad app"] {
         assert_eq!(
             request_for_test(app_id, "products", AlgoliaMethod::Get, "settings")
@@ -278,7 +297,7 @@ fn client_policy_validates_app_id_before_host_construction() {
 
 #[test]
 fn client_policy_percent_encodes_index_names() {
-    let _env_lock = lock_clean_algolia_base_url_env();
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let request = request_for_test("APP123", "summer/sale 2026", AlgoliaMethod::Post, "browse")
         .expect("valid request should be planned");
 
@@ -291,7 +310,7 @@ fn client_policy_percent_encodes_index_names() {
 
 #[test]
 fn client_policy_uses_exact_https_host_and_fixed_timeouts() {
-    let _env_lock = lock_clean_algolia_base_url_env();
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let request = request_for_test("APP123", "products", AlgoliaMethod::Get, "settings")
         .expect("valid request should be planned");
 
@@ -305,7 +324,7 @@ fn client_policy_uses_exact_https_host_and_fixed_timeouts() {
 
 #[test]
 fn client_policy_has_no_production_base_url_override() {
-    let _env_lock = lock_clean_algolia_base_url_env();
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let request = request_for_test("APP123", "products", AlgoliaMethod::Get, "settings")
         .expect("valid request should be planned");
 
@@ -317,8 +336,7 @@ fn client_policy_has_no_production_base_url_override() {
 
 #[test]
 fn client_policy_allows_test_base_url_override() {
-    let _env_lock = lock_clean_algolia_base_url_env();
-    std::env::set_var(TEST_ALGOLIA_BASE_URL_ENV, "http://127.0.0.1:18181/");
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::overridden_to("http://127.0.0.1:18181/");
 
     let request = request_for_test("APP123", "products", AlgoliaMethod::Get, "settings")
         .expect("test override should still plan a request");
@@ -331,14 +349,11 @@ fn client_policy_allows_test_base_url_override() {
         request.fallback_urls.is_empty(),
         "test override must disable vendor fallback hosts so the fixture stays local"
     );
-
-    std::env::remove_var(TEST_ALGOLIA_BASE_URL_ENV);
 }
 
 #[test]
 fn client_policy_limits_test_base_url_override_to_debug_builds() {
-    let _env_lock = lock_clean_algolia_base_url_env();
-    std::env::set_var(TEST_ALGOLIA_BASE_URL_ENV, "http://127.0.0.1:18181/");
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::overridden_to("http://127.0.0.1:18181/");
 
     let request = request_for_test("APP123", "products", AlgoliaMethod::Get, "settings")
         .expect("loopback test override should either apply in debug or be ignored in release");
@@ -366,14 +381,11 @@ fn client_policy_limits_test_base_url_override_to_debug_builds() {
             ]
         );
     }
-
-    std::env::remove_var(TEST_ALGOLIA_BASE_URL_ENV);
 }
 
 #[test]
 fn client_policy_rejects_remote_test_base_url_before_planning_credentials() {
-    let _env_lock = lock_clean_algolia_base_url_env();
-    std::env::set_var(TEST_ALGOLIA_BASE_URL_ENV, "http://203.0.113.10:18181/");
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::overridden_to("http://203.0.113.10:18181/");
 
     let error = request_for_test("APP123", "products", AlgoliaMethod::Get, "settings").expect_err(
         "remote test override must be rejected before a credentialed request is planned",
@@ -384,13 +396,11 @@ fn client_policy_rejects_remote_test_base_url_before_planning_credentials() {
         error.safe_message(),
         "Algolia test base URL must use a literal loopback address"
     );
-    std::env::remove_var(TEST_ALGOLIA_BASE_URL_ENV);
 }
 
 #[test]
 fn client_policy_rejects_loopback_hostname_to_prevent_dns_rebinding() {
-    let _env_lock = lock_clean_algolia_base_url_env();
-    std::env::set_var(TEST_ALGOLIA_BASE_URL_ENV, "http://localhost:18181/");
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::overridden_to("http://localhost:18181/");
 
     let error = request_for_test("APP123", "products", AlgoliaMethod::Get, "settings")
         .expect_err("test override must not re-resolve a hostname after loopback validation");
@@ -400,7 +410,6 @@ fn client_policy_rejects_loopback_hostname_to_prevent_dns_rebinding() {
         error.safe_message(),
         "Algolia test base URL must use a literal loopback address"
     );
-    std::env::remove_var(TEST_ALGOLIA_BASE_URL_ENV);
 }
 
 // The replica-settings method reuses the exact index_path / plan_request /
@@ -409,6 +418,7 @@ fn client_policy_rejects_loopback_hostname_to_prevent_dns_rebinding() {
 // returned verbatim, and any non-2xx stays in the typed, scrubbed error owner.
 #[test]
 fn index_settings_encodes_arbitrary_name_returns_full_json_and_scrubs_errors() {
+    let base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let replica_name = "réplica price/asc 2026";
 
     let request = request_for_test("APP123", replica_name, AlgoliaMethod::Get, "settings")
@@ -426,23 +436,19 @@ fn index_settings_encodes_arbitrary_name_returns_full_json_and_scrubs_errors() {
         "primary": "products"
     });
     let mut ok_transport = ScriptedTransport::new(vec![ok(full_settings.clone())]);
-    let returned = scripted_json_for_test(
+    let returned = execute_scripted_request_with_guard_for_test(
+        &base_url_env,
         &mut ok_transport,
-        "APP123",
-        replica_name,
-        AlgoliaMethod::Get,
-        "settings",
+        request_for_test("APP123", replica_name, AlgoliaMethod::Get, "settings"),
     )
     .expect("2xx settings response should decode to the full JSON");
     assert_eq!(returned, full_settings);
 
     let mut missing_transport = ScriptedTransport::new(vec![status(404)]);
-    let error = scripted_json_for_test(
+    let error = execute_scripted_request_with_guard_for_test(
+        &base_url_env,
         &mut missing_transport,
-        "APP123",
-        replica_name,
-        AlgoliaMethod::Get,
-        "settings",
+        request_for_test("APP123", replica_name, AlgoliaMethod::Get, "settings"),
     )
     .expect_err("a 404 missing replica must be a typed error");
     assert_eq!(error.kind(), AlgoliaErrorKind::Upstream);
@@ -482,6 +488,7 @@ fn retry_policy_retries_transient_failures_and_stops_on_success() {
 
 #[test]
 fn retry_policy_uses_algolia_fallback_hosts_after_transient_data_failure() {
+    let base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let mut transport = ScriptedTransport::new(vec![
         Err(AlgoliaClientError::new(
             AlgoliaErrorKind::Timeout,
@@ -490,12 +497,10 @@ fn retry_policy_uses_algolia_fallback_hosts_after_transient_data_failure() {
         ok(json!({"done": true})),
     ]);
 
-    let response = scripted_json_for_test(
+    let response = execute_scripted_request_with_guard_for_test(
+        &base_url_env,
         &mut transport,
-        "APP123",
-        "products",
-        AlgoliaMethod::Get,
-        "settings",
+        request_for_test("APP123", "products", AlgoliaMethod::Get, "settings"),
     )
     .expect("first fallback host should succeed");
 
@@ -511,6 +516,7 @@ fn retry_policy_uses_algolia_fallback_hosts_after_transient_data_failure() {
 
 #[test]
 fn retry_policy_uses_algolia_fallback_hosts_after_transient_control_failure() {
+    let base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let mut transport = ScriptedTransport::new(vec![
         Err(AlgoliaClientError::new(
             AlgoliaErrorKind::Transport,
@@ -528,7 +534,8 @@ fn retry_policy_uses_algolia_fallback_hosts_after_transient_control_failure() {
         )),
     ]);
 
-    let indexes = list_indexes_for_test(&mut transport).expect("control fallback should succeed");
+    let indexes = list_indexes_with_guard_for_test(&base_url_env, &mut transport)
+        .expect("control fallback should succeed");
 
     assert_eq!(indexes.len(), 1);
     assert_eq!(
@@ -584,6 +591,7 @@ fn retry_policy_stops_immediately_for_non_retryable_failures() {
 
 #[test]
 fn retry_policy_returns_stable_variant_after_retry_budget() {
+    let base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     for (responses, expected_kind) in [
         (
             vec![
@@ -638,12 +646,10 @@ fn retry_policy_returns_stable_variant_after_retry_budget() {
     ] {
         let mut transport = ScriptedTransport::new(responses);
 
-        let result = scripted_json_for_test(
+        let result = execute_scripted_request_with_guard_for_test(
+            &base_url_env,
             &mut transport,
-            "APP123",
-            "products",
-            AlgoliaMethod::Get,
-            "settings",
+            request_for_test("APP123", "products", AlgoliaMethod::Get, "settings"),
         );
 
         assert_eq!(
@@ -664,6 +670,7 @@ fn retry_policy_returns_stable_variant_after_retry_budget() {
 
 #[test]
 fn list_indexes_pagination_starts_at_page_zero_and_follows_nb_pages_changes() {
+    let base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     let mut transport = ScriptedTransport::new(vec![
         ok(json!({
             "items": [{"name": "products", "entries": 2, "updatedAt": "2026-01-01T00:00:00Z", "pendingTask": false}],
@@ -679,7 +686,8 @@ fn list_indexes_pagination_starts_at_page_zero_and_follows_nb_pages_changes() {
         })),
     ]);
 
-    let indexes = list_indexes_for_test(&mut transport).expect("pagination should complete");
+    let indexes = list_indexes_with_guard_for_test(&base_url_env, &mut transport)
+        .expect("pagination should complete");
 
     assert_eq!(indexes.len(), 3);
     assert_eq!(indexes[0].name, "products");
@@ -824,6 +832,7 @@ fn list_indexes_pagination_accepts_public_rows_without_pending_task() {
 
 #[test]
 fn source_export_acl_and_quiescence_reads_key_acl_through_strict_planner() {
+    let base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
     for (acl, expected) in [
         (json!(["search", "seeUnretrievableAttributes"]), true),
         (json!(["admin"]), true),
@@ -832,7 +841,8 @@ fn source_export_acl_and_quiescence_reads_key_acl_through_strict_planner() {
         let mut transport = ScriptedTransport::new(vec![ok(json!({ "acl": acl }))]);
 
         assert_eq!(
-            key_allows_unretrievable_for_test(&mut transport).expect("ACL lookup should parse"),
+            key_allows_unretrievable_with_guard_for_test(&base_url_env, &mut transport)
+                .expect("ACL lookup should parse"),
             expected
         );
         assert_eq!(transport.requests.len(), 1);
@@ -857,13 +867,16 @@ fn source_export_acl_and_quiescence_rejects_unretrievable_without_capability() {
     assert!(!error.safe_message().contains("source-secret"));
 
     let mut secret_key_transport = ScriptedTransport::new(vec![ok(json!({ "acl": ["search"] }))]);
-    let secret_key_error = tokio_test::block_on(require_unretrievable_access_with_transport(
-        &mut secret_key_transport,
-        "APP123",
-        "source-secret",
-        &settings,
-    ))
-    .expect_err("scrubbed errors must not echo the API key");
+    let secret_key_error = {
+        let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
+        tokio_test::block_on(require_unretrievable_access_with_transport(
+            &mut secret_key_transport,
+            "APP123",
+            "source-secret",
+            &settings,
+        ))
+        .expect_err("scrubbed errors must not echo the API key")
+    };
     assert!(!secret_key_error.safe_message().contains("source-secret"));
 
     let mut allowed = ScriptedTransport::new(vec![ok(json!({
@@ -1212,6 +1225,7 @@ fn strict_source_progress_streams_browse_page_before_following_request_failure()
         )),
     ]);
     let mut delivered_page_sizes = Vec::new();
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
 
     let result = tokio_test::block_on(browse_documents_with_transport(
         &mut transport,
@@ -1320,6 +1334,7 @@ fn source_export_raw_traversal_preserves_json_and_uses_strict_browse_bodies() {
         ok(json!({"hits": []})),
     ]);
     let mut delivered = Vec::new();
+    let _base_url_env = AlgoliaBaseUrlEnvGuard::vendor_hosts();
 
     tokio_test::block_on(browse_documents_with_transport(
         &mut transport,
@@ -1702,5 +1717,137 @@ fn source_export_raw_traversal_uses_independent_resource_limits() {
             .expect("exact document item cap should pass")
             .len(),
         2
+    );
+}
+
+#[test]
+fn algolia_base_url_environment_has_one_synchronized_test_owner() {
+    let client_source = include_str!("algolia_client.rs");
+
+    assert!(
+        client_source.contains("mod test_algolia_base_url_env"),
+        "the production observer and test mutator must share one synchronization owner"
+    );
+    assert!(
+        client_source.contains("test_algolia_base_url_env::read_override()"),
+        "the test-build environment observer must enter the shared synchronization owner"
+    );
+    let migration_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/handlers/migration");
+    for path in migration_rust_sources(&migration_dir) {
+        if path.ends_with("algolia_client.rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !source.contains(TEST_ALGOLIA_BASE_URL_ENV),
+            "migration tests must use the shared RAII owner, found direct access in {}",
+            path.display()
+        );
+    }
+}
+
+/// Fail-capable SSOT guard for the process-global env-mutation race: every
+/// migration source that mutates `environ` must enter the crate's single
+/// canonical `test_helpers::ENV_MUTEX`, and no migration source may define its
+/// own competing `static ENV_MUTEX`. A second, uncoordinated mutex (or a bare
+/// `set_var`/`remove_var` outside the owner) lets two mutators reallocate
+/// `environ` while a parallel `getenv` walks it — the exact undefined behavior
+/// behind the multithreaded `migration` flake. This guard goes red the moment
+/// any migration mutator stops routing through the canonical owner.
+#[test]
+fn all_migration_env_mutation_shares_one_canonical_synchronization_owner() {
+    const CANONICAL_ENV_OWNER: &str = "test_helpers::ENV_MUTEX";
+    let migration_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/handlers/migration");
+
+    for path in migration_rust_sources(&migration_dir) {
+        // This guard file necessarily contains the sentinel strings it scans for
+        // (as string literals and assertion text), so the policy-defining file
+        // exempts itself to avoid matching its own source.
+        if path.ends_with("algolia_client_tests.rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+
+        assert!(
+            !source.contains("static ENV_MUTEX:"),
+            "migration source {} defines a competing `static ENV_MUTEX`; the canonical \
+             owner is `test_helpers::ENV_MUTEX` and must be the only one",
+            path.display()
+        );
+
+        // The re-entrancy flag belongs to the mutex, not to any one guard type.
+        // A migration source that keeps its own copy only maintains it on the
+        // paths it controls, so every OTHER acquisition of `ENV_MUTEX` leaves
+        // the flag false — and the reader that trusts it then re-locks a
+        // non-reentrant mutex on a thread that already holds it and deadlocks
+        // the whole test binary at 0% CPU. That was `TEST-HANG-1` (2026-08-03).
+        // Restoring a local `CURRENT_THREAD_HOLDS_ENV_MUTEX` turns this red.
+        assert!(
+            !source.contains("CURRENT_THREAD_HOLDS_ENV_MUTEX"),
+            "migration source {} keeps a private env-lock holder flag; the canonical \
+             owner is `test_helpers::current_thread_holds_env_lock`, which every \
+             `ENV_MUTEX` acquisition maintains. A partially-maintained flag deadlocks.",
+            path.display()
+        );
+
+        let mutates_process_env =
+            source.contains("std::env::set_var(") || source.contains("std::env::remove_var(");
+        if mutates_process_env {
+            assert!(
+                source.contains(CANONICAL_ENV_OWNER),
+                "migration source {} mutates process-global env without entering the \
+                 canonical `{CANONICAL_ENV_OWNER}` synchronization owner",
+                path.display()
+            );
+        }
+    }
+}
+
+fn migration_rust_sources(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut sources = Vec::new();
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            sources.extend(migration_rust_sources(&path));
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            sources.push(path);
+        }
+    }
+    sources
+}
+
+#[test]
+fn algolia_base_url_environment_guard_restores_the_exact_prior_value() {
+    let prior_value = test_algolia_base_url_env::current_value_for_test();
+    {
+        let _base_url_env =
+            AlgoliaBaseUrlEnvGuard::overridden_to("http://127.0.0.1:18181/prior-value-test");
+        assert_eq!(
+            test_algolia_base_url_override().expect("loopback override should be valid"),
+            Some("http://127.0.0.1:18181/prior-value-test".to_string())
+        );
+    }
+    assert_eq!(
+        test_algolia_base_url_env::current_value_for_test(),
+        prior_value,
+        "dropping the synchronized override must restore presence and bytes exactly"
+    );
+}
+
+#[tokio::test]
+async fn algolia_base_url_route_override_is_task_scoped() {
+    let expected_url = "http://127.0.0.1:18181/task-scoped-test";
+    let observed = with_test_algolia_base_url_override(Some(expected_url), async {
+        test_algolia_base_url_override().expect("task-scoped loopback override should be valid")
+    })
+    .await;
+
+    assert_eq!(observed, Some(expected_url.to_string()));
+    assert_ne!(
+        test_algolia_base_url_override().expect("unscoped override read should remain valid"),
+        Some(expected_url.to_string()),
+        "the route override must not leak beyond its scoped request future"
     );
 }
