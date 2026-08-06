@@ -11,18 +11,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 pub const BUILD_INFO_SCHEMA_VERSION: u8 = 1;
-const EMBEDDED_BUILD_INFO_JSON_CAPACITY: usize = 16 * 1024;
-const BUILD_INFO_JSON_BEGIN_MARKER: &[u8] = b"FLAPJACK_BUILD_INFO_JSON_BEGIN\n";
-const BUILD_INFO_JSON_END_MARKER: &[u8] = b"\nFLAPJACK_BUILD_INFO_JSON_END\n";
-
-#[repr(C)]
-struct EmbeddedBuildInfoJson {
-    bytes: [u8; EMBEDDED_BUILD_INFO_JSON_CAPACITY],
-}
-
-#[used]
-static FLAPJACK_BUILD_INFO_JSON_EMBED: EmbeddedBuildInfoJson =
-    embedded_build_info_json(option_env!("FLAPJACK_INTERNAL_BUILD_INFO_JSON"));
+pub(crate) const EMBEDDED_BUILD_INFO_JSON_CAPACITY: usize = 16 * 1024;
+pub const BUILD_INFO_JSON_BEGIN_MARKER: &[u8] = b"FLAPJACK_BUILD_INFO_JSON_BEGIN\n";
+pub const BUILD_INFO_JSON_END_MARKER: &[u8] = b"\nFLAPJACK_BUILD_INFO_JSON_END\n";
 
 pub(crate) const WORKSPACE_DIGEST_FILES: &[&str] = &[
     "Cargo.lock",
@@ -109,28 +100,56 @@ pub(crate) struct VcsState {
     pub dirty: Option<bool>,
 }
 
+/// The canonical build identity, embedded verbatim in every artifact that links this
+/// crate so release packaging can read provenance out of the artifact's own bytes
+/// instead of executing a foreign-target binary.
+///
+/// This crate is the only place the record may be materialized. `engine/build.rs` emits
+/// `FLAPJACK_INTERNAL_BUILD_INFO_JSON` through `cargo:rustc-env`, and Cargo scopes that
+/// variable to the crate whose build script emitted it — so an `option_env!` read from
+/// any other crate silently yields `None` and embeds an empty record.
+#[used]
+static EMBEDDED_BUILD_INFO_JSON: [u8; EMBEDDED_BUILD_INFO_JSON_CAPACITY] =
+    embedded_build_info_json_bytes(option_env!("FLAPJACK_INTERNAL_BUILD_INFO_JSON"));
+
+/// Offset and length of the JSON payload inside [`EMBEDDED_BUILD_INFO_JSON`]. Both are
+/// `const` so the delimiters are consumed at compile time and never reach `.rodata` as a
+/// second copy of the marker bytes.
+const EMBEDDED_BUILD_INFO_JSON_OFFSET: usize = BUILD_INFO_JSON_BEGIN_MARKER.len();
+const EMBEDDED_BUILD_INFO_JSON_LEN: usize = match option_env!("FLAPJACK_INTERNAL_BUILD_INFO_JSON") {
+    Some(json) => json.len(),
+    None => 0,
+};
+
 /// Returns the canonical build identity for this compiled core crate.
 pub fn build_info() -> &'static BuildInfo {
     static BUILD_INFO: OnceLock<BuildInfo> = OnceLock::new();
     BUILD_INFO.get_or_init(|| {
-        build_info_from_inputs(
-            env!("CARGO_PKG_VERSION"),
-            RawBuildInputs {
-                revision: non_empty(option_env!("FLAPJACK_INTERNAL_BUILD_REVISION")),
-                dirty: parse_dirty(option_env!("FLAPJACK_INTERNAL_BUILD_DIRTY")),
-                workspace_digest: option_env!("FLAPJACK_INTERNAL_WORKSPACE_DIGEST")
-                    .unwrap_or_default()
-                    .to_owned(),
-                profile: option_env!("FLAPJACK_INTERNAL_BUILD_PROFILE")
-                    .unwrap_or_default()
-                    .to_owned(),
-                target: option_env!("FLAPJACK_INTERNAL_BUILD_TARGET")
-                    .unwrap_or_default()
-                    .to_owned(),
-            },
-            enabled_core_features(),
-        )
+        parse_build_info_json(embedded_build_info_json())
+            .unwrap_or_else(|error| panic!("compiled build-info record is invalid: {error}"))
     })
+}
+
+/// Reads this artifact's own embedded record, by compile-time-known layout.
+///
+/// The read is what keeps the record in the linked artifact. `#[used]` only binds the
+/// compiler: it leaves the static unreferenced, so a linker that garbage-collects
+/// unreferenced sections discards it outright — which is how the musl release binaries
+/// reached packaging with zero markers. Loading the bytes here makes the record
+/// load-bearing for observable behavior, so the relocation from live code survives any
+/// linker, and `black_box` stops the optimizer from folding the constant away and
+/// dropping the static with it.
+///
+/// Slicing at known offsets rather than searching for the delimiters is deliberate: a
+/// runtime marker search would pull the marker literals into `.rodata` as a second copy,
+/// and packaging fails closed on a duplicate marker. Scanning belongs to
+/// [`embedded_build_info_json_from_bytes`], whose callers inspect a foreign artifact
+/// whose layout they cannot know.
+fn embedded_build_info_json() -> &'static str {
+    let record = std::hint::black_box(&EMBEDDED_BUILD_INFO_JSON);
+    let payload = &record[EMBEDDED_BUILD_INFO_JSON_OFFSET
+        ..EMBEDDED_BUILD_INFO_JSON_OFFSET + EMBEDDED_BUILD_INFO_JSON_LEN];
+    std::str::from_utf8(payload).expect("embedded build-info JSON must be UTF-8")
 }
 
 pub fn canonical_build_info_json(info: &BuildInfo) -> serde_json::Result<String> {
@@ -138,13 +157,22 @@ pub fn canonical_build_info_json(info: &BuildInfo) -> serde_json::Result<String>
 }
 
 pub fn embedded_build_info_json_from_bytes(bytes: &[u8]) -> Result<String, String> {
+    parse_embedded_build_info(bytes).map(|(_, json)| json.to_owned())
+}
+
+fn parse_embedded_build_info(bytes: &[u8]) -> Result<(BuildInfo, &str), String> {
     let (json_start, json_end) = embedded_build_info_json_range(bytes)?;
     let json_bytes = &bytes[json_start..json_end];
     let json = std::str::from_utf8(json_bytes)
         .map_err(|error| format!("embedded build-info JSON is not UTF-8: {error}"))?;
+    let info =
+        parse_build_info_json(json).map_err(|error| error.replacen("compiled", "embedded", 1))?;
+    Ok((info, json))
+}
+
+fn parse_build_info_json(json: &str) -> Result<BuildInfo, String> {
     serde_json::from_str::<BuildInfo>(json)
-        .map_err(|error| format!("embedded build-info JSON is malformed: {error}"))?;
-    Ok(json.to_owned())
+        .map_err(|error| format!("compiled build-info JSON is malformed: {error}"))
 }
 
 pub(crate) fn build_info_from_inputs<I, S>(
@@ -388,7 +416,9 @@ where
         .collect()
 }
 
-const fn embedded_build_info_json(json: Option<&str>) -> EmbeddedBuildInfoJson {
+pub(crate) const fn embedded_build_info_json_bytes(
+    json: Option<&str>,
+) -> [u8; EMBEDDED_BUILD_INFO_JSON_CAPACITY] {
     let json = match json {
         Some(value) => value.as_bytes(),
         None => b"",
@@ -404,7 +434,7 @@ const fn embedded_build_info_json(json: Option<&str>) -> EmbeddedBuildInfoJson {
     offset = copy_const_bytes(&mut bytes, offset, BUILD_INFO_JSON_BEGIN_MARKER);
     offset = copy_const_bytes(&mut bytes, offset, json);
     let _ = copy_const_bytes(&mut bytes, offset, BUILD_INFO_JSON_END_MARKER);
-    EmbeddedBuildInfoJson { bytes }
+    bytes
 }
 
 const fn copy_const_bytes(
@@ -472,18 +502,6 @@ fn normalize_revision(revision: &str) -> Option<String> {
             .chars()
             .all(|character| character.is_ascii_hexdigit()))
     .then(|| revision.to_ascii_lowercase())
-}
-
-fn non_empty(value: Option<&str>) -> Option<String> {
-    value.filter(|value| !value.is_empty()).map(str::to_owned)
-}
-
-fn parse_dirty(value: Option<&str>) -> Option<bool> {
-    match value {
-        Some("true") => Some(true),
-        Some("false") => Some(false),
-        _ => None,
-    }
 }
 
 fn enabled_core_features() -> Vec<&'static str> {

@@ -149,6 +149,40 @@ assert_job_contains() {
 # Both patterns match the repository identity by SHAPE rather than by name,
 # because debbie rewrites that identity per mirror. This is run against the real
 # workflow and against an identity-rewritten copy of it; see the call sites.
+# The credential the preflight proves must be the credential the publish jobs
+# actually use, and naming either one literally is what lets them drift: point
+# the registry logins at a different secret and a literal assertion still
+# passes, leaving the preflight proving a credential the release never uses — a
+# green guard over an unproven credential.
+#
+# This is not hypothetical. Granting the release repository Actions access to
+# the GHCR package lets the publish jobs move from the PAT to the built-in
+# GITHUB_TOKEN, and that migration touches the login steps, not the preflight.
+# Comparing the two names rather than asserting either lets that migration pass
+# cleanly while still catching a half-done one.
+assert_preflight_proves_the_publish_credential() {
+  local publish_secrets preflight_secrets
+  publish_secrets="$(grep -oE '^[[:space:]]*password: \$\{\{ secrets\.[A-Z_]+ \}\}' "$RELEASE_WORKFLOW" \
+    | grep -oE 'secrets\.[A-Z_]+' | sort -u)"
+  preflight_secrets="$(job_block "ghcr_publish_preflight" | grep -oE 'secrets\.[A-Z_]+' | sort -u)"
+
+  if [ -z "$publish_secrets" ]; then
+    fail "preflight proves the credential the registry logins use (no registry login credential found)"
+    return
+  fi
+  # More than one distinct name means the publish jobs disagree with each other,
+  # so no single preflight can prove all of them.
+  if [ "$(printf '%s\n' "$publish_secrets" | wc -l | tr -d ' ')" != "1" ]; then
+    fail "preflight proves the credential the registry logins use (logins disagree: $(printf '%s ' $publish_secrets))"
+    return
+  fi
+  if [ "$publish_secrets" = "$preflight_secrets" ]; then
+    pass "preflight proves the credential the registry logins use ($publish_secrets)"
+  else
+    fail "preflight proves the credential the registry logins use (logins=$publish_secrets preflight=${preflight_secrets:-none})"
+  fi
+}
+
 assert_image_identity_ssot() {
   local workflow_path="$1"
   local context="$2"
@@ -280,7 +314,7 @@ section "GHCR publish credential preflight"
 # credential proof ahead of the first irreversible act.
 assert_contains "$RELEASE_WORKFLOW" '^\s*ghcr_publish_preflight:' "release.yml defines a GHCR publish-credential preflight"
 assert_job_contains "ghcr_publish_preflight" '^\s*needs:\s*validate_release_version\s*$' "preflight is gated only on version validation, so it runs beside the build matrix"
-assert_job_contains "ghcr_publish_preflight" 'secrets\.GHCR_TOKEN' "preflight exercises the same secret the Docker publish jobs consume"
+assert_preflight_proves_the_publish_credential
 assert_job_contains "ghcr_publish_preflight" 'package/ghcr_publish_preflight' "preflight calls the shared helper instead of inlining probe logic in YAML"
 assert_job_contains "ghcr_publish_preflight" 'RELEASE_IMAGE_REPOSITORY' "preflight probes the same image repository the Docker jobs publish to"
 assert_job_contains "ghcr_publish_preflight" '^\s*timeout-minutes:' "preflight is time-bounded so a hung registry cannot stall the release"

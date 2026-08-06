@@ -183,6 +183,41 @@ fn embedded_build_info_json_round_trips_exact_canonical_bytes() {
 }
 
 #[test]
+fn runtime_build_info_is_owned_by_the_embedded_record() {
+    let scanned = embedded_build_info_json_from_bytes(&EMBEDDED_BUILD_INFO_JSON)
+        .expect("the crate-owned static should hold exactly one well-formed record");
+
+    assert!(
+        !scanned.is_empty(),
+        "the crate-owned static must carry the build script's JSON, not an empty payload"
+    );
+    // The offset-sliced runtime read and an independent marker scan of the same static
+    // must agree, so a layout drift cannot silently feed callers a different record.
+    assert_eq!(scanned, embedded_build_info_json());
+    assert_eq!(scanned, canonical_build_info_json(build_info()).unwrap());
+}
+
+#[test]
+fn runtime_build_info_json_is_served_from_retained_static() {
+    let json = embedded_build_info_json();
+    let static_start = EMBEDDED_BUILD_INFO_JSON.as_ptr() as usize;
+    let static_payload_start = static_start + EMBEDDED_BUILD_INFO_JSON_OFFSET;
+    let static_payload_end = static_payload_start + EMBEDDED_BUILD_INFO_JSON_LEN;
+    let json_start = json.as_ptr() as usize;
+    let json_end = json_start + json.len();
+
+    assert!(
+        !json.is_empty(),
+        "runtime build-info JSON must not be empty"
+    );
+    assert_eq!(
+        (json_start, json_end),
+        (static_payload_start, static_payload_end),
+        "runtime build-info JSON must be a slice of the retained embedded static"
+    );
+}
+
+#[test]
 fn embedded_build_info_json_rejects_missing_duplicate_and_malformed_records() {
     assert_eq!(
         embedded_build_info_json_from_bytes(b"no record").unwrap_err(),

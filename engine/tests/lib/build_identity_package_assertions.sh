@@ -134,34 +134,140 @@ assert_foreign_target_manifest_contract() {
   assert_foreign_package_outputs "$output_dir"
 }
 
-assert_duplicate_end_marker_rejected() {
-  local fixture="$TMP_ROOT/duplicate_end_marker_fixture"
-  local output_dir="$TMP_ROOT/duplicate_end_marker_output"
-  local stderr="$TMP_ROOT/duplicate_end_marker_stderr.log"
-  local status=0
+assert_malformed_embedded_records_rejected() {
+  local fixtures_dir="$TMP_ROOT/malformed_record_fixtures"
+  local case_name expected_error fixture output_dir stderr helper_status
+  mkdir -p "$fixtures_dir"
 
-  mkdir -p "$output_dir"
-  python3 - "$FOREIGN_FIXTURE" "$fixture" <<'PY'
+  python3 - "$FOREIGN_FIXTURE" "$fixtures_dir" <<'PY'
 import pathlib
 import sys
 
-source = pathlib.Path(sys.argv[1])
-destination = pathlib.Path(sys.argv[2])
-destination.write_bytes(b"\nFLAPJACK_BUILD_INFO_JSON_END\n" + source.read_bytes())
-destination.chmod(0o755)
+source = pathlib.Path(sys.argv[1]).read_bytes()
+fixtures_dir = pathlib.Path(sys.argv[2])
+begin = b"FLAPJACK_BUILD_INFO_JSON_BEGIN\n"
+end = b"\nFLAPJACK_BUILD_INFO_JSON_END\n"
+start = source.index(begin)
+finish = source.index(end, start + len(begin))
+prefix = source[:start]
+record = source[start + len(begin):finish]
+suffix = source[finish + len(end):]
+revision_known = b'"revisionKnown":true'
+if record.count(revision_known) != 1:
+    raise SystemExit("fixture must contain exactly one revisionKnown member")
+
+fixtures = {
+    "missing_begin": prefix + record + end + suffix,
+    "missing_end": prefix + begin + record + suffix,
+    "duplicate_begin": prefix + begin + begin + record + end + suffix,
+    "duplicate_end": prefix + begin + record + end + end + suffix,
+    "end_before_begin": prefix + end + record + begin + suffix,
+    "malformed_json": prefix + begin + b"{" + end + suffix,
+    "invalid_utf8": prefix + begin + b"\xff" + end + suffix,
+    "duplicate_json_key": prefix + begin + record.replace(
+        revision_known, revision_known + b',"revisionKnown":true'
+    ) + end + suffix,
+}
+for name, contents in fixtures.items():
+    path = fixtures_dir / name
+    path.write_bytes(contents)
+    path.chmod(0o755)
+PY
+
+  while IFS='|' read -r case_name expected_error; do
+    fixture="$fixtures_dir/$case_name"
+    output_dir="$TMP_ROOT/${case_name}_output"
+    stderr="$TMP_ROOT/${case_name}_stderr.log"
+    mkdir -p "$output_dir"
+
+    set +e
+    # shellcheck disable=SC2153 # Assigned by the sourcing contract driver.
+    "$PACKAGE_HELPER" "$FOREIGN_TARGET" "$fixture" "$output_dir" >/dev/null 2>"$stderr"
+    helper_status=$?
+    set -e
+
+    [ "$helper_status" -ne 0 ] \
+      || die "$case_name embedded build-info record was silently accepted"
+    grep -Fq "$expected_error" "$stderr" \
+      || die "$case_name record failed without the expected diagnostic"
+    [ ! -e "$output_dir/flapjack-${FOREIGN_TARGET}.tar.gz" ] \
+      || die "$case_name record must not produce an archive"
+    [ ! -e "$output_dir/flapjack-${FOREIGN_TARGET}.tar.gz.sha256" ] \
+      || die "$case_name record must not produce a checksum"
+    [ ! -e "$output_dir/flapjack-${FOREIGN_TARGET}.manifest.json" ] \
+      || die "$case_name record must not produce a manifest"
+  done <<'CASES'
+missing_begin|embedded build-info JSON begin marker must appear exactly once, found 0
+missing_end|embedded build-info JSON end marker must appear exactly once, found 0
+duplicate_begin|embedded build-info JSON begin marker must appear exactly once, found 2
+duplicate_end|embedded build-info JSON end marker must appear exactly once, found 2
+end_before_begin|embedded build-info JSON end marker precedes begin marker
+malformed_json|embedded build-info JSON is malformed
+invalid_utf8|embedded build-info JSON is not UTF-8
+duplicate_json_key|embedded build-info JSON contains duplicate key: revisionKnown
+CASES
+}
+
+assert_traversal_target_rejected_without_outside_write() {
+  local output_dir="$TMP_ROOT/traversal_target_output"
+  local escaped_path="$TMP_ROOT/escaped.tar.gz"
+  local stderr="$TMP_ROOT/traversal_target_stderr.log"
+  local status=0
+
+  # This directory makes the old interpolation resolve
+  # <output>/flapjack-aarch64/../../escaped.tar.gz outside output_dir.
+  mkdir -p "$output_dir/flapjack-aarch64"
+  set +e
+  "$PACKAGE_HELPER" 'aarch64/../../escaped' "$FOREIGN_FIXTURE" "$output_dir" \
+    >/dev/null 2>"$stderr"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || die "path-bearing target triple was silently accepted"
+  grep -Fq 'target triple must be a hyphen-separated Rust target name' "$stderr" \
+    || die "path-bearing target triple failed without the expected diagnostic"
+  [ ! -e "$escaped_path" ] \
+    || die "path-bearing target triple wrote an archive outside the requested output directory"
+}
+
+assert_incomplete_build_record_rejected() {
+  local fixture="$TMP_ROOT/incomplete_build_record_fixture"
+  local output_dir="$TMP_ROOT/incomplete_build_record_output"
+  local stderr="$TMP_ROOT/incomplete_build_record_stderr.log"
+  local status=0
+
+  mkdir -p "$output_dir"
+  printf 'stale archive\n' >"$output_dir/flapjack-${FOREIGN_TARGET}.tar.gz"
+  printf 'stale checksum\n' >"$output_dir/flapjack-${FOREIGN_TARGET}.tar.gz.sha256"
+  printf 'stale manifest\n' >"$output_dir/flapjack-${FOREIGN_TARGET}.manifest.json"
+  python3 - "$fixture" <<'PY'
+import pathlib
+import sys
+
+fixture = pathlib.Path(sys.argv[1])
+fixture.write_text(
+    "FLAPJACK_BUILD_INFO_JSON_BEGIN\n"
+    '{"profile":"release","revisionKnown":true,'
+    '"target":"aarch64-unknown-linux-musl"}\n'
+    "FLAPJACK_BUILD_INFO_JSON_END\n"
+)
+fixture.chmod(0o755)
 PY
 
   set +e
-  # shellcheck disable=SC2153 # Assigned by the sourcing contract driver.
   "$PACKAGE_HELPER" "$FOREIGN_TARGET" "$fixture" "$output_dir" >/dev/null 2>"$stderr"
   status=$?
   set -e
 
-  [ "$status" -ne 0 ] || die "duplicate embedded build-info end marker was silently accepted"
-  grep -Fq 'embedded build-info JSON end marker must appear exactly once, found 2' "$stderr" \
-    || die "duplicate end marker failed without the expected diagnostic"
+  [ "$status" -ne 0 ] || die "incomplete embedded build-info record was silently packaged"
+  grep -Fq 'embedded build-info JSON keys mismatch' "$stderr" \
+    || die "incomplete embedded build-info record failed without the expected diagnostic"
+  [ ! -e "$output_dir/flapjack-${FOREIGN_TARGET}.tar.gz" ] \
+    || die "incomplete embedded build-info record must not produce an archive"
+  [ ! -e "$output_dir/flapjack-${FOREIGN_TARGET}.tar.gz.sha256" ] \
+    || die "incomplete embedded build-info record must not produce a checksum"
   [ ! -e "$output_dir/flapjack-${FOREIGN_TARGET}.manifest.json" ] \
-    || die "duplicate end marker must not produce a manifest"
+    || die "incomplete embedded build-info record must not produce a manifest"
 }
 
 assert_linux_musl_cli_mismatch_rejected() {

@@ -35,6 +35,7 @@ CROSS_KAT_WARMUP_TIMEOUT="${CROSS_KAT_WARMUP_TIMEOUT:-3600}"
 CROSS_KAT_POLL_INTERVAL="${CROSS_KAT_POLL_INTERVAL:-5}"
 CROSS_KAT_TARGET_ROOT="${CROSS_KAT_TARGET_ROOT:-$HOME}"
 CROSS_KAT_TARGET_CACHE="${CROSS_KAT_TARGET_CACHE:-}"
+RELEASE_BUILD_TIMEOUT="${RELEASE_BUILD_TIMEOUT:-600}"
 CROSS_KAT_CONTAINER_LABEL="com.flapjack.cross-kat"
 CROSS_KAT_CACHE_MARKER=".flapjack_cross_kat_cache"
 CROSS_KAT_TIMEOUT_CEILING=600
@@ -147,13 +148,94 @@ build_release_binary() {
   local source_dir="$1"
   local target_dir="$2"
   local revision="$3"
+  require_positive_integer_bound RELEASE_BUILD_TIMEOUT "$RELEASE_BUILD_TIMEOUT" 1800
   log "Building flapjack-server in $target_dir"
+  # These flags must mirror the release workflow's build step exactly. A specimen
+  # built with different features is a different optimized artifact, so it cannot
+  # stand in for the binary the packaging gate actually sees in CI.
   (
     cd "$source_dir"
     FLAPJACK_BUILD_REVISION="$revision" \
       CARGO_TARGET_DIR="$target_dir" \
-      cargo build --release --package flapjack-server
+      timeout "$RELEASE_BUILD_TIMEOUT" cargo build --release \
+      --package flapjack-server --no-default-features
   )
+}
+
+assert_real_release_embedded_record() {
+  local revision target_dir binary_path output_dir marker_report target_triple
+  revision="$(git -C "$REPO_DIR" rev-parse HEAD)"
+  target_dir="${REAL_RELEASE_TARGET_DIR:-$ENGINE_DIR/target/stage3_real_release_contract}"
+  binary_path="$target_dir/release/flapjack"
+  output_dir="$TMP_ROOT/real_release_output"
+  marker_report="$TMP_ROOT/real_release_marker_report.json"
+
+  build_release_binary "$ENGINE_DIR" "$target_dir" "$revision"
+  [ -x "$binary_path" ] || die "expected executable release binary at $binary_path"
+
+  python3 - "$binary_path" "$marker_report" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+binary_path = pathlib.Path(sys.argv[1])
+marker_report = pathlib.Path(sys.argv[2])
+contents = binary_path.read_bytes()
+start_marker = b"FLAPJACK_BUILD_INFO_JSON_BEGIN\n"
+end_marker = b"\nFLAPJACK_BUILD_INFO_JSON_END\n"
+start_count = contents.count(start_marker)
+end_count = contents.count(end_marker)
+if start_count != 1:
+    raise SystemExit(
+        f"real release binary must contain exactly one begin marker, found {start_count}"
+    )
+if end_count != 1:
+    raise SystemExit(
+        f"real release binary must contain exactly one end marker, found {end_count}"
+    )
+
+start = contents.index(start_marker) + len(start_marker)
+end = contents.index(end_marker)
+record = contents[start:end]
+embedded = json.loads(record.decode("utf-8"))
+executed = json.loads(
+    subprocess.check_output([str(binary_path), "build-info", "--json"], text=True)
+)
+if embedded != executed:
+    raise SystemExit("real release embedded build-info JSON must match CLI output")
+if embedded.get("profile") != "release":
+    raise SystemExit(f"real release profile mismatch: {embedded.get('profile')!r}")
+if embedded.get("revisionKnown") is not True:
+    raise SystemExit("real release revisionKnown must be true")
+if not embedded.get("target"):
+    raise SystemExit("real release target must be non-empty")
+marker_report.write_text(json.dumps(embedded, sort_keys=True) + "\n")
+PY
+
+  mkdir -p "$output_dir"
+  target_triple="$(build_target_from_binary "$binary_path")"
+  "$PACKAGE_HELPER" "$target_triple" "$binary_path" "$output_dir" >/dev/null
+
+  # The record only matters if it reaches the manifest, so assert the packaged
+  # build object is the same record, carrying the revision this build was given.
+  python3 - "$output_dir/flapjack-${target_triple}.manifest.json" "$marker_report" "$revision" <<'PY'
+import json
+import pathlib
+import sys
+
+manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
+embedded = json.loads(pathlib.Path(sys.argv[2]).read_text())
+revision = sys.argv[3]
+
+build = manifest["build"]
+if build != embedded:
+    raise SystemExit("manifest build object must be the binary's embedded record verbatim")
+if build.get("revision") != revision:
+    raise SystemExit(f"manifest revision {build.get('revision')!r} must equal {revision!r}")
+if build.get("revisionKnown") is not True:
+    raise SystemExit("manifest revisionKnown must be true")
+PY
 }
 
 build_target_from_binary() {
@@ -523,13 +605,20 @@ TMP_ROOT="$(mktemp -d)"
 case "${1:-}" in
   --foreign-target-only)
     assert_foreign_target_manifest_contract "$PACKAGE_HELPER" "foreign_target"
-    assert_duplicate_end_marker_rejected
+    assert_malformed_embedded_records_rejected
+    assert_traversal_target_rejected_without_outside_write
+    assert_incomplete_build_record_rejected
     log "foreign target manifest contract passed for $FOREIGN_TARGET"
     exit 0
     ;;
   --linux-musl-native-mismatch-only)
     assert_linux_musl_cli_mismatch_rejected
     log "x86_64 Linux musl CLI/embedded mismatch was rejected"
+    exit 0
+    ;;
+  --real-release-embedded-record-only)
+    assert_real_release_embedded_record
+    log "real optimized release binary embeds exactly one build-info record"
     exit 0
     ;;
   --foreign-target-repair-proof)
@@ -546,7 +635,9 @@ case "${1:-}" in
     ;;
   "")
     assert_foreign_target_manifest_contract "$PACKAGE_HELPER" "foreign_target"
-    assert_duplicate_end_marker_rejected
+    assert_malformed_embedded_records_rejected
+    assert_traversal_target_rejected_without_outside_write
+    assert_incomplete_build_record_rejected
     ;;
   *)
     die "unknown argument: $1"

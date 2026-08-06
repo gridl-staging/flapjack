@@ -9,6 +9,12 @@ import { pathToFileURL } from 'node:url';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
 const PORT_PROBE_TIMEOUT_MS = 500;
+const BACKEND_LABEL = 'backend server';
+const DASHBOARD_LABEL = 'dashboard dev server';
+/** Canonical dashboard-owned command that produces bin/flapjack-stable. */
+const BACKEND_BUILD_COMMAND = 'npm run update-server';
+/** Single owner of backend binary path, admin key, and secret-env loading. */
+const BACKEND_START_SCRIPT = 'scripts/start-stable-server.sh';
 
 function parseInteger(value, fallback) {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -88,7 +94,17 @@ function readWebServerEnv() {
   };
 }
 
+function readBackendEnv() {
+  return {
+    url: process.env.PLAYWRIGHT_BACKEND_URL,
+    host: process.env.PLAYWRIGHT_BACKEND_HOST,
+    port: parseInteger(process.env.PLAYWRIGHT_BACKEND_PORT, 0),
+    dataDir: process.env.PLAYWRIGHT_BACKEND_DATA_DIR,
+  };
+}
+
 async function waitForUrlReady({
+  label,
   url,
   timeoutMs,
   pollIntervalMs,
@@ -104,7 +120,60 @@ async function waitForUrlReady({
     await sleep(pollIntervalMs);
   }
 
-  throw new Error(`Timed out waiting for dashboard server at ${url}`);
+  throw new Error(`Timed out waiting for ${label} at ${url}`);
+}
+
+/**
+ * Reads GET /health and fails unless the backend was compiled with vector search.
+ *
+ * `skipWhenVectorSearchDisabled` in tests/fixtures/api-helpers.ts reads the same
+ * field, so a text-only backend turns the chat, hybrid-search, vector-settings and
+ * navigation specs into silent skips while the run still reports green. Asserting
+ * the capability at startup converts that invisible coverage loss into a loud,
+ * non-zero webserver failure.
+ */
+export async function assertVectorSearchEnabled(backendBaseUrl, fetchImpl = fetch) {
+  const healthUrl = `${backendBaseUrl}/health`;
+  const response = await fetchImpl(healthUrl, { method: 'GET' });
+
+  if (!response.ok) {
+    throw new Error(`Backend health probe failed (${response.status}) at ${healthUrl}`);
+  }
+
+  const body = await response.json();
+  const capabilities = body?.capabilities ?? {};
+
+  if (capabilities.vectorSearch !== true) {
+    throw new Error(
+      `Backend at ${backendBaseUrl} reports vectorSearch=${capabilities.vectorSearch}. `
+      + 'Dashboard e2e-ui requires a vector-search-enabled build, otherwise the '
+      + 'vector specs silently skip. Rebuild the stable backend binary with: '
+      + `${BACKEND_BUILD_COMMAND}`,
+    );
+  }
+
+  return capabilities;
+}
+
+/** Starts the backend through its existing owner, pinned to the Playwright target. */
+export function spawnBackendServer({ host, port, dataDir }, spawnImpl = spawn) {
+  return spawnImpl('bash', [BACKEND_START_SCRIPT], {
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      FLAPJACK_BIND_ADDR: `${host}:${port}`,
+      FLAPJACK_AI_ALLOW_LOCAL_URLS: '1',
+      ...(dataDir ? { FLAPJACK_DATA_DIR: dataDir } : {}),
+    },
+  });
+}
+
+/** Starts the Vite dashboard the browser tests navigate to. */
+export function spawnDashboardServer(spawnImpl = spawn) {
+  return spawnImpl('npm', ['run', 'dev'], {
+    stdio: 'inherit',
+    env: process.env,
+  });
 }
 
 export function resolveWaitForPortFreeTarget({ url, host, port }) {
@@ -146,7 +215,14 @@ export async function waitForPortFree(host, port, {
   throw new Error(`Timed out waiting for ${host}:${port} to become free`);
 }
 
-export async function ensureDashboardServer({
+/**
+ * Brings one server up at `url`, reusing or waiting for an existing one when allowed.
+ *
+ * `label` names the server in every readiness error so a failed Playwright startup
+ * says which of the two processes never became ready.
+ */
+export async function ensureServer({
+  label,
   url,
   host,
   port,
@@ -157,14 +233,11 @@ export async function ensureDashboardServer({
   probePort: probePortImpl = probePort,
   sleep = delay,
   acquireStartupLease: acquireStartupLeaseImpl = () => acquireStartupLease(buildStartupLeasePath(port)),
-  spawnServer = () =>
-    spawn('npm', ['run', 'dev'], {
-      stdio: 'inherit',
-      env: process.env,
-    }),
+  spawnServer = () => spawnDashboardServer(),
 }) {
   const waitForReady = () =>
     waitForUrlReady({
+      label,
       url,
       timeoutMs,
       pollIntervalMs,
@@ -173,7 +246,7 @@ export async function ensureDashboardServer({
     });
 
   if (allowReuse && await probeUrlImpl(url)) {
-    return { mode: 'reuse' };
+    return { mode: 'reuse', label };
   }
 
   let releaseStartupLease = null;
@@ -182,7 +255,7 @@ export async function ensureDashboardServer({
     releaseStartupLease = await acquireStartupLeaseImpl();
     if (!releaseStartupLease) {
       await waitForReady();
-      return { mode: 'wait' };
+      return { mode: 'wait', label };
     }
   }
 
@@ -197,7 +270,7 @@ export async function ensureDashboardServer({
   if (allowReuse && await probePortImpl(host, port)) {
     try {
       await waitForReady();
-      return { mode: 'wait' };
+      return { mode: 'wait', label };
     } finally {
       await releaseLease();
     }
@@ -210,7 +283,7 @@ export async function ensureDashboardServer({
       child.once('exit', (code, signal) => {
         reject(
           new Error(
-            `Dashboard dev server exited before becoming ready (code=${code ?? 'null'}, signal=${signal ?? 'null'})`,
+            `${label} exited before becoming ready (code=${code ?? 'null'}, signal=${signal ?? 'null'})`,
           ),
         );
       });
@@ -222,11 +295,82 @@ export async function ensureDashboardServer({
     ]);
 
     await releaseLease();
-    return { mode: 'spawn', child };
+    return { mode: 'spawn', label, child };
   } catch (error) {
     await releaseLease();
     throw error;
   }
+}
+
+/**
+ * Starts the backend, proves it is vector-enabled, then starts the dashboard.
+ *
+ * Ordering is load-bearing: the capability assertion runs before the dashboard so a
+ * text-only backend aborts startup instead of producing a green all-skipped run.
+ */
+export async function startPlaywrightServers({
+  backend,
+  dashboard,
+  readiness = {},
+  ensureServer: ensureServerImpl = ensureServer,
+  assertVectorSearchEnabled: assertVectorSearchEnabledImpl = assertVectorSearchEnabled,
+}) {
+  const backendResult = await ensureServerImpl({
+    ...readiness,
+    label: BACKEND_LABEL,
+    url: `${backend.url}/health`,
+    host: backend.host,
+    port: backend.port,
+    // A backend already listening on the shared port is reused rather than fought
+    // over — unlike the dashboard, it holds seeded index state worth keeping. The
+    // capability assertion below is what proves a reused backend is the right one.
+    allowReuse: true,
+    spawnServer: () => spawnBackendServer(backend),
+  });
+
+  await assertVectorSearchEnabledImpl(backend.url);
+
+  const dashboardResult = await ensureServerImpl({
+    ...readiness,
+    label: DASHBOARD_LABEL,
+    url: dashboard.url,
+    host: dashboard.host,
+    port: dashboard.port,
+    allowReuse: dashboard.allowReuse,
+    spawnServer: () => spawnDashboardServer(),
+  });
+
+  return [backendResult, dashboardResult]
+    .filter((result) => result.child)
+    .map(({ label, child }) => ({ label, child }));
+}
+
+/** Tears down every process this wrapper spawned when Playwright stops it. */
+export function forwardShutdownSignals(startedServers, target = process) {
+  const forward = (signal) => {
+    for (const { child } of startedServers) {
+      if (!child.killed) {
+        child.kill(signal);
+      }
+    }
+  };
+
+  target.once('SIGINT', () => forward('SIGINT'));
+  target.once('SIGTERM', () => forward('SIGTERM'));
+}
+
+/** Resolves on clean exit, rejects on the first child that dies with a failure code. */
+function waitForFirstChildExit(startedServers) {
+  return Promise.race(startedServers.map(({ label, child }) => new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (signal || code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${label} exited with code ${code}`));
+    });
+  })));
 }
 
 function waitForShutdownSignal() {
@@ -274,55 +418,31 @@ async function run() {
     return;
   }
 
-  const {
-    url,
-    host,
-    port,
-    allowReuse,
-    timeoutMs,
-    pollIntervalMs,
-  } = readWebServerEnv();
+  const { timeoutMs, pollIntervalMs, ...dashboard } = readWebServerEnv();
+  const readiness = { timeoutMs, pollIntervalMs };
+  const backend = readBackendEnv();
 
-  if (!url || !host || !port) {
+  if (!dashboard.url || !dashboard.host || !dashboard.port) {
     throw new Error(
       'PLAYWRIGHT_WEBSERVER_URL, PLAYWRIGHT_WEBSERVER_HOST, and PLAYWRIGHT_WEBSERVER_PORT are required',
     );
   }
 
-  const result = await ensureDashboardServer({
-    url,
-    host,
-    port,
-    allowReuse,
-    timeoutMs,
-    pollIntervalMs,
-  });
+  if (!backend.url || !backend.host || !backend.port) {
+    throw new Error(
+      'PLAYWRIGHT_BACKEND_URL, PLAYWRIGHT_BACKEND_HOST, and PLAYWRIGHT_BACKEND_PORT are required',
+    );
+  }
 
-  if (result.mode === 'spawn') {
-    const child = result.child;
-    const forwardSignal = (signal) => {
-      if (!child.killed) {
-        child.kill(signal);
-      }
-    };
+  const startedServers = await startPlaywrightServers({ backend, dashboard, readiness });
 
-    process.once('SIGINT', () => forwardSignal('SIGINT'));
-    process.once('SIGTERM', () => forwardSignal('SIGTERM'));
-
-    await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => {
-        if (signal || code === 0) {
-          resolve();
-          return;
-        }
-        reject(new Error(`Dashboard dev server exited with code ${code}`));
-      });
-    });
+  if (startedServers.length === 0) {
+    await waitForShutdownSignal();
     return;
   }
 
-  await waitForShutdownSignal();
+  forwardShutdownSignals(startedServers);
+  await waitForFirstChildExit(startedServers);
 }
 
 const invokedAsScript =
