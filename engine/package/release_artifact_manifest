@@ -8,8 +8,8 @@ Usage:
   package/release_artifact_manifest <target-triple> <binary-path> <output-dir>
 
 Creates the release archive, checksum sidecar, and build manifest for an already-built
-flapjack binary. The manifest build object is copied from the binary's own
-`build-info --json` output.
+flapjack binary. The manifest build object is copied from the binary's embedded
+build identity record, with native binaries cross-checked against `build-info --json`.
 EOF
 }
 
@@ -29,7 +29,7 @@ OUTPUT_DIR="$3"
 
 [ -n "$TARGET_TRIPLE" ] || die "target triple must not be empty"
 [ -f "$BINARY_PATH" ] || die "binary path does not exist: $BINARY_PATH"
-[ -x "$BINARY_PATH" ] || die "binary path is not executable: $BINARY_PATH"
+[ -r "$BINARY_PATH" ] || die "binary path is not readable: $BINARY_PATH"
 
 case "$TARGET_TRIPLE" in
   *-pc-windows-*|*-windows-*)
@@ -55,7 +55,110 @@ BUILD_JSON="$TMP_DIR/build.json"
 mkdir -p "$STAGING_DIR"
 
 cp "$BINARY_PATH" "$STAGING_DIR/$PACKAGED_BINARY_NAME"
-"$STAGING_DIR/$PACKAGED_BINARY_NAME" build-info --json >"$BUILD_JSON"
+
+host_triple() {
+  rustc -vV | awk '/^host: / { print $2 }'
+}
+
+is_host_executable_target() {
+  local host host_arch target_arch
+  host="$(host_triple)"
+  [ "$TARGET_TRIPLE" = "$host" ] && return 0
+
+  host_arch="${host%%-*}"
+  target_arch="${TARGET_TRIPLE%%-*}"
+  [ "$target_arch" = "$host_arch" ] || return 1
+
+  # Linux artifacts with the host architecture remain executable across the
+  # GNU/musl libc boundary because release musl artifacts are statically linked.
+  case "$host" in
+    *-linux-*) ;;
+    *) return 1 ;;
+  esac
+  case "$TARGET_TRIPLE" in
+    *-linux-musl*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+extract_embedded_build_json() {
+  local binary_path="$1"
+  local output_path="$2"
+  python3 - "$binary_path" "$output_path" <<'PY'
+import json
+import pathlib
+import sys
+
+binary_path = pathlib.Path(sys.argv[1])
+output_path = pathlib.Path(sys.argv[2])
+contents = binary_path.read_bytes()
+start_marker = b"FLAPJACK_BUILD_INFO_JSON_BEGIN\n"
+end_marker = b"\nFLAPJACK_BUILD_INFO_JSON_END\n"
+
+starts = []
+ends = []
+cursor = 0
+while True:
+    index = contents.find(start_marker, cursor)
+    if index < 0:
+        break
+    starts.append(index)
+    cursor = index + len(start_marker)
+
+cursor = 0
+while True:
+    index = contents.find(end_marker, cursor)
+    if index < 0:
+        break
+    ends.append(index)
+    cursor = index + len(end_marker)
+
+if len(starts) != 1:
+    raise SystemExit(
+        f"embedded build-info JSON begin marker must appear exactly once, found {len(starts)}"
+    )
+if len(ends) != 1:
+    raise SystemExit(
+        f"embedded build-info JSON end marker must appear exactly once, found {len(ends)}"
+    )
+
+json_start = starts[0] + len(start_marker)
+json_end = ends[0]
+if json_end < json_start:
+    raise SystemExit("embedded build-info JSON end marker precedes begin marker")
+
+record = contents[json_start:json_end]
+try:
+    json.loads(record.decode("utf-8"))
+except UnicodeDecodeError as error:
+    raise SystemExit(f"embedded build-info JSON is not UTF-8: {error}") from error
+except json.JSONDecodeError as error:
+    raise SystemExit(f"embedded build-info JSON is malformed: {error}") from error
+
+output_path.write_bytes(record + b"\n")
+PY
+}
+
+write_build_json() {
+  local binary_path="$1"
+  local output_path="$2"
+  local embedded_json="$TMP_DIR/embedded_build.json"
+  local executed_json="$TMP_DIR/executed_build.json"
+
+  extract_embedded_build_json "$binary_path" "$embedded_json"
+  if is_host_executable_target; then
+    [ -x "$binary_path" ] || die "native binary path is not executable: $binary_path"
+    "$binary_path" build-info --json >"$executed_json"
+    if ! cmp -s "$embedded_json" "$executed_json"; then
+      die "executed build-info JSON does not match embedded build-info JSON"
+    fi
+  fi
+  cp "$embedded_json" "$output_path"
+}
+
+# The QEMU action in .github/workflows/release.yml belongs to Docker image
+# fallback; REL-11 release packaging must not host-execute foreign artifacts.
+write_build_json "$STAGING_DIR/$PACKAGED_BINARY_NAME" "$BUILD_JSON"
 
 ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_NAME"
 CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
