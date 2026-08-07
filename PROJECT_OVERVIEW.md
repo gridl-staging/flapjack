@@ -1,6 +1,6 @@
 # Flapjack - Project Overview
 
-**Last updated:** 2026-08-06 evening
+**Last updated:** 2026-08-07 morning
 
 ## Mission
 
@@ -15,86 +15,99 @@ been propagating into risk arguments that assumed real workloads. **(1) Breaking
 over the compatible one wherever they conflict, except on the Algolia-compatible wire surface, which is the product. **(2) Nothing is urgent because it is "in
 production" — the urgency is that we cannot yet honestly ask anyone to adopt it.** The bar is not "no known incidents"; it is "we can prove the claims we make."
 
-**What changed on 2026-08-06, because it reorders everything below.** The release path shipped — `v1.0.11` is tagged, released, on GHCR, and resolved by the unpinned
-installer, and the Flapjack Cloud engine AMI bakes from that same archive. For the first time since 2026-06-09 engine work reaches a user by either route. No roadmap
-row is gated on the release path, so the binding constraint is no longer *delivery* but *proof*. That evening the console also gained all three migration providers —
-so the top of this list is now one unprovable shipped capability followed by the signal work that would prove the rest.
+**What changed on 2026-08-07, because it reorders everything below.** The console migration shipped whole — the browser now drives discovery, a
+translation-report dry-run, and a submit against a real source for **all three** providers, with migrated documents proven through the served search
+API, and the shipped-profile backend defect that blocked two of them (`MIG-22`) is repaired and proven. That row has closed; its shipped behaviour is
+owned by [`engine/docs2/FEATURES.md`](engine/docs2/FEATURES.md), and neither competitor's console ships a dry-run. Meanwhile the signal half proved
+healthier than any ledger recorded: staging `31176417863`, the first nightly on either mirror carrying every landed repair, returned **410 passed /
+1 failed**. The binding constraint is no longer *delivery* and no longer *repair* — it is **distribution of proof**: our own public mirror has not
+received the repairs, so it keeps producing red that reads exactly like an unfixed defect.
 
 The current strategic order is:
 
-1. **`MIG-22` — the console migrates from all three providers and we cannot prove it.**
-   First as of 2026-08-06 evening: the only row where a *shipped* capability is
-   unprovable. `MIG-21`'s provider half merged, but the Meilisearch/Typesense loopback
-   admission seams are `#[cfg(debug_assertions)]`-gated, so the `--release` backend the
-   e2e harness builds compiles them out and both provider specs fail. **The console is
-   not the defect — do not "fix" it there.** The shipped binary also ignores an opt-in
-   the console tells self-hosting users to set, which is a correctness problem in its own
-   right. In flight in lane `aug06_10am_1a`. Owner: [`ROADMAP.md`](ROADMAP.md) `MIG-22`.
+1. **`SYNC-1` — the prod mirror is a day behind and it is manufacturing false red.**
+   First because it is the only item here whose absence corrupts the evidence other
+   rows are read from. Prod head `35da0206f` (2026-08-06 11:16Z) carries none of the
+   four backend-start env exports the dashboard-harness repair adds, so every prod
+   nightly since has re-run the pre-repair harness. **Do not attribute a prod CI failure
+   without reading the mirror's own copy of the workflow at the run's `headSha`.** The
+   sync is an outward-facing publish and needs operator authorization; the durable half
+   — a staleness gate — is ordinary lane work. Owner: [`ROADMAP.md`](ROADMAP.md) `SYNC-1`.
 
-2. **`NIGHT-1` — 30 consecutive red nights**, 2026-07-08 through 2026-08-06, last green
-   2026-07-07. The only recurring real-Algolia end-to-end guard the project has, and it
-   gave no signal across the whole period the migration feature set was rewritten.
-   **Restated 2026-08-06 evening: this is now a wait, not a repair.** Three of four
-   attributed buckets carry landed repairs — migration-oracle selector, dashboard
-   capability provisioning, Algolia fixture credential readiness. The **Rust Clippy
-   bucket has no identified repair commit**, though its exact invocation and
-   `cargo fmt --all --check` exit `0` at HEAD on darwin-arm64 (evidence, not proof — the
-   nightly runs on Linux). Exit is two consecutive green scheduled runs; 2026-08-07 is
-   the first exercisable one, so 2026-08-08 is the earliest closure. Owner:
-   [`ROADMAP.md`](ROADMAP.md) `NIGHT-1`.
+2. **`NIGHT-1` — 31 consecutive red nights, now down to a single bucket.**
+   2026-07-08 through 2026-08-07, last green 2026-07-07. Three of the four original
+   buckets are repaired, and buckets 2 and the `CI-E2E-1` symptom are now **positively
+   proven green** on staging rather than merely believed repaired. What remains is one
+   Linux-only fixture-teardown defect — `source_provider_fixture_ctl.sh down typesense`
+   cannot `rm -rf` root-owned container files, a boundary macOS never exercises — in
+   flight in lane `aug06_10am_9`. Exit is still two consecutive green scheduled runs,
+   and it is gated on `SYNC-1`. Owner: [`ROADMAP.md`](ROADMAP.md) `NIGHT-1`.
 
-3. **`CI-E2E-1` — the last release-path integrity residual; its repair has landed.**
-   What remains is an observation, not an implementation: prod CI's `Dashboard full e2e
-   tests` job must be seen green on the mirror at a SHA where it previously failed. **Do
-   not re-implement the fix, and do not close it by weakening `engine/src/security.rs`**
-   — the refusal it trips over is a real SSRF control with a documented opt-in the CI job
-   did not set. Owner: [`ROADMAP.md`](ROADMAP.md) `CI-E2E-1`.
+3. **Proof that runs by itself — `MIG-22`'s recurring-gate clause and `JOIN-1`'s re-run.**
+   These are two halves of one problem: a capability is proven once and then nothing
+   re-proves it. `MIG-22`'s shipped-profile loopback contract passes `26/26` and reds
+   correctly under mutation, but it is in neither `--all` nor `--ci` nor any workflow, so
+   it never runs unless a human names it — this repo's own "a guard that cannot fail is
+   not a guard" rule, in its quietest form. `JOIN-1`'s two red proof keys are the console
+   migration specs, which now pass; the report simply has not been re-run, and **the
+   number is a command** — run `node scripts/join_proof_report.mjs`, never copy `59` or
+   `61` forward. Owners: [`ROADMAP.md`](ROADMAP.md) `MIG-22`, `JOIN-1`.
 
-4. **Test-signal hygiene — `TEST-FLAKE-2` first, then `TEST-FLAKE-1`.**
-   `merge_owner_survives_consecutive_commits` narrowed on 2026-08-06: its signal-based
-   wait landed and it passed its detached specimen, but the broad gate exited `124` and
-   surfaced an **uncensused** red, `bounded_aggregate_concurrency_across_simultaneous_requests`.
-   That is `TEST-FLAKE-2`, sequenced first because no disposition covers it and it is
-   what stops the broad gate from exiting `0`. Standing warnings: **rule out the stale
-   incremental cache** with a quarantined `engine/target` at `CARGO_INCREMENTAL=0` before
-   blaming a product defect, and distinguish a 0%-CPU hang from slowness with `%cpu` plus
-   `sample` before touching any timeout.
+4. **Test-signal integrity — `TEST-FLAKE-3` first, then `TEST-FLAKE-2`, then `TEST-FLAKE-1`.**
+   `TEST-FLAKE-3` is new and is not cosmetic: three fail-closed outbound controls
+   (pin adherence, DNS-rebind refusal, blocked-vendor refusal before connect) fail only
+   under the full union, from shared `cfg(test)` resolver state, and they are uncensused.
+   In flight in `aug06_10am_10`, whose Stage 3 quarantined union is also the missing
+   evidence for `TEST-FLAKE-2` and `TEST-FLAKE-1` — so one lane discharges all three.
+   Standing warnings: **rule out the stale incremental cache** with a quarantined
+   `engine/target` at `CARGO_INCREMENTAL=0` before blaming a product defect, and
+   distinguish a 0%-CPU hang from slowness with `%cpu` plus `sample` before touching any
+   timeout.
 
-5. **Security follow-through — the `SEC-W4` hygiene residual.** The serving path is no longer a capability question: HTTPS from operator PEM or hot-rotating ACME material,
-   mandatory replication-peer credentials over non-cleartext transport, no key material in browser storage. `SEC-G5` closed 2026-08-06. One item remains: a disposition
-   for the production moderate advisories below the audit gate's high-and-above threshold.
+5. **`CI-E2E-1` — the last release-path integrity residual, now proven on staging.**
+   Its repair passed `vector-settings.spec.ts` on Linux at staging SHA `1db1f8dcb`. What
+   remains is `SYNC-1` plus observing the job green on prod at a SHA where it previously
+   failed. **Do not re-implement the fix, and do not close it by weakening
+   `engine/src/security.rs`** — the refusal it trips over is a real SSRF control with a
+   documented opt-in the CI job did not set. Owner: [`ROADMAP.md`](ROADMAP.md) `CI-E2E-1`.
 
-6. **Backend↔frontend joined proof (JOIN-1).** Last clean measurement **`59 / 59` at
-   `05c546ca5`** — 0 failed, 0 skipped, 0 not-run, 0 unresolved. **The vendor-credential
-   story is falsified and must not be re-inherited:** all four hops pass with the
-   canonical pair and `P29` is green; a `403` `Invalid Application-ID or API key` body is
-   byte-identical for an empty key, a bogus key, and a genuine refusal, so it can never
-   on its own attribute a failure to the vendor. **The denominator then moved to 61**
-   when the console half registered `P30`/`P31`, both red today on `MIG-22` — expected,
-   and the reason the exit is a predicate. **The number is a command:** re-run
-   `node scripts/join_proof_report.mjs`; never copy `59` or `61` forward. **Policy
-   reversal, 2026-08-02: the React dashboard is not frozen and is not scheduled for
-   replacement**; every prior "deferred to the Svelte console" disposition is void.
+6. **`DOC-SSOT-1` — the instruction file every agent reads contradicts the ledger.**
+   Higher than its size suggests, because it is upstream of planning itself:
+   `.scrai/overview.md:11` assembles into `CLAUDE.md`/`AGENTS.md` and still says the
+   React dashboard is **frozen, do not plan new work here**, five days after this
+   document reversed that — and the work that just closed at priority-1 was new feature
+   work in exactly that directory. Owner: [`ROADMAP.md`](ROADMAP.md) `DOC-SSOT-1`.
 
-7. **RF-4 — runbooks iteration.** Keep operational routing in [`engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`](engine/docs2/3_IMPLEMENTATION/OPERATIONS.md) and keep folding incident learnings into the runbooks.
+7. **Security follow-through — the `SEC-W4` hygiene residual.** The serving path is no longer a capability question: HTTPS from operator PEM or hot-rotating ACME material,
+mandatory replication-peer credentials over non-cleartext transport, no key material in browser storage. `SEC-G5` closed 2026-08-06. One item remains: a disposition
+for the production moderate advisories below the audit gate's high-and-above threshold. Separately, `SDK-1` was **re-diagnosed 2026-08-07**: the source fix has been in `sdks/` since 2026-07-16, so the remaining work is publication, and
+three of its four channels need no registry credential. See [`ROADMAP.md`](ROADMAP.md) `SDK-1`; do not restate its decision here.
 
-8. **PL-10 — write-path saturation under sustained load.** The single-writer Tantivy ceiling remains the architectural constraint for v1.1. Three standing warnings: further
-   scale work needs a *new falsifiable question* beyond the verified 1M floor rather than another run; the superseded July 25 failures must not be profiled as current
-   defects; and the residual is **remote harness reliability**, not host contention — "needs a quiet host" is void.
+8. **RF-4 — runbooks iteration.** Keep operational routing in [`engine/docs2/3_IMPLEMENTATION/OPERATIONS.md`](engine/docs2/3_IMPLEMENTATION/OPERATIONS.md) and keep folding incident learnings into the runbooks.
 
-9. **Migration deferred-scope follow-through.** Create-only import, fenced
-   existing-target overwrite, and interrupted-job resume all ship on the synchronous and
-   authenticated async Algolia paths. `flapjack migrate preview` reaches the CLI for all
-   three providers — the one migration capability measurably ahead of both competitors'
-   own migration guides, neither of which ships a dry-run — but **no console path reaches
-   it**, which is `MIG-21`'s unstarted half. HA-converging import stays refused under
-   [`ROADMAP.md`](ROADMAP.md) `MIG-7`; resume remains Algolia-only.
+9. **PL-10 — write-path saturation under sustained load.** The single-writer Tantivy ceiling remains the architectural constraint for v1.1. Three standing warnings: further
+scale work needs a *new falsifiable question* beyond the verified 1M floor rather than another run; the superseded July 25 failures must not be profiled as current
+defects; and the residual is **remote harness reliability**, not host contention — "needs a quiet host" is void.
 
-10. **ADR-0005 OQ4 — cross-node failover idempotency dedup.** Node-local restart-durable idempotency ships; cross-node dedup remains a v1.1 planned item.
+10. **Migration deferred-scope follow-through.** Create-only import, fenced
+existing-target overwrite, and interrupted-job resume all ship on the synchronous and
+authenticated async Algolia paths. `flapjack migrate preview` reaches the CLI **and the
+console** for all three providers. HA-converging import stays refused under
+[`ROADMAP.md`](ROADMAP.md) `MIG-7`; resume remains Algolia-only, and adding a console
+job-status/resume surface is a recorded follow-up candidate rather than open work.
+
+11. **ADR-0005 OQ4 — cross-node failover idempotency dedup.** Node-local restart-durable idempotency ships; cross-node dedup remains a v1.1 planned item.
 
 Release history and shipped-feature lineage stay in [`CHANGELOG.md`](CHANGELOG.md) and
 [`engine/docs2/FEATURES.md`](engine/docs2/FEATURES.md). `PROJECT_OVERVIEW.md` owns
 mission and priority order; it does not duplicate that status ledger.
+
+## Product surfaces
+
+`engine/dashboard/` (React) is a **maintained, first-class product surface**. It is not frozen and is not scheduled for replacement; every earlier
+"deferred to the Svelte console" disposition is void. This is stated here because `.scrai/overview.md` — which assembles into `CLAUDE.md` and
+`AGENTS.md` — points every agent at this file for it. Shipped dashboard capability is described in
+[`engine/docs2/FEATURES.md`](engine/docs2/FEATURES.md), not here.
 
 ## Scope
 

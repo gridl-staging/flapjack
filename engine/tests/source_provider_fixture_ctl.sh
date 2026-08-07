@@ -32,7 +32,7 @@ cleanup_failed_start() {
   trap - EXIT
   if [ "$script_exit_code" -ne 0 ]; then
     [ -z "$ACTIVE_CONTAINER" ] || remove_owned_container "$ACTIVE_PROVIDER" "$ACTIVE_CONTAINER"
-    if [[ "$TMP" == /tmp/fj_source_provider_fixture_${ACTIVE_PROVIDER}_* ]] && [ -d "$TMP" ]; then
+    if source_provider_fixture_dir_matches "$ACTIVE_PROVIDER" "$TMP" && [ -d "$TMP" ]; then
       rm -rf -- "$TMP"
     fi
   fi
@@ -114,12 +114,28 @@ stop_provider() {
   source_provider_container_name_matches "$provider" "$container" \
     || die_indeterminate "SOURCE_PROVIDER_CONTAINER is not an owned ${provider} fixture container"
   [ -n "$ownership_token" ] || die_indeterminate 'SOURCE_PROVIDER_OWNER_TOKEN is required for down'
+  [ -z "$fixture_dir" ] || source_provider_fixture_dir_matches "$provider" "$fixture_dir" \
+    || die_indeterminate "SOURCE_PROVIDER_FIXTURE_DIR is not an owned ${provider} fixture directory"
   export SOURCE_PROVIDER_OWNER_TOKEN="$ownership_token"
+  if container_exists "$container" && ! container_has_fixture_ownership "$provider" "$container"; then
+    mark_cleanup_failure "${provider}_container_unowned_label name=${container}"
+  fi
+  case "$provider" in
+    typesense)
+      repair_typesense_data_permissions "$container" "$fixture_dir"
+      ensure_stopped_typesense_data_host_removable "$container" "$fixture_dir"
+      ;;
+    meilisearch) ;;
+  esac
   case "$provider" in
     meilisearch|typesense) remove_owned_container "$provider" "$container" ;;
   esac
-  if [[ "$fixture_dir" == /tmp/fj_source_provider_fixture_${provider}_* ]] && [ -d "$fixture_dir" ]; then
-    rm -rf -- "$fixture_dir"
+  if [ -n "$fixture_dir" ] && [ -d "$fixture_dir" ]; then
+    rm -rf -- "$fixture_dir" \
+      || mark_cleanup_failure "${provider}_fixture_dir_rm_failed dir=${fixture_dir}"
+  fi
+  if [ -n "$fixture_dir" ] && [ -d "$fixture_dir" ]; then
+    mark_cleanup_failure "${provider}_fixture_dir_residue dir=${fixture_dir}"
   fi
   jq -cn --arg provider "$provider" --arg container "$container" \
     '{provider:$provider,container:$container,removed:true}'

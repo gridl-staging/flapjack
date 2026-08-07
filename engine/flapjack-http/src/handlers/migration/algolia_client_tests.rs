@@ -2915,7 +2915,7 @@ fn algolia_base_url_environment_has_one_synchronized_test_owner() {
     );
     let migration_dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/handlers/migration");
-    for path in migration_rust_sources(&migration_dir) {
+    for path in rust_sources_recursively(&migration_dir) {
         if path.ends_with("algolia_client.rs") {
             continue;
         }
@@ -2942,7 +2942,7 @@ fn all_migration_env_mutation_shares_one_canonical_synchronization_owner() {
     let migration_dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/handlers/migration");
 
-    for path in migration_rust_sources(&migration_dir) {
+    for path in rust_sources_recursively(&migration_dir) {
         // This guard file necessarily contains the sentinel strings it scans for
         // (as string literals and assertion text), so the policy-defining file
         // exempts itself to avoid matching its own source.
@@ -2986,12 +2986,167 @@ fn all_migration_env_mutation_shares_one_canonical_synchronization_owner() {
     }
 }
 
-fn migration_rust_sources(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
+/// Census every direct access to the resolver/pin test-hook family, then prove
+/// the process-global outbound resolver has one lifetime owner. The exact census
+/// keeps a newly added reader, mutator, re-export, or wrapper visible here; the
+/// nested-drop assertion is the fail-capable contract for the audited gap.
+#[test]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+fn resolver_hook_family_has_one_lifetime_isolation_owner() {
+    let engine_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("flapjack-http must live below the engine workspace");
+    assert_eq!(
+        resolver_hook_access_counts(engine_root),
+        expected_resolver_hook_access_counts(),
+        "every hook-family reader and mutator must stay in the audited table owned by security::test_helpers"
+    );
+    assert_outbound_resolver_lifetime_isolation();
+}
+
+fn resolver_hook_names() -> [String; 7] {
+    [
+        ["install", "test", "outbound", "host", "resolver"].join("_"),
+        ["take", "test", "outbound", "host", "resolver"].join("_"),
+        ["install", "test", "dns", "resolver"].join("_"),
+        ["take", "test", "dns", "resolver"].join("_"),
+        ["install", "test", "algolia", "pin", "observer"].join("_"),
+        ["install", "test", "algolia", "validation", "resolver"].join("_"),
+        ["with", "test", "algolia", "base", "url", "override"].join("_"),
+    ]
+}
+
+fn resolver_hook_access_count(source: &str, hook_names: &[String]) -> usize {
+    hook_names
+        .iter()
+        .map(|hook| source.matches(hook).count())
+        .sum()
+}
+
+fn resolver_hook_access_counts(
+    engine_root: &std::path::Path,
+) -> std::collections::BTreeMap<String, usize> {
+    let hook_names = resolver_hook_names();
+    let mut observed = std::collections::BTreeMap::new();
+    for path in rust_sources_recursively(engine_root) {
+        let source = std::fs::read_to_string(&path).unwrap();
+        let access_count = resolver_hook_access_count(&source, &hook_names);
+        if access_count == 0 {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(engine_root)
+            .expect("workspace Rust source must be below engine root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        observed.insert(relative, access_count);
+    }
+    observed
+}
+
+fn expected_resolver_hook_access_counts() -> std::collections::BTreeMap<String, usize> {
+    std::collections::BTreeMap::from([
+        ("flapjack-http/src/ai_provider.rs".to_string(), 3),
+        ("flapjack-http/src/handlers/chat_tests.rs".to_string(), 5),
+        (
+            "flapjack-http/src/handlers/migration/algolia_client.rs".to_string(),
+            8,
+        ),
+        (
+            "flapjack-http/src/handlers/migration/algolia_client_tests.rs".to_string(),
+            18,
+        ),
+        (
+            "flapjack-http/src/handlers/migration/meilisearch_client_tests.rs".to_string(),
+            7,
+        ),
+        ("flapjack-http/src/handlers/migration/mod.rs".to_string(), 1),
+        (
+            "flapjack-http/src/handlers/migration/preview_tests/meilisearch.rs".to_string(),
+            4,
+        ),
+        (
+            "flapjack-http/src/handlers/migration/preview_tests/typesense.rs".to_string(),
+            3,
+        ),
+        (
+            "flapjack-http/src/handlers/migration/source_reader_tests.rs".to_string(),
+            2,
+        ),
+        (
+            "flapjack-http/src/handlers/migration/typesense_client_tests.rs".to_string(),
+            8,
+        ),
+        ("flapjack-http/src/router_tests.rs".to_string(), 3),
+        ("src/security.rs".to_string(), 3),
+        // Core guard coverage adds one installer call while keeping
+        // `security::test_helpers` as the hook family's single owner.
+        ("src/security_tests.rs".to_string(), 12),
+        ("src/vector/config_tests.rs".to_string(), 1),
+        ("src/vector/embedder.rs".to_string(), 3),
+        ("src/vector/embedder_tests.rs".to_string(), 10),
+    ])
+}
+
+#[test]
+fn resolver_hook_census_counts_multiple_accesses_on_one_line() {
+    let hook_names = resolver_hook_names();
+    let two_accesses_on_one_line = format!("{}({}())", hook_names[0], hook_names[1]);
+    assert_eq!(
+        resolver_hook_access_count(&two_accesses_on_one_line, &hook_names),
+        2
+    );
+}
+
+fn assert_outbound_resolver_lifetime_isolation() {
+    use flapjack::security::test_helpers::install_test_outbound_host_resolver;
+
+    let root_guard = install_test_outbound_host_resolver(Arc::new(|_, _| {
+        Some(vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))])
+    }));
+    let older_guard = install_test_outbound_host_resolver(Arc::new(|_, _| {
+        Some(vec![IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))])
+    }));
+    let newer_guard = install_test_outbound_host_resolver(Arc::new(|_, _| {
+        Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+    }));
+
+    drop(older_guard);
+    let observed_after_older_drop = flapjack::security::first_blocked_outbound_host_ip(
+        "resolver-isolation.test",
+        Some(443),
+        false,
+    );
+
+    // Restore the process-global slot before the intentional red assertion so
+    // this contract cannot leak its fixture into another test during unwind.
+    drop(newer_guard);
+    drop(root_guard);
+
+    assert_eq!(
+        observed_after_older_drop,
+        Some((
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            "private or local destination"
+        )),
+        "dropping an older guard must not replace the newer resolver; the shared hook family needs one lifetime isolation owner"
+    );
+}
+
+fn rust_sources_recursively(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut sources = Vec::new();
     for entry in std::fs::read_dir(directory).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            sources.extend(migration_rust_sources(&path));
+            if path.file_name().is_some_and(|name| {
+                matches!(
+                    name.to_str(),
+                    Some("target" | "node_modules" | ".git" | ".fastembed_cache")
+                )
+            }) {
+                continue;
+            }
+            sources.extend(rust_sources_recursively(&path));
         } else if path.extension().is_some_and(|extension| extension == "rs") {
             sources.push(path);
         }

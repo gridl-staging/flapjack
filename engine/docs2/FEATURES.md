@@ -3,41 +3,64 @@
 Canonical shipped capability and production-readiness snapshot for Flapjack.
 Open and future work is owned only by [`ROADMAP.md`](../../ROADMAP.md).
 
-**Last updated: 2026-08-06 evening.** **The console now migrates from all three source
-providers, and that capability is not yet browser-proven** — `MIG-21`'s provider half merged at
-`63cd2c54d`, giving `engine/dashboard/src/pages/migrateHelpers.ts` a three-entry
-`MIGRATION_PROVIDER_DESCRIPTORS` array that drives discovery, submit, and polling against the real
-`/1/migrations/{provider}` routes; but the `--release` backend the e2e harness builds compiles the
-Meilisearch and Typesense loopback admission seams out, so both new provider specs fail rather than
-skip. That prerequisite is [`ROADMAP.md`](../../ROADMAP.md) row `MIG-22`. **No row in this file may
-describe a Meilisearch or Typesense console migration as proven until it closes.** The console's
-SSRF-refusal messaging *is* proven independently (`npm run test:e2e-ui:migrate-meilisearch-refusal`,
-3 passed). Also landed: the loadtest readiness ownership guard reaching every live caller (`PL-15`),
-and a repair to the dashboard capability provisioning in both `nightly.yml` and `ci.yml`.
+**Last updated: 2026-08-07 morning.** **The console now migrates from all three source providers,
+offers a translation-report dry-run before any write, and that whole flow is browser-proven** — locally
+against real containerised sources and, for the first time, remotely on Linux CI. `engine/dashboard/src/pages/migrateHelpers.ts`
+carries a three-entry `MIGRATION_PROVIDER_DESCRIPTORS` array (`algolia`, `meilisearch`, `typesense`) driving
+discovery, submit and polling against the real `/1/migrations/{provider}` routes; `Migrate.tsx`'s
+`useMigrationPreview` and the `migration-preview-trigger` surface in `MigrateSections.tsx` render the
+translation report before any write path opens, share one request builder with submit, reset on any
+form-changing edit, and **gate submit on `hardRejections === 0`**. Measured, not asserted: the targeted
+three-provider browser run exits `0` with **21 passed**, each provider driving discovery → preview → submit →
+terminal success → browse → served search; the full `e2e-ui` suite exits `0` at **411 passed, 5 skipped**
+with every skip attributed and none on a migration path; the 390px route audit passes 3 over 23 routes; and
+the SSRF-refusal path passes 4, naming the opt-in rather than showing a generic error. Falsifiability was
+demonstrated by changing one expected summary count and taking the red. **This is a capability neither
+competitor's console has** — verified externally 2026-08-06: Typesense Cloud's dashboard has no
+collection-import feature at all, and Meilisearch's Algolia-migration guide hands you a record loop to write
+yourself; neither offers a dry-run. `ROADMAP.md` row `MIG-21` closed on this evidence.
 
-**`v1.0.11` published 2026-08-06** — the first release
-since 2026-06-09 and the first time any engine change reaches a user by either the OSS
-installer or the Flapjack Cloud engine AMI, which bakes from the same published archive
-and manifest. Landed since the last revision of this file: `flapjack migrate preview`
-reaching the CLI for all three source providers (`MIG-20`) with live Meilisearch preview
-(`MIG-15`); one canonical durable-writer/atomic-write owner with per-writer snapshot
-exclusion (`DUR-3`); a `Content-Length` pre-check that refuses an over-cap bulk-replace
-upload with `413` before the spool is touched (`MIG-18`); and deletion of the plaintext
-tarball snapshot helpers, leaving `FLAPJACK_SNAPSHOT_KEY_FILE` / `FJSNAPE1` as the single
-snapshot-encryption scheme (`SEC-G5`). Static PEM startup, ACME-backed hot rotation,
-mandatory replication-peer credentials, and credentialed-cleartext refusal remain
-shipped. The React dashboard is a maintained, first-class surface; earlier "deferred to
-the Svelte console" dispositions are superseded. **The public `Nightly Tests` workflow is
-red and has been every scheduled night since at least 2026-07-13** — see
-[`ROADMAP.md`](../../ROADMAP.md) row `NIGHT-1`; nothing in this file should be read as
-carrying current nightly proof. Open work remains canonical in
-[`ROADMAP.md`](../../ROADMAP.md).
+**The shipped-profile backend defect underneath it is repaired.** Release binaries previously compiled the
+Meilisearch and Typesense loopback admission seams out, so the opt-ins the console tells self-hosting users
+to set had no effect in a released binary. Both providers now use the same production-first,
+explicit-loopback-fallback admission shape in debug *and* release.
+`engine/tests/migration_release_loopback_contract.sh` builds and runs a `--release` server and passes
+**26/26 arms twice** — 4 positive, 14 enabled-endpoint refusals, and 8 disabled/wrong-value arms that assert
+**zero source requests and zero DNS resolutions**, so the fail-closed default is proven by absence of traffic
+rather than only by an error string. Mutation red was taken through the production admission owner.
+**One residual, stated because it bounds what this proof means:** that contract runs in no recurring gate —
+it is an explicit `engine/_dev/s/test --migration-release-loopback` selector, absent from `--all`, `--ci`, and
+every workflow — so nothing re-proves the shipped binary still admits a self-hosted source. Tracked as
+`ROADMAP.md` row `MIG-22`.
+
+**`v1.0.11` published 2026-08-06** — the first release since 2026-06-09 and the first time any engine change
+reaches a user by either the OSS installer or the Flapjack Cloud engine AMI, which bakes from the same
+published archive and manifest. Also landed since the last revision: `flapjack migrate preview` reaching the
+CLI for all three source providers (`MIG-20`) with live Meilisearch preview (`MIG-15`); one canonical durable-writer/atomic-write
+owner with per-writer snapshot exclusion (`DUR-3`); a `Content-Length` pre-check that refuses an over-cap
+bulk-replace upload with `413` before the spool is touched (`MIG-18`); deletion of the plaintext tarball
+snapshot helpers, leaving `FLAPJACK_SNAPSHOT_KEY_FILE` / `FJSNAPE1` as the single snapshot-encryption scheme
+(`SEC-G5`); and the loadtest readiness ownership guard reaching every live caller (`PL-15`). Static PEM
+startup, ACME-backed hot rotation, mandatory replication-peer credentials, and credentialed-cleartext refusal
+remain shipped. The React dashboard is a maintained, first-class surface; earlier "deferred to the Svelte
+console" dispositions are superseded.
+
+**The public `Nightly Tests` workflow is still red — 31 consecutive scheduled runs, 2026-07-08 through
+2026-08-07 — but the reason has changed and the distinction matters for anything read out of this file.**
+The first nightly run on either mirror carrying every landed repair (staging `31176417863` at mirror SHA
+`1db1f8dcb`) returned **410 passed, 1 failed**, with `cluster_peers.spec.ts` and `vector-settings.spec.ts`
+both green. The single remaining failure is a Linux-only fixture-teardown defect: `source_provider_fixture_ctl.sh
+down typesense` cannot `rm -rf` root-owned container files, a boundary macOS never exercises. **The prod
+mirror has not received the repairs at all** — its head predates them and its workflows carry none of the
+four backend-start environment exports the fix adds — so a red prod night is currently evidence about the
+sync, not about the code. See `ROADMAP.md` rows `NIGHT-1` and `SYNC-1`. Nothing in this file should be read
+as carrying current *prod* nightly proof. Open work remains canonical in [`ROADMAP.md`](../../ROADMAP.md).
 
 - 2026-05-31 stage note: `FLAPJACK_WRITE_QUEUE_BATCH_SIZE` is now runtime-configurable with default-preserving behavior (`32` fallback). See [`3_IMPLEMENTATION/OPS_CONFIGURATION.md`](3_IMPLEMENTATION/OPS_CONFIGURATION.md) for full operator semantics.
 
 - **Backend API:** 197/197 complete (as of 2026-03-13). The full parity verification is retained in the dev repo's internal audit history.
 - **Dashboard UI:** `dashboard/src/App.tsx` defines 24 derived user-facing route patterns from 24 raw `path=` attributes and two attribute-less index routes, backed by 22 lazy page components; the wildcard has no lazy component and `Overview` serves two patterns. No scaffolded stubs remain.
-- **E2E Browser Tests:** 57 Playwright spec files: 40 full `e2e-ui` specs, seven top-level `e2e-ui` specs, five smoke specs, four `e2e-api` specs, and one `e2e-binary` spec. The last clean machine-owned joined-proof sweep, measured 2026-08-06 at `05c546ca5` against a backend reporting `capabilities.vectorSearch: true` and `vectorSearchLocal: true`, reports **59 of 59 joinable capability rows passing, with 0 failed, 0 skipped, 0 not-run, and 0 unresolved keys** across all 28 proof keys then registered. **P29 (`full/migrate-algolia.spec.ts`) is green**, and the prior sweep's "vendor-side Algolia credential refusal that no repository SHA can fix" diagnosis is **falsified** — all four hops pass with the canonical credential pair. **That measurement predates the console provider merge.** The manifest now carries 30 proof keys and 61 joinable rows (`P30`/`P31` for the Meilisearch and Typesense console flows), and both new keys are red on `MIG-22`. Re-run `cd engine/dashboard && node scripts/join_proof_report.mjs` against a fresh full-suite artifact rather than copying either integer forward; the live claim is canonical in [`ROADMAP.md`](../../ROADMAP.md) row `JOIN-1`. Receipts: the reviewed private JOIN-1 predicate receipt and the reviewed private Algolia credential hop findings. **A capability-gated skip is never counted toward the numerator.**
+- **E2E Browser Tests:** 57 Playwright spec files: 40 full `e2e-ui` specs, seven top-level `e2e-ui` specs, five smoke specs, four `e2e-api` specs, and one `e2e-binary` spec. The most recent full-suite run, 2026-08-07 at the console dry-run merge, exits `0` at **411 passed, 5 skipped**, with every skip attributed by name and none on a migration path. **The last clean machine-owned joined-proof sweep is older than that and its numerator is therefore stale.** It was measured 2026-08-06 at `05c546ca5` against a backend reporting `capabilities.vectorSearch: true` and `vectorSearchLocal: true`, and reported **59 of 59 joinable capability rows passing, with 0 failed, 0 skipped, 0 not-run, and 0 unresolved keys** across all 28 proof keys then registered. **P29 (`full/migrate-algolia.spec.ts`) is green**, and the prior sweep's "vendor-side Algolia credential refusal that no repository SHA can fix" diagnosis is **falsified** — all four hops pass with the canonical credential pair. **That measurement predates both the console provider merge and the dry-run merge.** The manifest now carries 30 proof keys and 61 joinable rows (`P30`/`P31` for the Meilisearch and Typesense console flows). Both keys' specs now pass at the spec level — the `MIG-22` backend prerequisite that made them red is repaired — **but the join report has not been re-run, so no current joined-proof number exists for the 61-row denominator.** Re-run `cd engine/dashboard && node scripts/join_proof_report.mjs` against a fresh full-suite artifact rather than copying any integer forward; the live claim is canonical in [`ROADMAP.md`](../../ROADMAP.md) row `JOIN-1`. Receipts: the reviewed private JOIN-1 predicate receipt and the reviewed private Algolia credential hop findings. **A capability-gated skip is never counted toward the numerator.**
 - **Tour Video Walkthroughs:** Removed 2026-07-30 — the system depended on an external tool at a local path that no longer exists and had been unrunnable since 2026-04-14. Dashboard end-to-end proof is the Playwright e2e-ui suite.
 - **Load & Stress Testing:** k6 suite in `engine/loadtest/` — smoke, search throughput, write throughput, mixed workload, spike, memory-pressure, plus the long-running `mixed-soak` / `write-soak` scenarios and `soak_proof.sh` restart harness. PL-10's post-fix 60-minute Stage 3 mixed-soak gate (run date 2026-05-27) is classified `failure`, while the public write contract remained intact (no write `5xx`, no unexpected write `4xx`). Keep detailed lane status in [`ROADMAP.md`](../../ROADMAP.md), with measured verdict/evidence paths retained in private stage artifacts. Large-dataset benchmarking (100k docs): deterministic generator (`generate_dataset.mjs`), import throughput (`import_benchmark.sh`), search latency by query type (`search_benchmark.sh`), k6 concurrent load (`benchmark_k6.sh`), and dashboard large-index perf test (`large-index-perf.spec.ts`).
 - **Architecture decisions:** `3_IMPLEMENTATION/decisions/active/`
@@ -344,7 +367,7 @@ Env-var details for operational behavior are canonical in
 | Import: translated content → target index via staged publication | ✅ Shipped for create-only plus synchronous and async overwrite | `engine/flapjack-http/src/handlers/migration/import.rs`; `engine/flapjack-http/src/handlers/migration/mod.rs` |
 | Staged publication primitive (crash-safe, node-local) | ✅ Shipped | `engine/src/index/manager/publication.rs` |
 | Interrupted-job resume (pre-publication export) | ✅ Shipped — Algolia only | `POST /1/migrations/{provider}/{job_id}/resume`; `engine/flapjack-http/src/handlers/migration/{spool_lifecycle,export,job_runner,mod}.rs`; restart proof `engine/flapjack-server/tests/crash_durability_test.rs::interrupted_async_migration_resumes_exactly_once_after_process_restart` |
-| Dashboard `Migrate` page | ⚠️ All three providers reachable in the console since 2026-08-06 (`63cd2c54d`); **Algolia is the only one browser-proven**. Synchronous create-only mutation only, and **no console path reaches `preview`**, so the dry-run is still CLI-only. | `engine/dashboard/src/pages/{Migrate.tsx,MigrateSections.tsx,migrateHelpers.ts}`; specs `engine/dashboard/tests/e2e-ui/full/migrate-{algolia,meilisearch,typesense}.spec.ts` — the latter two are **red on [`ROADMAP.md`](../../ROADMAP.md) row `MIG-22`**, not on a console defect. Screen contract and live gap record: the private migrate screen contract. |
+| Dashboard `Migrate` page | ✅ All three providers reachable, dry-run before any write, and **all three browser-proven** as of 2026-08-07 (`86b143724`) — 21 passed targeted, 411 passed / 5 skipped full `e2e-ui`, and `migrate-{meilisearch,typesense}.spec.ts` executed on Linux CI in staging nightly `31176417863`. Synchronous create-only mutation; no console job-status or resume surface. **Not in any release:** `63cd2c54d`, `86b143724` and `5c7e5fc8b` are all non-ancestors of the `v1.0.11` cut `1b32cf727`, so the only installable binary still has an Algolia-only console and no dry-run. | `engine/dashboard/src/pages/{Migrate.tsx,MigrateSections.tsx,migrateHelpers.ts}`; specs `engine/dashboard/tests/e2e-ui/full/migrate-{algolia,meilisearch,typesense}.spec.ts`. Re-measure rather than cite: `cd engine/dashboard && npm run test:e2e-ui`. Screen contract: the private migrate screen contract. |
 | **Backend ↔ frontend joined end-to-end** | Last clean measurement `59 / 59` at `05c546ca5ba3b8dc92b0cb83e6604f09a7c6c433` on a backend reporting `capabilities.vectorSearch: true` and `vectorSearchLocal: true`: 0 failed, **0 skipped**, 0 not-run, 0 unresolved keys. **P29 (`migrate Algolia index via UI`) is green**, and the prior sweep's vendor-credential attribution is **falsified** — shell→vendor returned HTTP `200` with a real index list, `AlgoliaClient::list_indexes` passed, the server route returned `200`, and the Playwright fixture passed 4 including the invalid-credential UI path. A `403` `Invalid Application-ID or API key` body is byte-identical for an empty key, a bogus key, and a genuine refusal, so it can never on its own attribute a failure to the vendor. **Denominator moved to 61 after this measurement** when the console provider merge registered `P30`/`P31`; both are red on `MIG-22`. | `migrate_from_algolia`; `engine/dashboard/tests/e2e-ui/full/migrate-{algolia,meilisearch,typesense}.spec.ts`; receipts: the reviewed private JOIN-1 predicate receipt and the reviewed private Algolia credential hop findings |
 
 Replica translation detects topology from the source primary, fetches every named replica's own settings, and carries the derived virtual topology plus translated per-replica settings in the create-only migration bundle. Materialization then creates each derived replica as a settings-only virtual sidecar (no physical copy, by design) whose sort order resolves at query time. This contract is live-proven: on 2026-07-19 a real Algolia application with one `virtual(...)` relevance replica and one standard replica migrated end-to-end with a passing machine-verified receipt (jul18_11am batch) covering fixture seeding, import, sort-order proofs on the primary and both replica indexes, sidecar structure, and exact source cleanup. Remaining fidelity limits stay owned by `ROADMAP.md` MIG-11 and surface as documented migration warnings: standard-replica exhaustive sorting is approximated as a virtual replica, and Algolia `relevancyStrictness` semantics differ from Flapjack's deterministic ranking.

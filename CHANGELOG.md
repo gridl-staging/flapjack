@@ -14,14 +14,26 @@ and this project follows [Semantic Versioning](https://semver.org/).
   routes from one provider descriptor, replacing the Algolia-only compat aliases. A source
   on a loopback or private address renders the outbound-SSRF refusal and names the
   `FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK` / `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK` opt-in
-  instead of a generic error. **Known limitation, stated because it affects self-hosted
-  sources:** release builds compile the Meilisearch and Typesense loopback admission seams
-  out, so those two opt-ins have no effect in a released binary and only Algolia migration
-  is end-to-end proven in a browser. Tracked as `MIG-22`; the console is not the defect.
-  A translation-report dry-run is still CLI-only (`flapjack migrate preview`).
+  instead of a generic error.
+- **The console offers a translation-report dry-run before any migration writes anything.**
+  A `Preview` step renders the report — total entries, hard rejections, warnings and scope
+  gaps, plus every individual entry — and **submit stays disabled while any hard rejection
+  is present**. Preview and submit share one request builder, and editing any field that
+  changes the request clears the stale report rather than leaving it on screen. This works
+  for all three source providers. Neither Meilisearch's nor Typesense's own console offers
+  a migration dry-run.
 
 ### Fixed
 
+- **Release binaries now honour the self-hosted-source loopback opt-ins they document.**
+  The Meilisearch and Typesense loopback admission seams were `#[cfg(debug_assertions)]`-gated,
+  so `FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK=1` / `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK=1`
+  had no effect in a released binary — the console correctly told a self-hosting user to set
+  a variable the shipped build ignored. Both providers now use the same production-first,
+  explicit-loopback-fallback admission path in debug and release. **The fail-closed default
+  is unchanged and is proven by absence of traffic:** with the opt-in absent, or set to any
+  value other than `1`, the server makes zero requests to the source and performs zero DNS
+  resolutions.
 - Unknown fields in an Algolia migration request body are now rejected instead of silently
   ignored, and migration jobs poll to a terminal state rather than stopping at the first
   non-terminal status.

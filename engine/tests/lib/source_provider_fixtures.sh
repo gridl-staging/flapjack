@@ -13,6 +13,11 @@ readonly TYPESENSE_PRODUCTS="fj_ts_migration_products"
 readonly TYPESENSE_CATEGORIES="fj_ts_migration_categories"
 readonly TYPESENSE_SYNONYM_SET="fj_ts_migration_synonyms"
 readonly TYPESENSE_CURATION_SET="fj_ts_migration_curations"
+# Typesense persists to a host subdirectory bind-mounted at the container data
+# dir. start_typesense creates the mount and repair_typesense_data_permissions
+# repairs it during cleanup, so both read the pair from here.
+readonly TYPESENSE_HOST_DATA_SUBDIR="typesense_data"
+readonly TYPESENSE_CONTAINER_DATA_DIR="/data"
 readonly SOURCE_PROVIDER_FIXTURE_LABEL="flapjack.source_provider_fixture"
 readonly SOURCE_PROVIDER_FIXTURE_PROVIDER_LABEL="flapjack.source_provider_fixture.provider"
 readonly SOURCE_PROVIDER_FIXTURE_TOKEN_LABEL="flapjack.source_provider_fixture.token"
@@ -26,9 +31,31 @@ source_provider_container_name_matches() {
   esac
 }
 
+source_provider_fixture_dir_matches() {
+  local provider="$1" fixture_dir="$2"
+  case "$provider" in
+    meilisearch) [[ "$fixture_dir" == /tmp/fj_source_provider_fixture_meilisearch_* ]] ;;
+    typesense) [[ "$fixture_dir" == /tmp/fj_source_provider_fixture_typesense_* ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+container_listed_by_docker_ps() {
+  local name="$1" listed
+  shift
+  if ! listed="$(docker ps "$@" --filter "name=^/${name}$" --format '{{.Names}}' 2>/dev/null)"; then
+    mark_cleanup_failure "docker_ps_failed name=${name}"
+    return 2
+  fi
+  grep -Fxq "$name" <<<"$listed"
+}
+
 container_exists() {
-  local name="$1"
-  docker ps -a --filter "name=^/${name}$" --format '{{.Names}}' 2>/dev/null | grep -Fxq "$name"
+  container_listed_by_docker_ps "$1" -a
+}
+
+container_running() {
+  container_listed_by_docker_ps "$1"
 }
 
 container_label_value() {
@@ -38,45 +65,130 @@ container_label_value() {
 
 container_has_fixture_ownership() {
   local provider="$1" name="$2" token="${SOURCE_PROVIDER_OWNER_TOKEN:-}"
+  [ -n "$token" ] || return 1
   [ "$(container_label_value "$name" "$SOURCE_PROVIDER_FIXTURE_LABEL")" = "1" ] || return 1
   [ "$(container_label_value "$name" "$SOURCE_PROVIDER_FIXTURE_PROVIDER_LABEL")" = "$provider" ] || return 1
-  if [ -n "$token" ]; then
-    [ "$(container_label_value "$name" "$SOURCE_PROVIDER_FIXTURE_TOKEN_LABEL")" = "$token" ] || return 1
+  [ "$(container_label_value "$name" "$SOURCE_PROVIDER_FIXTURE_TOKEN_LABEL")" = "$token" ] || return 1
+}
+
+source_provider_owned_container_exists() {
+  local provider="$1" name="$2" exists_status
+  if ! source_provider_container_name_matches "$provider" "$name"; then
+    mark_cleanup_failure "${provider}_container_unowned_name name=${name}"
+    return 2
   fi
+  if container_exists "$name"; then
+    :
+  else
+    exists_status=$?
+    [ "$exists_status" -eq 1 ] && return 1
+    return 2
+  fi
+  if ! container_has_fixture_ownership "$provider" "$name"; then
+    mark_cleanup_failure "${provider}_container_unowned_label name=${name}"
+    return 2
+  fi
+  return 0
 }
 
 source_provider_docker_labels() {
   local provider="$1" token="${SOURCE_PROVIDER_OWNER_TOKEN:-}"
+  [ -n "$token" ] || {
+    printf 'ERROR: SOURCE_PROVIDER_OWNER_TOKEN must be set before starting %s fixtures\n' "$provider" >&2
+    return 1
+  }
   SOURCE_PROVIDER_DOCKER_LABEL_ARGS=(
     --label "${SOURCE_PROVIDER_FIXTURE_LABEL}=1"
     --label "${SOURCE_PROVIDER_FIXTURE_PROVIDER_LABEL}=${provider}"
+    --label "${SOURCE_PROVIDER_FIXTURE_TOKEN_LABEL}=${token}"
   )
-  if [ -n "$token" ]; then
-    SOURCE_PROVIDER_DOCKER_LABEL_ARGS+=(--label "${SOURCE_PROVIDER_FIXTURE_TOKEN_LABEL}=${token}")
-  fi
 }
 
 remove_owned_container() {
-  local label="$1" name="$2"
+  local label="$1" name="$2" owned_status exists_status
   [ -n "$name" ] || return 0
-  if ! source_provider_container_name_matches "$label" "$name"; then
-    mark_cleanup_failure "${label}_container_unowned_name name=${name}"
-    return 0
-  fi
-  if container_exists "$name"; then
-    if ! container_has_fixture_ownership "$label" "$name"; then
-      mark_cleanup_failure "${label}_container_unowned_label name=${name}"
-      return 0
-    fi
+  if source_provider_owned_container_exists "$label" "$name"; then
     if ! docker rm -f "$name" >/dev/null 2>&1; then
       mark_cleanup_failure "${label}_container_rm_failed name=${name}"
-      return 0
+      return 1
     fi
+  else
+    owned_status=$?
+    [ "$owned_status" -eq 1 ] || return 1
   fi
   if container_exists "$name"; then
     mark_cleanup_failure "${label}_container_residue name=${name}"
+    return 1
+  else
+    exists_status=$?
+    [ "$exists_status" -eq 1 ] || return 1
   fi
   return 0
+}
+
+# The container writes its data dir as root, so on Linux the invoking user can
+# be left unable to remove the host side of the bind mount. Repairing through
+# the already-verified fixture container is the only non-privileged seam that
+# works before the container is removed; a container that is no longer running
+# cannot be reached by exec, and the caller's own removal check stays the gate.
+repair_typesense_data_permissions() {
+  local container="$1" fixture_dir="$2" host_uid host_gid repair_command running_status
+  [ -n "$fixture_dir" ] || return 0
+  [ -d "$fixture_dir/$TYPESENSE_HOST_DATA_SUBDIR" ] || return 0
+  if container_running "$container"; then
+    :
+  else
+    running_status=$?
+    [ "$running_status" -eq 1 ] && return 0
+    return 1
+  fi
+  host_uid="$(id -u)"
+  host_gid="$(id -g)"
+  repair_command="chown -R ${host_uid}:${host_gid} $TYPESENSE_CONTAINER_DATA_DIR"
+  repair_command="$repair_command && chmod -R u+rwX $TYPESENSE_CONTAINER_DATA_DIR"
+  if ! docker exec "$container" sh -c "$repair_command" >/dev/null 2>&1; then
+    mark_cleanup_failure "typesense_data_permission_repair_failed name=${container}"
+    return 1
+  fi
+}
+
+typesense_data_host_removable() {
+  local fixture_dir="$1" data_dir
+  data_dir="$fixture_dir/$TYPESENSE_HOST_DATA_SUBDIR"
+  [ -d "$data_dir" ] || return 0
+  directory_tree_host_removable "$data_dir"
+}
+
+directory_tree_host_removable() {
+  local dir="$1" child
+  [ -r "$dir" ] && [ -w "$dir" ] && [ -x "$dir" ] || return 1
+  for child in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$child" ] || continue
+    [ ! -d "$child" ] || directory_tree_host_removable "$child" || return 1
+  done
+}
+
+ensure_stopped_typesense_data_host_removable() {
+  local container="$1" fixture_dir="$2" exists_status running_status
+  [ -n "$fixture_dir" ] || return 0
+  [ -d "$fixture_dir/$TYPESENSE_HOST_DATA_SUBDIR" ] || return 0
+  if container_exists "$container"; then
+    :
+  else
+    exists_status=$?
+    [ "$exists_status" -eq 1 ] && return 0
+    return 1
+  fi
+  if container_running "$container"; then
+    return 0
+  else
+    running_status=$?
+    [ "$running_status" -eq 1 ] || return 1
+  fi
+  if ! typesense_data_host_removable "$fixture_dir"; then
+    mark_cleanup_failure "typesense_stopped_container_data_unremovable name=${container}"
+    return 1
+  fi
 }
 
 wait_for_json() {
@@ -206,12 +318,12 @@ seed_typesense_collection_from_fixture() {
 }
 
 start_typesense() {
-  mkdir -p "$TMP/typesense_data"
+  mkdir -p "$TMP/$TYPESENSE_HOST_DATA_SUBDIR"
   verify_typesense_image_digest
   source_provider_docker_labels typesense
   docker run -d --name "$TYPESENSE_CONTAINER" "${SOURCE_PROVIDER_DOCKER_LABEL_ARGS[@]}" --publish 127.0.0.1::8108 \
-    --volume "$TMP/typesense_data:/data" \
-    "$TYPESENSE_IMAGE" --data-dir=/data --api-key="$TYPESENSE_KEY" >"$TMP/typesense_container_id.txt"
+    --volume "$TMP/$TYPESENSE_HOST_DATA_SUBDIR:$TYPESENSE_CONTAINER_DATA_DIR" \
+    "$TYPESENSE_IMAGE" --data-dir="$TYPESENSE_CONTAINER_DATA_DIR" --api-key="$TYPESENSE_KEY" >"$TMP/typesense_container_id.txt"
   TYPESENSE_PORT="$(docker port "$TYPESENSE_CONTAINER" 8108/tcp | awk -F: '/127.0.0.1/ {print $NF; exit}')"
   [ -n "$TYPESENSE_PORT" ] || die_indeterminate 'typesense_port_missing'
   wait_for_json "http://127.0.0.1:${TYPESENSE_PORT}/health" '.ok == true' '' '' "$TMP/typesense_health.json"

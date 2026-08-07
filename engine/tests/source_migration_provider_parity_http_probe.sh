@@ -119,6 +119,19 @@ terminate_owned_pid() {
   return 0
 }
 
+cleanup_source_provider_container() {
+  local provider="$1" container="$2" fixture_dir="$3"
+  [ -n "$container" ] || return 0
+  if ! source_provider_owned_container_exists "$provider" "$container"; then
+    return 0
+  fi
+  if [ "$provider" = typesense ] && [ -n "$fixture_dir" ]; then
+    repair_typesense_data_permissions "$container" "$fixture_dir" || return 0
+    ensure_stopped_typesense_data_host_removable "$container" "$fixture_dir" || return 0
+  fi
+  remove_owned_container "$provider" "$container" || return 0
+}
+
 cleanup() {
   local script_exit_code=$?
   local owned_pid_entry owned_pid_label owned_pid
@@ -128,18 +141,23 @@ cleanup() {
   fi
   terminate_owned_pid flapjack_server "$SERVER_PID"
   terminate_owned_pid algolia_stub "$ALGOLIA_STUB_PID"
-  for owned_pid_entry in "${EXTRA_OWNED_PIDS[@]}"; do
+  for owned_pid_entry in ${EXTRA_OWNED_PIDS[@]+"${EXTRA_OWNED_PIDS[@]}"}; do
     owned_pid_label="${owned_pid_entry%%:*}"
     owned_pid="${owned_pid_entry#*:}"
     terminate_owned_pid "$owned_pid_label" "$owned_pid"
   done
-  remove_owned_container meilisearch "$MEILI_CONTAINER"
-  remove_owned_container typesense "$TYPESENSE_CONTAINER"
+  cleanup_source_provider_container meilisearch "$MEILI_CONTAINER" "$TMP"
+  cleanup_source_provider_container typesense "$TYPESENSE_CONTAINER" "$TMP"
   if [ -n "$TMP" ] && [ -d "$TMP" ]; then
     if [ "$CHECKS_FAILED" -gt 0 ] || [ "$script_exit_code" -ne 0 ] || [ "$CLEANUP_FAILED" -ne 0 ]; then
       printf 'INFO: preserved source migration provider parity evidence at %s\n' "$TMP" >&2
     else
-      rm -rf "$TMP"
+      if ! rm -rf "$TMP"; then
+        mark_cleanup_failure "source_migration_fixture_dir_rm_failed dir=${TMP}"
+      fi
+      if [ -d "$TMP" ]; then
+        mark_cleanup_failure "source_migration_fixture_dir_residue dir=${TMP}"
+      fi
     fi
   fi
   if [ "$CLEANUP_FAILED" -ne 0 ] && { [ "$script_exit_code" -eq 0 ] || [ "$CLEANUP_FAILURE_OVERRIDES_EXIT" -eq 1 ]; }; then
@@ -203,6 +221,15 @@ start_discovery_upstreams() {
   start_algolia_stub
   start_meilisearch
   start_typesense
+}
+
+configure_source_provider_owner_token() {
+  local token_suffix
+  [ -n "$TMP" ] || die_indeterminate 'source_provider_owner_token_tmp_missing'
+  token_suffix="${TMP##*.}"
+  [ "$token_suffix" != "$TMP" ] || token_suffix="${TMP##*/}"
+  SOURCE_PROVIDER_OWNER_TOKEN="source_migration_provider_parity_$$_${token_suffix}"
+  export SOURCE_PROVIDER_OWNER_TOKEN
 }
 
 target_dir() {
@@ -1201,9 +1228,347 @@ probe_neutral_shared_seam() {
   fi
 }
 
+write_parity_cleanup_fake_bins() {
+  local fake_bin="$1"
+  mkdir -p "$fake_bin"
+  cat >"$fake_bin/docker" <<'FAKE_DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${PARITY_CLEANUP_TEST_DOCKER_LOG:?}"
+state_dir="${PARITY_CLEANUP_TEST_DOCKER_STATE:?}"
+
+case "${1:-}" in
+  ps)
+    ps_count_file="$state_dir/ps_count"
+    ps_count=0
+    [ -f "$ps_count_file" ] && ps_count="$(cat "$ps_count_file")"
+    ps_count=$((ps_count + 1))
+    printf '%s\n' "$ps_count" >"$ps_count_file"
+    if [ -n "${PARITY_CLEANUP_TEST_FAIL_PS_CALL:-}" ] && [ "$ps_count" -eq "${PARITY_CLEANUP_TEST_FAIL_PS_CALL}" ]; then
+      printf 'fake docker: ps failed on call %s\n' "$ps_count" >&2
+      exit 1
+    fi
+    name_filter=""
+    include_stopped=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -a) include_stopped=1; shift ;;
+        --filter) name_filter="${2:-}"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    name="${name_filter#name=^/}"
+    name="${name%$}"
+    if [ -n "$name" ] && [ -f "$state_dir/$name.provider" ] \
+      && { [ "$include_stopped" -eq 1 ] || [ ! -f "$state_dir/$name.stopped" ]; }; then
+      printf '%s\n' "$name"
+    fi
+    ;;
+  inspect)
+    format="${3:-}"
+    name="${4:-}"
+    case "$format" in
+      *flapjack.source_provider_fixture.token*) cat "$state_dir/$name.token" 2>/dev/null || true ;;
+      *flapjack.source_provider_fixture.provider*) cat "$state_dir/$name.provider" 2>/dev/null || true ;;
+      *flapjack.source_provider_fixture*) [ -f "$state_dir/$name.provider" ] && printf '1\n' ;;
+    esac
+    ;;
+  logs)
+    exit 0
+    ;;
+  exec)
+    name="${2:-}"
+    shift 2
+    printf 'docker exec %s %s\n' "$name" "$*" >>"${PARITY_CLEANUP_TEST_ORDER_LOG:?}"
+    [ "${PARITY_CLEANUP_TEST_FAIL_EXEC_FOR:-}" != "$name" ] || exit 1
+    ;;
+  rm)
+    [ "${2:-}" = "-f" ] || exit 97
+    name="${3:-}"
+    printf 'docker rm -f %s\n' "$name" >>"${PARITY_CLEANUP_TEST_ORDER_LOG:?}"
+    rm -f -- "$state_dir/$name.provider" "$state_dir/$name.token" "$state_dir/$name.stopped"
+    ;;
+  *)
+    exit 97
+    ;;
+esac
+FAKE_DOCKER
+  chmod +x "$fake_bin/docker"
+
+  cat >"$fake_bin/rm" <<'FAKE_RM'
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+  if [ -n "${PARITY_CLEANUP_TEST_RM_FAIL_DIR:-}" ] && [ "$arg" = "$PARITY_CLEANUP_TEST_RM_FAIL_DIR" ]; then
+    exit 19
+  fi
+done
+exec /bin/rm "$@"
+FAKE_RM
+  chmod +x "$fake_bin/rm"
+}
+
+register_parity_cleanup_fake_container() {
+  local state_dir="$1" name="$2" provider="$3" token="$4"
+  printf '%s\n' "$provider" >"$state_dir/$name.provider"
+  printf '%s\n' "$token" >"$state_dir/$name.token"
+}
+
+run_parity_cleanup_contract_child() {
+  local scenario="${SOURCE_MIGRATION_PROVIDER_PARITY_CLEANUP_CHILD:?}"
+  TMP="${PARITY_CLEANUP_TEST_FIXTURE_DIR:?}"
+  MEILI_CONTAINER=""
+  SERVER_PID=""
+  ALGOLIA_STUB_PID=""
+  EXTRA_OWNED_PIDS=()
+  SOURCE_PROVIDER_OWNER_TOKEN="${PARITY_CLEANUP_TEST_EXPECTED_TOKEN:-parity_cleanup_token}"
+  export SOURCE_PROVIDER_OWNER_TOKEN
+  case "$scenario" in
+    unowned_typesense|repair_failure|running_state_ps_failure)
+      TYPESENSE_CONTAINER="${PARITY_CLEANUP_TEST_TYPESENSE_CONTAINER:?}"
+      mkdir -p "$TMP/$TYPESENSE_HOST_DATA_SUBDIR"
+      touch "$TMP/$TYPESENSE_HOST_DATA_SUBDIR/marker"
+      ;;
+    rm_failure)
+      TYPESENSE_CONTAINER=""
+      mkdir -p "$TMP"
+      ;;
+    *)
+      die_indeterminate "unknown_cleanup_contract_child scenario=${scenario}"
+      ;;
+  esac
+  trap cleanup EXIT
+  exit 0
+}
+
+assert_parity_cleanup_file_contains() {
+  local file="$1" expected="$2"
+  grep -F "$expected" "$file" >/dev/null || {
+    printf 'expected %s to contain %s, saw:\n' "$file" "$expected" >&2
+    cat "$file" >&2
+    exit 1
+  }
+}
+
+assert_parity_cleanup_file_excludes() {
+  local file="$1" rejected="$2"
+  ! grep -F "$rejected" "$file" >/dev/null || {
+    printf 'did not expect %s in %s, saw:\n' "$rejected" "$file" >&2
+    cat "$file" >&2
+    exit 1
+  }
+}
+
+run_parity_cleanup_contract_case() {
+  local root="$1" scenario="$2" container token output status fixture_dir state_dir
+  container="fj_source_migration_provider_parity_typesense_99101"
+  token="parity_cleanup_expected_token"
+  fixture_dir="$root/${scenario}_fixture"
+  state_dir="$root/docker_state"
+  mkdir -p "$fixture_dir" "$state_dir"
+  : >"$root/docker.log"
+  : >"$root/order.log"
+  rm -f -- "$state_dir/ps_count"
+  register_parity_cleanup_fake_container "$state_dir" "$container" typesense "$token"
+  case "$scenario" in
+    unowned_typesense)
+      printf 'foreign_token\n' >"$state_dir/$container.token"
+      ;;
+    repair_failure)
+      ;;
+    running_state_ps_failure)
+      ;;
+    rm_failure)
+      rm -f -- "$state_dir/$container.provider" "$state_dir/$container.token"
+      ;;
+  esac
+
+  set +e
+  output="$(env \
+    PATH="$root/bin:$PATH" \
+    PARITY_CLEANUP_TEST_DOCKER_LOG="$root/docker.log" \
+    PARITY_CLEANUP_TEST_DOCKER_STATE="$state_dir" \
+    PARITY_CLEANUP_TEST_EXPECTED_TOKEN="$token" \
+    PARITY_CLEANUP_TEST_FIXTURE_DIR="$fixture_dir" \
+    PARITY_CLEANUP_TEST_ORDER_LOG="$root/order.log" \
+    PARITY_CLEANUP_TEST_TYPESENSE_CONTAINER="$container" \
+    PARITY_CLEANUP_TEST_FAIL_EXEC_FOR="$([ "$scenario" = repair_failure ] && printf '%s' "$container")" \
+    PARITY_CLEANUP_TEST_FAIL_PS_CALL="$([ "$scenario" = running_state_ps_failure ] && printf '2')" \
+    PARITY_CLEANUP_TEST_RM_FAIL_DIR="$([ "$scenario" = rm_failure ] && printf '%s' "$fixture_dir")" \
+    SOURCE_MIGRATION_PROVIDER_PARITY_CLEANUP_CHILD="$scenario" \
+    bash "$0" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "$output" >"$root/${scenario}.out"
+  [ "$status" -eq 2 ] || {
+    printf 'expected cleanup contract %s to exit 2, got %s\noutput=%s\n' "$scenario" "$status" "$output" >&2
+    exit 1
+  }
+}
+
+assert_parity_unowned_cleanup_contract() {
+  local root="$1" container="fj_source_migration_provider_parity_typesense_99101"
+  run_parity_cleanup_contract_case "$root" unowned_typesense
+  assert_parity_cleanup_file_contains "$root/unowned_typesense.out" \
+    "SOURCE_MIGRATION_HTTP_PROBE=INDETERMINATE cleanup=typesense_container_unowned_label name=$container"
+  assert_parity_cleanup_file_excludes "$root/order.log" "docker exec $container"
+  assert_parity_cleanup_file_excludes "$root/order.log" "docker rm -f $container"
+  [ -f "$root/docker_state/$container.provider" ] || exit 1
+  [ -f "$root/unowned_typesense_fixture/$TYPESENSE_HOST_DATA_SUBDIR/marker" ] || exit 1
+}
+
+assert_parity_repair_failure_contract() {
+  local root="$1" container="fj_source_migration_provider_parity_typesense_99101"
+  run_parity_cleanup_contract_case "$root" repair_failure
+  assert_parity_cleanup_file_contains "$root/repair_failure.out" \
+    "SOURCE_MIGRATION_HTTP_PROBE=INDETERMINATE cleanup=typesense_data_permission_repair_failed name=$container"
+  assert_parity_cleanup_file_contains "$root/order.log" "docker exec $container"
+  assert_parity_cleanup_file_excludes "$root/order.log" "docker rm -f $container"
+  [ -f "$root/docker_state/$container.provider" ] || exit 1
+  [ -f "$root/repair_failure_fixture/$TYPESENSE_HOST_DATA_SUBDIR/marker" ] || exit 1
+}
+
+assert_parity_running_state_ps_failure_contract() {
+  local root="$1" container="fj_source_migration_provider_parity_typesense_99101"
+  run_parity_cleanup_contract_case "$root" running_state_ps_failure
+  assert_parity_cleanup_file_contains "$root/running_state_ps_failure.out" \
+    "SOURCE_MIGRATION_HTTP_PROBE=INDETERMINATE cleanup=docker_ps_failed name=$container"
+  assert_parity_cleanup_file_excludes "$root/order.log" "docker exec $container"
+  assert_parity_cleanup_file_excludes "$root/order.log" "docker rm -f $container"
+  [ -f "$root/docker_state/$container.provider" ] || exit 1
+  [ -f "$root/running_state_ps_failure_fixture/$TYPESENSE_HOST_DATA_SUBDIR/marker" ] || exit 1
+}
+
+assert_parity_rm_failure_contract() {
+  local root="$1"
+  run_parity_cleanup_contract_case "$root" rm_failure
+  assert_parity_cleanup_file_contains "$root/rm_failure.out" \
+    "SOURCE_MIGRATION_HTTP_PROBE=INDETERMINATE cleanup=source_migration_fixture_dir_rm_failed dir=$root/rm_failure_fixture"
+  assert_parity_cleanup_file_contains "$root/rm_failure.out" \
+    "SOURCE_MIGRATION_HTTP_PROBE=INDETERMINATE cleanup=source_migration_fixture_dir_residue dir=$root/rm_failure_fixture"
+  [ -d "$root/rm_failure_fixture" ] || exit 1
+}
+
+assert_typesense_host_removable_argument_contract() {
+  local root="$1" direct_fixture_path
+  direct_fixture_path="$root/direct_argument_fixture"
+  mkdir -p "$direct_fixture_path/$TYPESENSE_HOST_DATA_SUBDIR"
+  typesense_data_host_removable "$direct_fixture_path" || {
+    printf 'expected Typesense host-removability helper to honor its direct argument\n' >&2
+    exit 1
+  }
+}
+
+run_parity_cleanup_contract_tests() {
+  local root
+  root="$(mktemp -d "${TMPDIR:-/tmp}/fj_source_migration_provider_parity_cleanup_test.XXXXXX")"
+  write_parity_cleanup_fake_bins "$root/bin"
+  assert_typesense_host_removable_argument_contract "$root"
+  assert_parity_unowned_cleanup_contract "$root"
+  assert_parity_repair_failure_contract "$root"
+  assert_parity_running_state_ps_failure_contract "$root"
+  assert_parity_rm_failure_contract "$root"
+  rm -rf -- "$root"
+  printf 'SOURCE_MIGRATION_PROVIDER_PARITY_CLEANUP_TEST=PASS cases=direct_argument,unowned_typesense,repair_failure,running_state_ps_failure,rm_failure\n'
+}
+
+run_parity_startup_token_contract_child() {
+  require_tools() { :; }
+  build_or_resolve_binary() { :; }
+  start_discovery_upstreams() {
+    env | grep -Fqx "SOURCE_PROVIDER_OWNER_TOKEN=${SOURCE_PROVIDER_OWNER_TOKEN:-}" \
+      || fail_red 'source_provider_owner_token_not_exported_before_upstreams'
+    [ -n "${SOURCE_PROVIDER_OWNER_TOKEN:-}" ] \
+      || fail_red 'source_provider_owner_token_empty_before_upstreams'
+    source_provider_docker_labels meilisearch
+    printf '%s\n' "${SOURCE_PROVIDER_DOCKER_LABEL_ARGS[@]}" \
+      >"${PARITY_STARTUP_TOKEN_TEST_ROOT:?}/meilisearch_labels.txt"
+    source_provider_docker_labels typesense
+    printf '%s\n' "${SOURCE_PROVIDER_DOCKER_LABEL_ARGS[@]}" \
+      >"${PARITY_STARTUP_TOKEN_TEST_ROOT:?}/typesense_labels.txt"
+  }
+  start_server() { :; }
+  probe_served_lifecycle() { :; }
+  probe_served_discovery() { :; }
+  probe_served_typesense_preview() { :; }
+  probe_served_migrated_data() { :; }
+  probe_route_tag_mutations() { :; }
+  probe_live_router_binding_mutations() { :; }
+  probe_neutral_shared_seam() { :; }
+  main
+}
+
+assert_parity_startup_exports_owner_token_contract() {
+  local root output status token
+  root="$(mktemp -d "${TMPDIR:-/tmp}/fj_source_migration_provider_parity_startup_token_test.XXXXXX")"
+  set +e
+  output="$(PARITY_STARTUP_TOKEN_TEST_ROOT="$root" \
+    SOURCE_MIGRATION_PROVIDER_PARITY_STARTUP_TOKEN_CHILD=1 \
+    bash "$0" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "$output" >"$root/startup_token.out"
+  [ "$status" -eq 0 ] || {
+    printf 'expected startup token contract to pass, got %s\noutput=%s\n' "$status" "$output" >&2
+    exit 1
+  }
+  token="$(sed -n 's/^flapjack\.source_provider_fixture\.token=//p' "$root/typesense_labels.txt" | tail -1)"
+  [ -n "$token" ] || {
+    printf 'expected Typesense docker labels to include a source provider owner token, saw:\n' >&2
+    cat "$root/typesense_labels.txt" >&2
+    exit 1
+  }
+  grep -Fx "flapjack.source_provider_fixture.token=$token" "$root/meilisearch_labels.txt" >/dev/null || {
+    printf 'expected Meilisearch docker labels to use the same owner token as Typesense\n' >&2
+    cat "$root/meilisearch_labels.txt" "$root/typesense_labels.txt" >&2
+    exit 1
+  }
+  rm -rf -- "$root"
+}
+
+assert_source_provider_owner_token_required_contract() {
+  local status output
+  set +e
+  output="$(
+    env -u SOURCE_PROVIDER_OWNER_TOKEN \
+      bash -c '
+        set -euo pipefail
+        script_dir="$1"
+        # shellcheck source=lib/source_provider_fixtures.sh
+        source "$script_dir/lib/source_provider_fixtures.sh"
+        set +e
+        source_provider_docker_labels typesense 2>&1
+        rc=$?
+        set -e
+        printf "\nstatus=%s\n" "$rc"
+      ' bash "$SCRIPT_DIR"
+  )"
+  status=$?
+  set -e
+  [ "$status" -eq 0 ] || {
+    printf 'expected owner-token requirement probe wrapper to exit 0, got %s\noutput=%s\n' "$status" "$output" >&2
+    exit 1
+  }
+  printf '%s\n' "$output" | grep -F 'ERROR: SOURCE_PROVIDER_OWNER_TOKEN must be set before starting typesense fixtures' >/dev/null || {
+    printf 'expected missing owner token error, saw:\n%s\n' "$output" >&2
+    exit 1
+  }
+  printf '%s\n' "$output" | grep -F 'status=1' >/dev/null || {
+    printf 'expected source_provider_docker_labels to fail without SOURCE_PROVIDER_OWNER_TOKEN, saw:\n%s\n' "$output" >&2
+    exit 1
+  }
+}
+
+run_parity_startup_contract_tests() {
+  assert_source_provider_owner_token_required_contract
+  assert_parity_startup_exports_owner_token_contract
+  printf 'SOURCE_MIGRATION_PROVIDER_PARITY_STARTUP_TEST=PASS cases=owner_token_required,owner_token_exported_before_upstreams\n'
+}
+
 main() {
   require_tools
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/fj_source_migration_provider_parity.XXXXXX")"
+  configure_source_provider_owner_token
   build_or_resolve_binary
   start_discovery_upstreams
   start_server
@@ -1218,6 +1583,16 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  trap cleanup EXIT
-  main "$@"
+  if [ -n "${SOURCE_MIGRATION_PROVIDER_PARITY_CLEANUP_CHILD:-}" ]; then
+    run_parity_cleanup_contract_child
+  elif [ -n "${SOURCE_MIGRATION_PROVIDER_PARITY_STARTUP_TOKEN_CHILD:-}" ]; then
+    run_parity_startup_token_contract_child
+  elif [ "${SOURCE_MIGRATION_PROVIDER_PARITY_CLEANUP_TEST:-}" = "1" ]; then
+    run_parity_cleanup_contract_tests
+  elif [ "${SOURCE_MIGRATION_PROVIDER_PARITY_STARTUP_TEST:-}" = "1" ]; then
+    run_parity_startup_contract_tests
+  else
+    trap cleanup EXIT
+    main "$@"
+  fi
 fi
