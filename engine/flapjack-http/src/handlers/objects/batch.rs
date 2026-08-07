@@ -564,7 +564,8 @@ mod tests {
 
     use super::*;
     use tracing::instrument::WithSubscriber;
-    use tracing::{Event, Subscriber};
+    use tracing::subscriber::Interest;
+    use tracing::{Event, Metadata, Subscriber};
     use tracing_subscriber::layer::{Context, SubscriberExt};
     use tracing_subscriber::{registry::LookupSpan, Layer};
 
@@ -588,6 +589,13 @@ mod tests {
     where
         S: Subscriber + for<'span> LookupSpan<'span>,
     {
+        fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+            // Other tests install thread-local dispatchers in the same process. Re-evaluate
+            // this capture layer for each event so a callsite first seen elsewhere cannot
+            // remain disabled, without rebuilding tracing's process-wide interest cache.
+            Interest::sometimes()
+        }
+
         fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
             let mut captured = CapturedBatchEvent::default();
             event.record(&mut captured);
@@ -630,6 +638,32 @@ mod tests {
     fn document(id: &str) -> Document {
         Document::from_json(&serde_json::json!({ "_id": id })).expect("valid test document")
     }
+
+    fn three_adds_request() -> AddDocumentsRequest {
+        AddDocumentsRequest::Batch {
+            requests: vec![
+                BatchOperation {
+                    action: "addObject".to_string(),
+                    index_name: None,
+                    body: Some(legacy_doc("one")),
+                    create_if_not_exists: None,
+                },
+                BatchOperation {
+                    action: "addObject".to_string(),
+                    index_name: None,
+                    body: Some(legacy_doc("two")),
+                    create_if_not_exists: None,
+                },
+                BatchOperation {
+                    action: "addObject".to_string(),
+                    index_name: None,
+                    body: Some(legacy_doc("three")),
+                    create_if_not_exists: None,
+                },
+            ],
+        }
+    }
+
     #[test]
     fn batch_operations_from_legacy_request_wraps_docs_as_add_object_actions() {
         let operations = batch_operations_from_request(AddDocumentsRequest::Legacy {
@@ -672,28 +706,7 @@ mod tests {
         let state = crate::test_helpers::TestStateBuilder::new(&tmp).build_shared();
         let captured = CapturedBatchEvents::default();
         let subscriber = tracing_subscriber::registry().with(captured.clone());
-        let request = AddDocumentsRequest::Batch {
-            requests: vec![
-                BatchOperation {
-                    action: "addObject".to_string(),
-                    index_name: None,
-                    body: Some(legacy_doc("one")),
-                    create_if_not_exists: None,
-                },
-                BatchOperation {
-                    action: "addObject".to_string(),
-                    index_name: None,
-                    body: Some(legacy_doc("two")),
-                    create_if_not_exists: None,
-                },
-                BatchOperation {
-                    action: "addObject".to_string(),
-                    index_name: None,
-                    body: Some(legacy_doc("three")),
-                    create_if_not_exists: None,
-                },
-            ],
-        };
+        let request = three_adds_request();
 
         let result = add_documents_batch_impl(State(state), "log_contract".to_string(), request)
             .with_subscriber(subscriber)

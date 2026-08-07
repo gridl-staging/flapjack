@@ -7,7 +7,28 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [1.0.11] - 2026-08-05
+### Added
+
+- **The dashboard `Migrate` screen now reaches all three source providers.** Discovery,
+  submit, and status polling drive the real `/1/migrations/{algolia,meilisearch,typesense}`
+  routes from one provider descriptor, replacing the Algolia-only compat aliases. A source
+  on a loopback or private address renders the outbound-SSRF refusal and names the
+  `FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK` / `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK` opt-in
+  instead of a generic error. **Known limitation, stated because it affects self-hosted
+  sources:** release builds compile the Meilisearch and Typesense loopback admission seams
+  out, so those two opt-ins have no effect in a released binary and only Algolia migration
+  is end-to-end proven in a browser. Tracked as `MIG-22`; the console is not the defect.
+  A translation-report dry-run is still CLI-only (`flapjack migrate preview`).
+
+### Fixed
+
+- Unknown fields in an Algolia migration request body are now rejected instead of silently
+  ignored, and migration jobs poll to a terminal state rather than stopping at the first
+  non-terminal status.
+- Loadtest readiness helpers no longer accept a `200` from a listener they did not launch:
+  every live caller now supplies the launched server's log and expected bind address.
+
+## [1.0.11] - 2026-08-06
 
 ### Security
 
@@ -99,7 +120,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `origin/main` SHA `3b11f8216f1d7dccc74262e1b63b3e1603152202`, each accepted with `outcome=PASS`,
   `acknowledged_count=28`, `recovered_count=28`, `rejection_status=500`, and a `source_sha` equal
   to that SHA. Receipt:
-  `engine/docs2/4_EVIDENCE/2026_08_03_aug03_11am_11_dur1_respecimen_and_close_receipt.md`.
+  the reviewed private dur1 respecimen and close receipt.
 
 ### Fixed (durability and correctness)
 

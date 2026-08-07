@@ -2376,7 +2376,9 @@ async fn bulk_replace_rejects_payload_over_configured_cap_without_mutation() {
 
 async fn poll_bulk_replace_terminal(app: &axum::Router, job_id: &str) -> serde_json::Value {
     let mut last_status = serde_json::Value::Null;
-    for _ in 0..200 {
+    // Keep a bounded ten-second budget: a loaded full suite can spend more than two
+    // seconds in staging and activation even though the worker is making progress.
+    for _ in 0..1_000 {
         let response = get_request(
             app,
             &format!("/1/migrations/bulk-replace/{job_id}"),

@@ -10126,7 +10126,8 @@
               "null"
             ]
           }
-        }
+        },
+        "additionalProperties": false
       },
       "MigrateFromAlgoliaResponse": {
         "type": "object",

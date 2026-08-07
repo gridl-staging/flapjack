@@ -294,6 +294,7 @@ async fn read_count_stays_live_while_backpressure_pause_and_commit_overlap() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial_test::serial(flapjack_write_durable_timeout_env)]
 async fn forced_backpressure_pause_blocks_first_durable_insert_then_recovers() {
     let tmp = tempfile::TempDir::new().unwrap();
     let tenant_id = "forced_pause_blocks_durable_insert";

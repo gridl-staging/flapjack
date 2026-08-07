@@ -1,19 +1,18 @@
-/// The Typesense loopback seam and its preview admission owner are still
-/// `#[cfg(debug_assertions)]`, so every test that names them carries the same
-/// gate. `typesense_preview_release_source_reader_delegates_to_submit_owner`
-/// is the release-profile counterpart.
+/// The Typesense loopback seam is reachable in every profile behind the
+/// explicit `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK=1` opt-in, so the submit-path
+/// tests below run un-gated. Only `preview_typesense_client` stays
+/// `#[cfg(debug_assertions)]`, because release preview delegates to
+/// `typesense_source_reader` instead —
+/// `typesense_preview_release_source_reader_delegates_to_submit_owner` pins
+/// that split.
 #[cfg(debug_assertions)]
 use super::super::preview_typesense_client;
 use super::super::source_reader::TypesenseSourceReader;
 use super::super::source_test_support::{typesense_observation, ScriptedTypesenseSource};
-#[cfg(debug_assertions)]
 use super::super::typesense_client::TYPESENSE_PREVIEW_LOOPBACK_ENV;
-#[cfg(debug_assertions)]
 use super::super::MigrateFromTypesenseRequest;
 use super::*;
-#[cfg(debug_assertions)]
 use flapjack::security::test_helpers::install_test_outbound_host_resolver;
-#[cfg(debug_assertions)]
 use std::net::IpAddr;
 
 const TYPESENSE_PREVIEW_ENDPOINT: &str = "http://127.0.0.1:17748";
@@ -242,7 +241,6 @@ async fn typesense_preview_requires_explicit_loopback_opt_in() {
 /// `meilisearch_submit_admits_opted_in_loopback_source_reader`: submit admits
 /// the explicitly opted-in loopback node the live contract fixture serves.
 #[test]
-#[cfg(debug_assertions)]
 fn typesense_submit_admits_opted_in_loopback_source_reader() {
     let _env = with_env_var(TYPESENSE_PREVIEW_LOOPBACK_ENV, "1");
     let payload: MigrateFromTypesenseRequest =
@@ -253,11 +251,10 @@ fn typesense_submit_admits_opted_in_loopback_source_reader() {
         .expect("submit must admit an opted-in loopback node through the same seam as discovery");
 }
 
-/// Production admission must remain the first branch in debug builds. This
+/// Production admission must remain the first branch in every profile. This
 /// constructor-only check resolves a vetted vendor host without issuing a
 /// request and proves the absent loopback opt-in cannot shadow Cloud submit.
 #[test]
-#[cfg(debug_assertions)]
 #[serial_test::serial(flapjack_outbound_url_policy)]
 fn typesense_submit_accepts_vetted_cloud_endpoint_without_loopback_opt_in() {
     const CLOUD_HOST: &str = "submit-debug-contract.typesense.net";
@@ -277,13 +274,12 @@ fn typesense_submit_accepts_vetted_cloud_endpoint_without_loopback_opt_in() {
     };
 
     super::super::typesense_source_reader(&payload)
-        .expect("debug submit must retain vetted Typesense Cloud admission");
+        .expect("submit must retain vetted Typesense Cloud admission in every profile");
 }
 
 /// Without the opt-in, submit stays refused and reports the production vendor
 /// refusal, never the loopback seam's own message.
 #[tokio::test]
-#[cfg(debug_assertions)]
 async fn typesense_submit_requires_explicit_loopback_opt_in() {
     const API_KEY_CANARY: &str = "submit-route-api-key-canary";
 
@@ -319,7 +315,6 @@ async fn typesense_submit_requires_explicit_loopback_opt_in() {
 /// The opt-in widens submit admission to literal loopback only. With the
 /// switch on, a non-vendor host is still refused by production admission.
 #[tokio::test]
-#[cfg(debug_assertions)]
 async fn typesense_submit_opt_in_does_not_admit_non_loopback_hosts() {
     const API_KEY_CANARY: &str = "submit-route-non-loopback-api-key-canary";
     const NON_LOOPBACK_NODE: &str = "https://evil.example.com";

@@ -4,7 +4,6 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
-#[cfg(debug_assertions)]
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -16,7 +15,6 @@ pub(super) const DOCUMENT_PAGE_LIMIT: usize = 100;
 pub(super) const MAX_DOCUMENT_PAGES: usize = 10_000;
 pub(super) const MAX_DOCUMENT_ITEMS: usize = 1_000_000;
 pub(super) const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-#[cfg(debug_assertions)]
 pub(super) const TYPESENSE_PREVIEW_LOOPBACK_ENV: &str = "FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +66,8 @@ impl TypesenseClientError {
         self.message
     }
 
-    #[cfg(debug_assertions)]
+    /// True for the single sanitized endpoint refusal every admission path
+    /// returns, so callers can chain a fallback without re-stating it.
     pub(super) fn is_endpoint_not_allowed(&self) -> bool {
         *self == typesense_endpoint_not_allowed()
     }
@@ -130,12 +129,11 @@ impl TypesenseClient {
         )
     }
 
-    /// Debug-only loopback discovery admission for the live Typesense contract
-    /// fixture, mirroring `MeilisearchClient::new_preview_loopback`: refuse
-    /// before parsing an attacker-controlled endpoint when the opt-in is absent,
-    /// then admit only a literal loopback IP with no credentials, query,
-    /// fragment, or path.
-    #[cfg(debug_assertions)]
+    /// Admit loopback discovery for the live contract fixture in every profile,
+    /// only under `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK=1`. Refuse before
+    /// parsing an attacker-controlled endpoint when the opt-in is absent, then
+    /// admit only a literal loopback IP with no credentials, query, fragment,
+    /// or path.
     pub(super) fn new_discovery_preview_loopback(
         endpoint: &str,
         api_key: &str,
@@ -143,7 +141,6 @@ impl TypesenseClient {
         Self::from_admitted_loopback_endpoint(endpoint, api_key, None)
     }
 
-    #[cfg(debug_assertions)]
     pub(super) fn new_preview_loopback(
         endpoint: &str,
         api_key: &str,
@@ -152,7 +149,6 @@ impl TypesenseClient {
         Self::from_admitted_loopback_endpoint(endpoint, api_key, Some(source_collection))
     }
 
-    #[cfg(debug_assertions)]
     fn from_admitted_loopback_endpoint(
         endpoint: &str,
         api_key: &str,
@@ -167,25 +163,7 @@ impl TypesenseClient {
         if !preview_loopback_enabled() {
             return Err(typesense_preview_loopback_disabled());
         }
-        let parsed = reqwest::Url::parse(endpoint).map_err(|_| typesense_endpoint_not_allowed())?;
-        let parsed_host = parsed
-            .host_str()
-            .ok_or_else(typesense_endpoint_not_allowed)?;
-        if parsed_host.eq_ignore_ascii_case("localhost")
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-            || parsed.query().is_some()
-            || parsed.fragment().is_some()
-            || parsed.path() != "/"
-        {
-            return Err(typesense_endpoint_not_allowed());
-        }
-        let ip = parsed_host
-            .parse::<IpAddr>()
-            .map_err(|_| typesense_endpoint_not_allowed())?;
-        if !ip.is_loopback() {
-            return Err(typesense_endpoint_not_allowed());
-        }
+        let parsed = parse_literal_loopback_url(endpoint)?;
         let target = flapjack::security::vet_outbound_url_target(endpoint, true)
             .map_err(|_| typesense_endpoint_not_allowed())?
             .ok_or_else(typesense_endpoint_not_allowed)?;
@@ -269,9 +247,8 @@ impl TypesenseClient {
         })
     }
 
-    /// Only the debug-gated loopback admission tests read this back, so it
-    /// carries the same gate and leaves no dead accessor in release builds.
-    #[cfg(all(test, debug_assertions))]
+    /// Loopback admission tests in both profiles read this back without I/O.
+    #[cfg(test)]
     pub(super) fn source_collection_for_test(&self) -> Option<&str> {
         self.source_collection.as_deref()
     }
@@ -364,7 +341,6 @@ fn typesense_endpoint_not_allowed() -> TypesenseClientError {
     )
 }
 
-#[cfg(debug_assertions)]
 fn typesense_preview_loopback_disabled() -> TypesenseClientError {
     TypesenseClientError::new(
         TypesenseErrorKind::Validation,
@@ -372,12 +348,36 @@ fn typesense_preview_loopback_disabled() -> TypesenseClientError {
     )
 }
 
-#[cfg(debug_assertions)]
 fn preview_loopback_enabled() -> bool {
     matches!(
         std::env::var(TYPESENSE_PREVIEW_LOOPBACK_ENV).as_deref(),
         Ok("1")
     )
+}
+
+/// Parse only the literal-loopback URL shape the explicit fixture opt-in may
+/// admit. The client owns this classification so handler fallbacks cannot
+/// drift from constructor admission.
+pub(super) fn parse_literal_loopback_url(
+    endpoint: &str,
+) -> Result<reqwest::Url, TypesenseClientError> {
+    let parsed = reqwest::Url::parse(endpoint).map_err(|_| typesense_endpoint_not_allowed())?;
+    let parsed_host = parsed
+        .host_str()
+        .ok_or_else(typesense_endpoint_not_allowed)?;
+    if parsed_host.eq_ignore_ascii_case("localhost")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
+        || !parsed_host
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+    {
+        return Err(typesense_endpoint_not_allowed());
+    }
+    Ok(parsed)
 }
 
 /// Credential-only admission for operations that are not bound to one collection.

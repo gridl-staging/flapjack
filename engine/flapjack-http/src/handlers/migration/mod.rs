@@ -104,6 +104,7 @@ const MIGRATION_RESUME_NOT_AVAILABLE_MESSAGE: &str = "Migration resume is not av
 /// synchronous requests create a fresh target by default; `overwrite=true`
 /// replaces an existing target through the node-local fenced publication path.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MigrateFromAlgoliaRequest {
     #[serde(rename = "appId")]
     pub app_id: String,
@@ -1349,12 +1350,13 @@ fn typesense_discovery_client(
     node: &str,
     api_key: &str,
 ) -> Result<typesense_client::TypesenseClient, MigrateError> {
-    let admitted = typesense_client::TypesenseClient::new_discovery(node, api_key);
-    #[cfg(debug_assertions)]
-    let admitted = admitted.or_else(|vendor_refusal| {
-        typesense_client::TypesenseClient::new_discovery_preview_loopback(node, api_key)
-            .map_err(|_| vendor_refusal)
-    });
+    let admitted = match typesense_client::TypesenseClient::new_discovery(node, api_key) {
+        Err(vendor_refusal) if vendor_refusal.is_endpoint_not_allowed() => {
+            typesense_client::TypesenseClient::new_discovery_preview_loopback(node, api_key)
+                .map_err(|_| vendor_refusal)
+        }
+        admitted => admitted,
+    };
     admitted.map_err(typesense_error)
 }
 
@@ -2197,14 +2199,15 @@ fn algolia_source_reader(
 }
 
 /// Admit a Meilisearch submit endpoint through the production vendor policy,
-/// falling back to the debug-only loopback seam for the live contract fixture —
+/// falling back to the explicit loopback seam for the live contract fixture —
 /// the same production-first shape as [`meilisearch_discovery_client`]. Both
 /// served and generated submit handlers call this helper, while preview keeps
-/// its separately asserted refusal semantics. `FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK`
-/// now gates submit as well as preview and discovery. Production admission
-/// stays the first branch in every build, and the production refusal is what
-/// the caller sees when neither path admits the endpoint, so an unrecognised
-/// host never leaks the loopback opt-in's existence.
+/// its separately asserted refusal semantics. The seam is reachable in every
+/// profile only under `FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK=1`, which gates
+/// submit as well as preview and discovery. Production admission stays the
+/// first branch in every build, and the production refusal is what the caller
+/// sees when neither path admits the endpoint, so an unrecognised host never
+/// leaks the loopback opt-in's existence.
 fn meilisearch_source_reader(
     payload: &MigrateFromMeilisearchRequest,
 ) -> Result<
@@ -2216,19 +2219,17 @@ fn meilisearch_source_reader(
         &payload.api_key,
         &payload.source_index,
     );
-    #[cfg(debug_assertions)]
-    let admitted = admitted.or_else(|vendor_refusal| {
+    admitted.or_else(|vendor_refusal| {
         meilisearch_loopback_source_reader(payload).map_err(|_| vendor_refusal)
-    });
-    admitted
+    })
 }
 
-/// Single owner of the debug-only Meilisearch loopback source reader for
-/// submit, which reaches it only after production vendor admission refuses. The
-/// opt-in plus literal-loopback checks live inside
+/// Single owner of the Meilisearch loopback source reader in every profile.
+/// Submit reaches it only after production vendor admission refuses, and only
+/// `FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK=1` admits it. The literal-loopback
+/// checks live inside
 /// `MeilisearchClient::new_preview_loopback`, so it refuses before parsing an
 /// attacker-controlled endpoint.
-#[cfg(debug_assertions)]
 fn meilisearch_loopback_source_reader(
     payload: &MigrateFromMeilisearchRequest,
 ) -> Result<
@@ -2304,15 +2305,16 @@ fn map_preview_meilisearch_error(
 }
 
 /// Admit a Typesense submit endpoint through the production vendor policy,
-/// falling back to the debug-only loopback seam for the live contract fixture —
+/// falling back to the explicit loopback seam for the live contract fixture —
 /// the same shape as [`typesense_discovery_client`] and [`meilisearch_source_reader`],
 /// with both served and generated submit handlers calling this helper. Preview
 /// keeps its separately asserted refusal semantics.
-/// `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK` now gates submit as well as preview
-/// and discovery. Production admission stays the first branch in every build,
-/// and the production refusal is what the caller sees when neither path admits
-/// the endpoint, so an unrecognised host never leaks the loopback opt-in's
-/// existence.
+/// The seam is reachable in every profile only under
+/// `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK=1`, which gates submit as well as
+/// preview and discovery. Production admission stays the first branch in every
+/// build, and the production refusal is what the caller sees when neither path
+/// admits the endpoint, so an unrecognised host never leaks the loopback
+/// opt-in's existence.
 fn typesense_source_reader(
     payload: &MigrateFromTypesenseRequest,
 ) -> Result<
@@ -2324,18 +2326,16 @@ fn typesense_source_reader(
         &payload.api_key,
         &payload.source_index,
     );
-    #[cfg(debug_assertions)]
-    let admitted = admitted.or_else(|vendor_refusal| {
+    admitted.or_else(|vendor_refusal| {
         typesense_loopback_source_reader(payload).map_err(|_| vendor_refusal)
-    });
-    admitted
+    })
 }
 
-/// Single owner of the debug-only Typesense loopback source reader. Submit
-/// reaches it only after production vendor admission refuses. The opt-in plus
-/// literal-loopback checks live inside `TypesenseClient::new_preview_loopback`,
-/// so it refuses before parsing an attacker-controlled endpoint.
-#[cfg(debug_assertions)]
+/// Single owner of the Typesense loopback source reader in every profile.
+/// Submit reaches it only after production vendor admission refuses, and only
+/// `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK=1` admits it. The literal-loopback
+/// checks live inside `TypesenseClient::new_preview_loopback`, so it refuses
+/// before parsing an attacker-controlled endpoint.
 fn typesense_loopback_source_reader(
     payload: &MigrateFromTypesenseRequest,
 ) -> Result<
@@ -2409,23 +2409,7 @@ fn preview_typesense_client(
 
 #[cfg(debug_assertions)]
 fn typesense_preview_loopback_candidate(node: &str) -> bool {
-    let Ok(parsed) = reqwest::Url::parse(node) else {
-        return false;
-    };
-    let Some(host) = parsed.host_str() else {
-        return false;
-    };
-    if host.eq_ignore_ascii_case("localhost")
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || parsed.path() != "/"
-    {
-        return false;
-    }
-    host.parse::<std::net::IpAddr>()
-        .is_ok_and(|ip| ip.is_loopback())
+    typesense_client::parse_literal_loopback_url(node).is_ok()
 }
 
 fn parse_typesense_submit_payload(

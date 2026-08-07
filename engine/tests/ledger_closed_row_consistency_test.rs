@@ -144,6 +144,29 @@ fn require_text(findings: &mut Vec<String>, owner: &str, text: &str, required: &
     }
 }
 
+/// Assert a row carries something of a given *shape* rather than a given literal.
+///
+/// Used where the fact is required but its value is expected to move — a measurement
+/// and the revision it was taken at. `description` is what the reader is told is
+/// missing, because a raw regex in a failure message explains nothing about the
+/// ledger's obligation. An invalid pattern panics rather than silently matching
+/// nothing: a guard that cannot fail is not a guard.
+fn require_pattern(
+    findings: &mut Vec<String>,
+    owner: &str,
+    text: &str,
+    pattern: &str,
+    description: &str,
+) {
+    let compiled = regex::Regex::new(pattern)
+        .unwrap_or_else(|e| panic!("require_pattern got an invalid regex {pattern:?}: {e}"));
+    if !compiled.is_match(text) {
+        findings.push(format!(
+            "  - {owner} is missing {description} (no match for {pattern:?})"
+        ));
+    }
+}
+
 /// Every `ROADMAP.md` row whose own status cell declares it closed.
 fn closed_row_ids(roadmap: &str) -> Vec<String> {
     roadmap
@@ -300,12 +323,70 @@ fn record_open_work_conflicts(
 
 fn record_measured_owner_conflicts(roadmap: &str, features: &str, findings: &mut Vec<String>) {
     let join_row = table_row(roadmap, "JOIN-1").unwrap_or_default();
-    require_text(findings, "ROADMAP.md row `JOIN-1`", join_row, "57 / 59");
+    // `JOIN-1` is checked for SHAPE, not for one frozen measurement.
+    //
+    // This used to pin the literal strings "57 / 59" and "2 capability-gated skips".
+    // The 2026-08-06 sweeps superseded both twice in one day — first to 56 / 59 with
+    // zero skips, then to 59 / 59 — so the pin was demanding that the row retain a
+    // measurement its own owner had already replaced. That is the retained-revision
+    // defect `ROADMAP.md` row `DOC-LAYOUT-1` removed the revision stack to stop, and a
+    // pin that must be hand-edited after every sweep reds the build for a non-defect.
+    //
+    // A literal pin could not detect drift from reality anyway: it compares the row to
+    // a string in this file, never to `join_proof_report.mjs`, which is the actual
+    // measurement owner. So what remains here are only assertions that (a) do not rot
+    // and (b) are provably able to fail. Both were checked by mutating the row.
+    //
+    // DELIBERATELY ABSENT, and do not re-add it: a check that the row states a
+    // joined-proof figure of the form `N / N`. It reads like the obvious assertion and
+    // it is inert. The row correctly cites superseded figures while explaining what
+    // they were superseded by — it carries `56 / 59` alongside `59 / 59` today — so
+    // deleting the *current* measurement still leaves a historical one matching, and
+    // the check passes over exactly the edit it exists to catch. A short-SHA pattern
+    // fails the same way: the row cites incidental commits like the console merge.
+    // Hence the 40-character form below, which only the measurement revision uses.
+    require_pattern(
+        findings,
+        "ROADMAP.md row `JOIN-1`",
+        join_row,
+        r"[0-9a-f]{40}",
+        "a full 40-character measurement revision for its joined-proof figure",
+    );
     require_text(
         findings,
         "ROADMAP.md row `JOIN-1`",
         join_row,
-        "2 capability-gated skips",
+        "A capability-gated skip is never counted toward the numerator",
+    );
+    // `SDK-1` is load-bearing beyond its own prose, so its removal must be loud.
+    //
+    // `drain_followups.py` expires a follow-up row on age UNLESS a ledger row names its
+    // lane. Twelve `jul16_3pm_1_sdk_outbound_safety` rows are undischarged external
+    // registry remediation waiting on credentials that do not exist on this host, and
+    // before `SDK-1` was written a drain at cutoff `2026-07-17` planned 26 closures with
+    // that lane appearing 16 times in the plan; after it, 10 closures and zero
+    // occurrences, and the same zero at a much later `2026-08-01`. The prose supervisor
+    // note that used to hold the line was retired *because* this row replaced it, so
+    // deleting the row now silently re-arms the sweep with no backstop anywhere.
+    //
+    // The assertion is on the lane NAME, not on `SDK-1`'s wording or its ID, because the
+    // name is the exact token the drain's promotion conjunct matches. Renaming the row
+    // is fine; dropping the lane name is what breaks the protection.
+    //
+    // MIRROR PORTABILITY, and do not "improve" this by reading the follow-up ledger to
+    // make the check conditional: `.debbie.toml` does not sync `chats/` at all, so a test
+    // that joins to a lane file is green in the dev tree and red on the public mirror.
+    // That is `ROADMAP.md` row `DOC-PUBLIC-1`'s class and it has bitten this repo
+    // repeatedly. Every path this test reads is a synced ledger.
+    //
+    // RETIREMENT, so this does not become a pin nobody dares touch: delete this
+    // assertion in the same commit that closes `SDK-1` on its stated exit and drains the
+    // lane's follow-up rows. Until then it is the only thing keeping the handoff alive.
+    require_text(
+        findings,
+        "ROADMAP.md",
+        roadmap,
+        "jul16_3pm_1_sdk_outbound_safety",
     );
     let sec_w4_row = table_row(roadmap, "SEC-W4").unwrap_or_default();
     require_text(

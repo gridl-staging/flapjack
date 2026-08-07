@@ -3229,21 +3229,6 @@ async fn merge_owner_survives_consecutive_commits() {
         wait_for_task_success(tasks.as_ref(), &task_id).await;
     }
 
-    let converged = tokio::time::timeout(WRITE_QUEUE_PROGRESS_TIMEOUT, async {
-        loop {
-            let observation = observed_segments(index.as_ref());
-            if observation.live_docs == 2
-                && observation.live_segment_count == 1
-                && observation.orphan_file_set_ids.is_empty()
-            {
-                return observation;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("worker-owned merge owner should converge consecutive commits before shutdown");
-
     assert_eq!(
         write_queue_counter_value(WRITE_QUEUE_WRITER_OPENS_METRIC_NAME, &tenant_id),
         1,
@@ -3253,13 +3238,35 @@ async fn merge_owner_survives_consecutive_commits() {
         write_queue_counter_value(WRITE_QUEUE_COMMITS_METRIC_NAME, &tenant_id) >= 2,
         "tenant worker should record at least two successful commits"
     );
+
+    drop(tx);
+    tokio::time::timeout(WRITE_QUEUE_PROGRESS_TIMEOUT, handle)
+        .await
+        .expect("worker should finish channel-closed merge quiescence before timeout")
+        .expect("write queue worker task should join successfully")
+        .expect("write queue worker should shut down successfully");
+
+    let lifecycle_events = writer_lifecycle::writer_lifecycle_test_events(&tenant_id);
+    assert!(
+        lifecycle_events
+            .iter()
+            .any(|event| event.reason == "channel_closed" && event.phase == "merge_quiesced"),
+        "worker shutdown should retain channel-closed merge quiescence before segment census; got {lifecycle_events:?}"
+    );
+
+    let converged = observed_segments(index.as_ref());
+    assert_eq!(
+        converged.live_docs, 2,
+        "converged index should retain both committed docs; got {converged:?}"
+    );
+    assert_eq!(
+        converged.live_segment_count, 1,
+        "converged index should have exactly one live segment after worker-owned merge quiescence; got {converged:?}"
+    );
     assert!(
         converged.orphan_file_set_ids.is_empty(),
         "converged index should not leave orphan file sets; got {converged:?}"
     );
-
-    drop(tx);
-    handle.await.unwrap().unwrap();
 }
 
 #[test]

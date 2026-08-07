@@ -237,6 +237,72 @@ fn observed_algolia_pins(observations: &AlgoliaPinObservations) -> Vec<(String, 
         .clone()
 }
 
+fn redacted_algolia_pins(
+    app_id: &str,
+    observations: &AlgoliaPinObservations,
+) -> Vec<(String, Vec<SocketAddr>)> {
+    let app_id_lower = app_id.to_ascii_lowercase();
+    observed_algolia_pins(observations)
+        .into_iter()
+        .map(|(host, addresses)| {
+            let host = host
+                .replace(app_id, "<app-id>")
+                .replace(&app_id_lower, "<app-id>");
+            (host, addresses)
+        })
+        .collect()
+}
+
+#[tokio::test]
+#[ignore]
+#[serial_test::serial(flapjack_outbound_url_policy)]
+async fn live_algolia_client_lists_indexes_with_canonical_credentials() {
+    let app_id = std::env::var("ALGOLIA_APP_ID")
+        .expect("ALGOLIA_APP_ID must be present for the ignored live Algolia probe");
+    let api_key = std::env::var("ALGOLIA_ADMIN_KEY")
+        .expect("ALGOLIA_ADMIN_KEY must be present for the ignored live Algolia probe");
+    eprintln!(
+        "live_algolia_client_probe credential_metadata app_id_len={} admin_key_len={} app_id_trim_eq={} admin_key_trim_eq={}",
+        app_id.len(),
+        api_key.len(),
+        app_id == app_id.trim(),
+        api_key == api_key.trim()
+    );
+
+    let pin_observations = Arc::new(Mutex::new(Vec::new()));
+    let _pin_observer = install_test_algolia_pin_observer(Arc::clone(&pin_observations));
+
+    let result = match AlgoliaClient::new(&app_id, &api_key) {
+        Ok(client) => client.list_indexes().await,
+        Err(error) => Err(error),
+    };
+    eprintln!(
+        "live_algolia_client_probe observed_vetted_pins={:?}",
+        redacted_algolia_pins(&app_id, &pin_observations)
+    );
+
+    match result {
+        Ok(indexes) => {
+            eprintln!(
+                "live_algolia_client_probe result=ok index_count={}",
+                indexes.len()
+            );
+        }
+        Err(error) => {
+            eprintln!(
+                "live_algolia_client_probe result=error kind={:?} safe_message={}",
+                error.kind(),
+                error.safe_message()
+            );
+            panic!(
+                "live AlgoliaClient::list_indexes failed: {:?}: {}",
+                error.kind(),
+                error.safe_message()
+            );
+        }
+    }
+}
+
 /// The address the recording validation resolver returns for every Algolia
 /// vendor host, i.e. the address a correctly pinned client must dial.
 ///

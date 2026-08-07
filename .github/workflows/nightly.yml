@@ -130,7 +130,23 @@ jobs:
           chmod +x engine/target/debug/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 engine/target/debug/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          # This job runs `npm run test:pages`, which is `playwright test --project=e2e-ui`
+          # with NO path filter — so it runs tests/e2e-ui/full/ as well as the smoke specs.
+          # The backend capability environment below is owned by
+          # engine/dashboard/tests/e2e_backend_contract.json and enforced by
+          # engine/tests/test_dashboard_e2e_backend_contract.py. It must be set HERE and
+          # not on the Playwright step: Playwright reuses a backend that is already
+          # listening, so spawnBackendServer never runs and env declared on the test step
+          # cannot reach the process under test. Missing it is what made
+          # cluster_peers.spec.ts fail in run 31072375322.
+          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 \
+          FLAPJACK_NODE_ID=dashboard-e2e \
+          FLAPJACK_ADVERTISE_ADDR=https://dashboard-e2e.invalid:7700 \
+          FLAPJACK_REPLICATION_API_KEY=fj_devtestadminkey000000 \
+          FLAPJACK_AI_ALLOW_LOCAL_URLS=1 \
+          FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK=1 \
+          FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK=1 \
+            engine/target/debug/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
           curl --retry 60 --retry-delay 1 --retry-connrefused --fail --silent --show-error http://localhost:7700/health/ready

@@ -1,6 +1,6 @@
-/// Only the debug-gated loopback tests below name the opt-in, so the import
-/// carries the same gate as the seam it points at.
-#[cfg(debug_assertions)]
+/// The loopback seam is reachable in every profile behind the explicit
+/// `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK=1` opt-in, so the tests below and this
+/// import run un-gated.
 use super::typesense_client::TYPESENSE_PREVIEW_LOOPBACK_ENV;
 use super::typesense_client::{
     capture_source_with_transport, decode_document_page, encoded_collection_name,
@@ -802,7 +802,6 @@ fn discovery_constructor_rejects_non_vendor_host_before_resolution() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
 #[serial_test::serial(flapjack_outbound_url_policy)]
 fn discovery_loopback_constructor_requires_explicit_opt_in_before_resolution() {
     let _env = crate::test_helpers::with_env_var(TYPESENSE_PREVIEW_LOOPBACK_ENV, "");
@@ -823,7 +822,6 @@ fn discovery_loopback_constructor_requires_explicit_opt_in_before_resolution() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
 #[serial_test::serial(flapjack_outbound_url_policy)]
 fn discovery_loopback_constructor_admits_only_literal_loopback_addresses() {
     let _env = crate::test_helpers::with_env_var(TYPESENSE_PREVIEW_LOOPBACK_ENV, "1");
@@ -862,7 +860,6 @@ fn discovery_loopback_constructor_admits_only_literal_loopback_addresses() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
 #[serial_test::serial(flapjack_outbound_url_policy)]
 fn typesense_preview_loopback_constructor_rejects_empty_source_collection_before_endpoint_parsing()
 {
@@ -883,7 +880,6 @@ fn typesense_preview_loopback_constructor_rejects_empty_source_collection_before
 }
 
 #[test]
-#[cfg(debug_assertions)]
 #[serial_test::serial(flapjack_outbound_url_policy)]
 fn typesense_preview_loopback_constructor_retains_requested_source_collection_without_io() {
     let _env = crate::test_helpers::with_env_var(TYPESENSE_PREVIEW_LOOPBACK_ENV, "1");

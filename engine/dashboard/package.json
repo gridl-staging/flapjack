@@ -20,6 +20,7 @@
     "test:e2e-ui": "playwright test --project=e2e-ui",
     "test:e2e-ui:smoke": "playwright test --project=e2e-ui tests/e2e-ui/smoke/",
     "test:e2e-ui:full": "playwright test --project=e2e-ui tests/e2e-ui/full/",
+    "test:e2e-ui:migrate-meilisearch-refusal": "PLAYWRIGHT_BACKEND_CONTRACT_IDS=replication,ai_local_outbound,meilisearch_loopback_refusal playwright test --project=e2e-ui-meilisearch-refusal",
     "test:e2e-api": "playwright test --project=e2e-api",
     "test:ui": "playwright test --project=e2e-ui --ui",
     "test:headed": "playwright test --project=e2e-ui --headed",

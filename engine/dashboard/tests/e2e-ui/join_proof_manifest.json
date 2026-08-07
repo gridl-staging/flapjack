@@ -2,7 +2,7 @@
   "schema": 1,
   "derived_from": "engine/docs2/4_EVIDENCE/2026_07_30_jul30_12am_3_dashboard_join_audit_receipt.md",
   "derived_at": "2026-08-03",
-  "note": "Machine-readable owner of the JOIN-1 backend-capability -> Playwright-proof-key mapping. The source receipt is dated, frozen evidence and must not be edited to track live state; this file is the live owner. Regenerate only if the backend capability set itself is re-audited, and record the new source here.",
+  "note": "Machine-readable owner of the JOIN-1 backend-capability -> Playwright-proof-key mapping. The source receipt is dated, frozen evidence and must not be edited to track live state; this file is the live owner. The joinable denominator moved because MIG-21 adds Meilisearch and Typesense console migration flows, and moved again for the Stage 2 dry-run red specs that pin Algolia, Meilisearch, and Typesense preview reports plus Meilisearch private-address preview refusal. JOIN-1 exit is a predicate against this manifest's own denominator, so that increase is expected and is not a regression. Regenerate only if the backend capability set itself is re-audited, and record the new source here.",
   "proof_keys": {
     "P1": {
       "spec": "full/search.spec.ts",
@@ -115,6 +115,30 @@
     "P29": {
       "spec": "full/migrate-algolia.spec.ts",
       "title": "migrate Algolia index via UI: fill form \u2192 migrate \u2192 verify success \u2192 browse"
+    },
+    "P30": {
+      "spec": "full/migrate-meilisearch.spec.ts",
+      "title": "migrate Meilisearch index via UI: discover \u2192 migrate \u2192 verify success \u2192 browse @meilisearch-loopback-opt-in"
+    },
+    "P31": {
+      "spec": "full/migrate-typesense.spec.ts",
+      "title": "migrate Typesense collection via UI: discover \u2192 migrate \u2192 verify success \u2192 browse"
+    },
+    "P32": {
+      "spec": "full/migrate-meilisearch.spec.ts",
+      "title": "dry-run preview shows Meilisearch warning and scope-gap report @meilisearch-loopback-opt-in"
+    },
+    "P33": {
+      "spec": "full/migrate-typesense.spec.ts",
+      "title": "dry-run preview shows Typesense warning and scope-gap report @typesense-loopback-opt-in"
+    },
+    "P34": {
+      "spec": "migrate-meilisearch-refusal.spec.ts",
+      "title": "preview loopback refusal names the Meilisearch opt-in required to continue @meilisearch-loopback-refusal"
+    },
+    "P35": {
+      "spec": "full/migrate.spec.ts",
+      "title": "dry-run preview shows Algolia warning and scope-gap report"
     }
   },
   "rows": [
@@ -651,6 +675,42 @@
       "features_ref": "FEATURES.md:297 Algolia migration",
       "surface": "dashboard route",
       "proof_key": "P29"
+    },
+    {
+      "capability": "Meilisearch source migration through the console",
+      "features_ref": "MIG-21 Meilisearch console migration",
+      "surface": "dashboard route",
+      "proof_key": "P30"
+    },
+    {
+      "capability": "Typesense source migration through the console",
+      "features_ref": "MIG-21 Typesense console migration",
+      "surface": "dashboard route",
+      "proof_key": "P31"
+    },
+    {
+      "capability": "Meilisearch migration dry-run preview report through the console",
+      "features_ref": "MIG-21 Meilisearch console migration dry-run",
+      "surface": "dashboard route",
+      "proof_key": "P32"
+    },
+    {
+      "capability": "Typesense migration dry-run preview report through the console",
+      "features_ref": "MIG-21 Typesense console migration dry-run",
+      "surface": "dashboard route",
+      "proof_key": "P33"
+    },
+    {
+      "capability": "Meilisearch private-address preview refusal guidance through the console",
+      "features_ref": "MIG-21 Meilisearch console migration dry-run refusal",
+      "surface": "dashboard route",
+      "proof_key": "P34"
+    },
+    {
+      "capability": "Algolia migration dry-run preview report through the console",
+      "features_ref": "MIG-21 Algolia console migration dry-run",
+      "surface": "dashboard route",
+      "proof_key": "P35"
     },
     {
       "capability": "Staged publication primitive (crash-safe, node-local)",
