@@ -232,6 +232,11 @@ jobs:
       - name: Build release server
         working-directory: engine
         run: cargo build --release --locked --package flapjack-server --features vector-search
+      - name: Run release Meilisearch loopback constructor proof
+        working-directory: engine
+        run: cargo test --release -p flapjack-http --lib -- preview_loopback_constructor_is_reachable_in_release_with_explicit_opt_in
+      - name: Run migration release loopback contract
+        run: bash engine/tests/migration_release_loopback_contract.sh
       - name: Run scheduled migration import oracle
         env:
           ALGOLIA_APP_ID: ${{ secrets.ALGOLIA_APP_ID }}

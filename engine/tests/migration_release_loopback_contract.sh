@@ -13,10 +13,9 @@ CONTRACT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=source_migration_provider_parity_http_probe.sh
 source "$CONTRACT_SCRIPT_DIR/source_migration_provider_parity_http_probe.sh"
 
-MEILI_CONTAINER="fj_migration_release_loopback_meili_$$"
-TYPESENSE_CONTAINER="fj_migration_release_loopback_typesense_$$"
 readonly RELEASE_LOOPBACK_EXPECTED_MEILI_MESSAGE="Meilisearch Cloud endpoint is not allowed"
 readonly RELEASE_LOOPBACK_EXPECTED_TYPESENSE_MESSAGE="Typesense Cloud endpoint is not allowed"
+readonly RELEASE_LOOPBACK_EXPECTED_ARM_COUNT=26
 readonly DNS_CANARY_HOST="release-loopback-dns-canary.invalid"
 
 CONTRACT_REDS=()
@@ -64,6 +63,11 @@ record_arm() {
       die_indeterminate "contract_arm_indeterminate label=${label} rc=${rc}"
       ;;
   esac
+}
+
+assert_expected_contract_arm_count() {
+  [ "$CONTRACT_PASSES" -eq "$RELEASE_LOOPBACK_EXPECTED_ARM_COUNT" ] \
+    || die_indeterminate "contract_arm_count_mismatch expected=${RELEASE_LOOPBACK_EXPECTED_ARM_COUNT} actual=${CONTRACT_PASSES}"
 }
 
 build_release_binary() {
@@ -507,6 +511,7 @@ assert_no_canary_activity() {
 main() {
   require_tools
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/fj_migration_release_loopback.XXXXXX")"
+  configure_source_provider_owner_token
   build_dns_canary
   start_request_canary
   build_release_binary
@@ -557,9 +562,12 @@ main() {
       "$CONTRACT_PASSES" "${#CONTRACT_REDS[@]}" "$(IFS=,; printf '%s' "${CONTRACT_REDS[*]}")" >&2
     exit 1
   fi
+  assert_expected_contract_arm_count
   printf 'MIGRATION_RELEASE_LOOPBACK_CONTRACT=PASS profile=release arms=%s providers=meilisearch,typesense\n' \
     "$CONTRACT_PASSES"
 }
 
-trap cleanup EXIT
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  trap cleanup EXIT
+  main "$@"
+fi
