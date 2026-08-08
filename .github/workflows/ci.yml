@@ -48,9 +48,6 @@ jobs:
       - name: GHCR publish preflight contract
         run: bash engine/tests/test_ghcr_publish_preflight.sh
 
-      - name: Release CI-status preflight contract
-        run: GH_TOKEN="${{ github.token }}" bash engine/tests/test_release_ci_status_preflight.sh
-
       # The only automated proof of the cross passthrough KAT's oracle and of its
       # DEFERRED-ENV classification boundary. It drives the KAT against mock
       # cross/timeout/docker binaries, so it needs no container and costs seconds.
@@ -63,8 +60,15 @@ jobs:
       # acknowledgement path. It drives a fake `gh` on PATH, so it needs no network and
       # costs seconds. It landed invoked by nothing, which is the same inert-contract
       # failure the structure test's own header records.
+      # GH_TOKEN is required, not optional: the contract drives the preflight against
+      # live pinned runs in flapjackhq/flapjack, so an unauthenticated `gh` fails 17 of
+      # its 41 cases and aborts this whole job — taking the later contract steps with it.
+      # This step existed twice for one day (ad2cacbb2 duplicated b2ede54ea rather than
+      # editing it) and only the copy without the token was reached second; staging run
+      # 31213083385 is the specimen. test_dashboard_e2e_backend_contract.py now fails a
+      # duplicated step name so an addition-instead-of-edit cannot land silently again.
       - name: Release CI-status preflight contract
-        run: bash engine/tests/test_release_ci_status_preflight.sh
+        run: GH_TOKEN="${{ github.token }}" bash engine/tests/test_release_ci_status_preflight.sh
 
       # Holds every job that starts a backend and then runs dashboard e2e specs to the
       # capability environment those specs declare. Two separate CI failures on
@@ -339,7 +343,20 @@ jobs:
           chmod +x /tmp/flapjack/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          # Base backend requirements, owned by
+          # engine/dashboard/tests/e2e_backend_contract.json and enforced by
+          # engine/tests/test_dashboard_e2e_backend_contract.py. assertBackendReadiness
+          # probes for these on EVERY backend the harness accepts, so this job needs them
+          # even though it selects none of the specs that name them: without them
+          # Playwright's webServer refuses to start and NO spec runs. They must be set
+          # HERE and not on the Playwright step, because Playwright reuses a backend that
+          # is already listening and spawnBackendServer never runs.
+          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 \
+          FLAPJACK_NODE_ID=dashboard-e2e \
+          FLAPJACK_ADVERTISE_ADDR=https://dashboard-e2e.invalid:7700 \
+          FLAPJACK_REPLICATION_API_KEY=fj_devtestadminkey000000 \
+          FLAPJACK_AI_ALLOW_LOCAL_URLS=1 \
+            /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -439,7 +456,20 @@ jobs:
           chmod +x /tmp/flapjack/flapjack
           mkdir -p /tmp/flapjack-data
           SERVER_LOG=/tmp/flapjack-data/server.log
-          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
+          # Base backend requirements, owned by
+          # engine/dashboard/tests/e2e_backend_contract.json and enforced by
+          # engine/tests/test_dashboard_e2e_backend_contract.py. assertBackendReadiness
+          # probes for these on EVERY backend the harness accepts, so this job needs them
+          # even though it selects none of the specs that name them: without them
+          # Playwright's webServer refuses to start and NO spec runs. They must be set
+          # HERE and not on the Playwright step, because Playwright reuses a backend that
+          # is already listening and spawnBackendServer never runs.
+          FLAPJACK_ADMIN_KEY=fj_devtestadminkey000000 \
+          FLAPJACK_NODE_ID=dashboard-e2e \
+          FLAPJACK_ADVERTISE_ADDR=https://dashboard-e2e.invalid:7700 \
+          FLAPJACK_REPLICATION_API_KEY=fj_devtestadminkey000000 \
+          FLAPJACK_AI_ALLOW_LOCAL_URLS=1 \
+            /tmp/flapjack/flapjack --data-dir /tmp/flapjack-data >"$SERVER_LOG" 2>&1 &
           SERVER_PID=$!
           bash engine/tests/common/wait_for_flapjack.sh --pid "$SERVER_PID" --host localhost --port 7700 --log-path "$SERVER_LOG"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

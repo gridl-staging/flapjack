@@ -425,6 +425,7 @@ async fn backpressure_does_not_fire_while_state_is_improving() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial_test::serial(flapjack_write_durable_timeout_env)]
 async fn reads_stay_live_while_bulk_admission_is_paused() {
     let tmp = tempfile::TempDir::new().unwrap();
     let tenant_id = "stage6_reads_live_when_paused";

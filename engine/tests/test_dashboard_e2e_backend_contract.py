@@ -35,6 +35,14 @@ WHAT IT CHECKS
    Playwright script declares every environment variable required by the specs that
    script actually selects. The selection is resolved from `package.json`, not
    restated here, so a script that gains a path filter cannot escape the contract.
+1b. Requirements marked `"base": true` are additionally required of EVERY such job
+   regardless of its spec selection, because `assertBackendReadiness` enforces them
+   itself and refuses the backend at webServer startup before any spec runs. Checking
+   those against the spec selection was a hole in this gate, not a design: on
+   2026-08-07 `ci.yml`'s `dashboard-pages` and `dashboard-integration` jobs carried
+   neither base requirement, this gate exited 0, and staging run 31213083385 failed
+   both jobs with `refused the dashboard local-URL embedder probe`. A static contract
+   that exists to guarantee a runtime assertion must be at least as strict as it.
 2. `spawnBackendServer` supplies the union of every requirement, because it starts one
    backend for whatever a developer runs locally and must satisfy the widest scope.
 
@@ -65,6 +73,7 @@ returns it to red today.
 from __future__ import annotations
 
 import json
+from collections import Counter
 import re
 import sys
 from pathlib import Path
@@ -244,16 +253,41 @@ def check_workflows(contract: dict, scripts: dict[str, str]) -> list[str]:
                 continue
 
             for requirement in contract["requirements"]:
+                # A base requirement is one assertBackendReadiness enforces itself, so it
+                # applies to every job that starts a backend and runs any dashboard entry
+                # point — the spec selection is irrelevant. Checking base requirements
+                # against the selection is precisely the bug this branch exists to fix:
+                # dashboard-pages selects only smoke specs, named by no requirement, so the
+                # old code `continue`d and the job shipped without an env the harness
+                # refuses to start without. See the contract's BASE vs PER-SPEC note.
+                is_base = bool(requirement.get("base"))
                 needed_by = [
                     spec
                     for spec in requirement["required_by"]
                     for script in selected_scripts
                     if script_selects(spec, scripts.get(script, ""))
                 ]
-                if not needed_by:
+                if not is_base and not needed_by:
                     continue
-                missing = [k for k in requirement["env"] if k not in backend_env]
-                if missing:
+                # `.get`, not `[...]`: a requirement may declare only `env_absent`.
+                missing = [k for k in requirement.get("env", {}) if k not in backend_env]
+                if not missing:
+                    continue
+                if is_base:
+                    findings.append(
+                        f"{workflow_path.name} job '{job_id}' step '{backend_step_name}' "
+                        f"starts a backend without BASE requirement '{requirement['id']}' "
+                        f"(missing {', '.join(sorted(missing))}). A base requirement is "
+                        "enforced by assertBackendReadiness on every backend the harness "
+                        "accepts or spawns, so it applies no matter which specs the job "
+                        f"selects — this job runs {sorted(set(selected_scripts))}, and the "
+                        "harness refuses at webServer startup before any spec executes "
+                        f"({requirement.get('why_base', '')!r}). Symptom when missing: "
+                        f"{requirement['symptom_if_missing']!r}. The env must be on the "
+                        f"backend startup step — Playwright reuses an already-listening "
+                        f"backend, so env on the test step never reaches it."
+                    )
+                else:
                     findings.append(
                         f"{workflow_path.name} job '{job_id}' step '{backend_step_name}' "
                         f"starts a backend without requirement '{requirement['id']}' "
@@ -338,6 +372,146 @@ def check_gate_is_wired() -> list[str]:
     ]
 
 
+# Probes `assertBackendReadiness` runs that no workflow environment can satisfy, so no
+# requirement may claim them. `assertVectorSearchBuild` reads a build-time capability off
+# `/1/capabilities`; it fails on a binary compiled without vector search, which is a build
+# defect, not a missing env var. Extend this set only for probes with the same property.
+READINESS_PROBES_NEEDING_NO_ENV = {"assertVectorSearchBuild"}
+
+
+def check_base_requirements_match_readiness(contract: dict) -> list[str]:
+    """The `base` flags must agree with what `assertBackendReadiness` actually enforces.
+
+    WHY THIS EXISTS — it closes a hole this gate had after the base/per-spec split landed.
+    Mutation-testing the new logic showed that simply deleting `"base": true` from a
+    requirement returned the gate to green, silently restoring the per-spec model whose
+    hole let `dashboard-pages` and `dashboard-integration` ship without either base
+    requirement. A flag that can be deleted without a red is not a contract; it is a
+    comment. That is the same "a guard that cannot fail is not a guard" defect the base
+    split was introduced to fix, one level up, so it is fixed here rather than noted.
+
+    HOW IT IS FALSIFIABLE IN BOTH DIRECTIONS. Each base requirement names the runtime
+    function that enforces it in `enforced_by`, and this check reads the body of
+    `assertBackendReadiness` to compare:
+
+      - a requirement naming an enforcer that is not called there  -> RED (stale claim)
+      - a requirement naming an enforcer but not marked `base`     -> RED (the M2 mutation)
+      - a probe called there that no requirement claims            -> RED (new unclaimed
+        requirement, or `base` AND `enforced_by` deleted together)
+
+    So the flag cannot be removed, the probe cannot be removed, and a newly added probe
+    cannot be left unmodelled. Verified by running all three mutations.
+    """
+    source = WEBSERVER_PATH.read_text(encoding="utf-8")
+    # Anchor the end on a closing brace at column 0 FOLLOWED BY A NEWLINE. Matching a
+    # bare `\n}` stops at the destructured parameter block, whose `} = {}) {` line also
+    # begins with a newline and a brace — the body then contains no calls at all. That
+    # mis-extraction was caught by this check going red rather than silently green, which
+    # is the behaviour to preserve: an empty call set fails the coverage loop below.
+    match = re.search(
+        r"export async function assertBackendReadiness\(.*?\n\}\n", source, re.DOTALL
+    )
+    if match is None:
+        return [
+            f"{WEBSERVER_PATH.relative_to(REPO_ROOT)}: assertBackendReadiness not found. "
+            "It is the runtime owner of every base requirement, so this gate cannot "
+            "verify the contract's `base` flags against anything. If it was renamed, "
+            "update this check and the contract's `enforced_by` values together."
+        ]
+
+    # `await <fn>(` is how every probe is invoked in that function. Deliberately not a
+    # full JS parse: the body is six lines and a regex that stops matching is a red here,
+    # not a silent skip, because an empty call set fails the coverage check below.
+    called = set(re.findall(r"await\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", match.group(0)))
+
+    findings: list[str] = []
+    claimed: dict[str, dict] = {}
+    for requirement in contract["requirements"]:
+        enforcer = requirement.get("enforced_by")
+        if not enforcer:
+            continue
+        claimed[enforcer] = requirement
+        if enforcer not in called:
+            findings.append(
+                f"contract requirement '{requirement['id']}' declares enforced_by "
+                f"{enforcer!r}, but assertBackendReadiness does not call it. Either the "
+                "probe was removed — in which case the requirement is no longer base and "
+                "the flag must go — or it was renamed and the contract is now stale."
+            )
+        if not requirement.get("base"):
+            findings.append(
+                f"contract requirement '{requirement['id']}' declares enforced_by "
+                f"{enforcer!r}, which assertBackendReadiness runs for every backend, but "
+                "it is not marked \"base\": true. It would then be checked only against a "
+                "job's spec selection, so a job selecting none of its `required_by` specs "
+                "would pass this gate and still be refused at webServer startup."
+            )
+
+    for probe in sorted(called - READINESS_PROBES_NEEDING_NO_ENV - set(claimed)):
+        findings.append(
+            f"assertBackendReadiness calls {probe!r}, but no contract requirement claims "
+            "it via `enforced_by`. Every readiness probe that a workflow environment can "
+            "satisfy must be modelled as a base requirement, or jobs can omit the env it "
+            "needs and this gate will not notice. If the probe needs no env, add it to "
+            "READINESS_PROBES_NEEDING_NO_ENV with the reason."
+        )
+    return findings
+
+
+def check_no_duplicate_step_names() -> list[str]:
+    """A job may not declare the same step name twice.
+
+    WHY THIS LIVES IN THIS FILE. This gate already asserts that CI *invokes* it
+    (`check_gate_is_wired`). Being invoked is not the same as being reached: GitHub stops
+    a job at its first failing step, so any earlier step that fails takes every later step
+    with it — including this gate's own. A duplicated step is therefore not a cosmetic
+    defect for this gate specifically; it is one of the ways this gate silently stops
+    running while still appearing wired.
+
+    NAMED LIVE SPECIMEN. On 2026-08-06, `ad2cacbb2` added a second
+    `Release CI-status preflight contract` step to `ci.yml`'s `release-contracts` job,
+    duplicating the one `b2ede54ea` had already added — but the earlier copy carries
+    `GH_TOKEN` and the new one does not. In staging run `31213083385` the unauthenticated
+    copy failed 17 of its 41 cases (`gh: To use GitHub CLI in a GitHub Actions workflow,
+    set the GH_TOKEN environment variable`), which aborted the whole job before its
+    `Dashboard e2e backend contract` step ran. So on the very run where two other jobs
+    were red on a missing backend requirement, the guard that detects exactly that had
+    not executed.
+
+    WHY A DUPLICATE IS ALWAYS WRONG HERE, NOT MERELY SUSPICIOUS. Two steps with one name
+    are indistinguishable in the Actions log, so a reader cannot tell which one failed
+    without opening the raw text. More importantly a duplicate is the signature of a fix
+    applied *by addition* rather than by edit: someone noticed the missing token and added
+    a corrected step instead of correcting the existing one, leaving the broken original
+    in place and running. Probed across every workflow at the time of writing, this was
+    the only occurrence, so the rule costs nothing to hold.
+
+    Only steps with an explicit `name:` are compared. Unnamed `uses:` steps legitimately
+    repeat (`actions/checkout` in many jobs) and carry no log ambiguity.
+    """
+    findings: list[str] = []
+    for workflow_path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        document = load_yaml(workflow_path)
+        for job_id, job in (document.get("jobs") or {}).items():
+            counts = Counter(
+                step["name"]
+                for step in (job.get("steps") or [])
+                if isinstance(step, dict) and step.get("name")
+            )
+            for name, count in sorted(counts.items()):
+                if count > 1:
+                    findings.append(
+                        f"{workflow_path.name} job '{job_id}' declares the step "
+                        f"{name!r} {count} times. Two steps with one name are "
+                        "indistinguishable in the Actions log, and a duplicate is "
+                        "normally a fix applied by addition that left the broken "
+                        "original running. Merge them into one step rather than "
+                        "deleting either blindly — the copies may differ (the "
+                        "2026-08-06 specimen differed only in whether it set GH_TOKEN)."
+                    )
+    return findings
+
+
 def main() -> int:
     contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
     scripts = json.loads(PACKAGE_JSON_PATH.read_text(encoding="utf-8"))["scripts"]
@@ -351,6 +525,8 @@ def main() -> int:
         check_workflows(contract, scripts)
         + check_spawn_backend_server(contract)
         + check_gate_is_wired()
+        + check_no_duplicate_step_names()
+        + check_base_requirements_match_readiness(contract)
     )
 
     if findings:

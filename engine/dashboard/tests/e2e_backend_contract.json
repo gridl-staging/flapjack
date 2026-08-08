@@ -33,11 +33,27 @@
     "Add an entry below naming the env, the specs that need it, and the exact symptom when",
     "it is missing. engine/tests/test_dashboard_e2e_backend_contract.py then fails every",
     "workflow job whose spec selection includes one of those specs without that env, and",
-    "fails spawnBackendServer if it does not provide the union of all of them."
+    "fails spawnBackendServer if it does not provide the union of all of them.",
+    "",
+    "BASE vs PER-SPEC, AND WHY GETTING THIS WRONG IS INVISIBLE (anchored 2026-08-07).",
+    "Set \"base\": true when assertBackendReadiness itself enforces the requirement, i.e.",
+    "the harness refuses the backend at webServer startup before any spec runs. Leave it",
+    "unset when only named specs need it at request time. The distinction is load-bearing",
+    "because a per-spec requirement is checked only against a job's spec SELECTION, so a",
+    "job that selects none of the named specs passes this gate and then dies at startup",
+    "anyway. That is exactly what happened: ci.yml's dashboard-pages and",
+    "dashboard-integration jobs carried neither replication nor ai_local_outbound, this",
+    "gate exited 0, and staging run 31213083385 failed both jobs with 'refused the",
+    "dashboard local-URL embedder probe' before a single spec executed. The rule to keep:",
+    "a static contract that guarantees a runtime assertion must be at least as strict as",
+    "that assertion, and assertBackendReadiness is the assertion here."
   ],
   "requirements": [
     {
       "id": "replication",
+      "base": true,
+      "enforced_by": "assertReplicationEnabled",
+      "why_base": "assertBackendReadiness calls assertReplicationEnabled unconditionally for every backend it accepts or spawns, so this is required regardless of which specs a job selects. It is NOT only cluster_peers.spec.ts's requirement, even though that spec is the reason the values were chosen.",
       "why": "Runtime HA membership (ROADMAP HA-MEMBERSHIP-UI) is a real product surface. Its specs drive add/remove peer mutations through /internal/cluster/*, which the server only registers when replication is configured. No peers are configured — a single node with a replication identity is enough for the membership UI to be exercised, and ci.yml's dashboard-full-e2e job has run 400+ specs in exactly this configuration since 2026-08-03.",
       "symptom_if_missing": "Cluster peer specs require a replication-enabled HA backend, but the target reports standalone mode",
       "required_by": ["tests/e2e-ui/full/cluster_peers.spec.ts"],
@@ -49,6 +65,9 @@
     },
     {
       "id": "ai_local_outbound",
+      "base": true,
+      "enforced_by": "probeLocalOutboundOptIn",
+      "why_base": "assertBackendReadiness calls probeLocalOutboundOptIn for every backend it accepts or spawns (skipped only under the P20_TEXT_ONLY_NEGATIVE_CONTROL negative control), so this is required regardless of which specs a job selects. Modelling it as vector-settings.spec.ts's private requirement is what let ci.yml's dashboard-pages and dashboard-integration jobs ship without it: the guard passed and the harness refused anyway.",
       "why": "vector-settings.spec.ts stands up a deterministic embedder on 127.0.0.1 and registers it as a `rest` source. engine/src/security.rs::allow_local_outbound_urls reads FLAPJACK_AI_ALLOW_LOCAL_URLS and outbound_ip_block_reason refuses a private or loopback destination when it is absent. That refusal is a deliberate fail-closed SSRF control with a documented operator opt-in for exactly this local-AI case; the fix is to set the opt-in in the harness, NEVER to weaken security.rs.",
       "symptom_if_missing": "rest embedder URL private or local destination `127.0.0.1` is not allowed",
       "required_by": ["tests/e2e-ui/full/vector-settings.spec.ts"],

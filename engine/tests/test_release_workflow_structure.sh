@@ -475,7 +475,15 @@ assert_contains "$CI_WORKFLOW" '^\s*run: bash engine/tests/build_identity_cross_
 # proves the preflight's behavioural contract is executed rather than merely present:
 # engine/tests/test_release_ci_status_preflight.sh shipped with REL-12 and was invoked by
 # no workflow, which is the same inert-contract failure this section was written for.
-assert_contains "$CI_WORKFLOW" '^\s*run: bash engine/tests/test_release_ci_status_preflight\.sh\s*$' "ci.yml runs the release CI-status preflight contract"
+#
+# GH_TOKEN is part of the invocation contract, not incidental (tightened 2026-08-07).
+# The contract drives the preflight against live pinned runs in flapjackhq/flapjack, so an
+# unauthenticated `gh` fails 17 of its 41 cases. This assertion previously matched a BARE
+# `run:` line, which is what an unauthenticated copy of the step looks like — so the one
+# invocation shape guaranteed to fail in CI was the only shape this test accepted. Staging
+# run 31213083385 failed exactly that way while this assertion was green. Requiring the
+# token here means the failing shape can no longer satisfy the contract.
+assert_contains "$CI_WORKFLOW" '^\s*run: GH_TOKEN="\$\{\{ github\.token \}\}" bash engine/tests/test_release_ci_status_preflight\.sh\s*$' "ci.yml runs the release CI-status preflight contract with GH_TOKEN"
 
 printf '\n\033[1mResults: %d/%d passed\033[0m\n' "$TESTS_PASSED" "$TESTS_RUN"
 if [ "$TESTS_FAILED" -gt 0 ]; then
