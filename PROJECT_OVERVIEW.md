@@ -93,7 +93,7 @@ The current strategic order is:
    *roster-attributed* set — though the batch close did print it in a 23-entry undifferentiated
    advisory and exit `0`, which is the more useful defect. Ranked here rather than lower because the
    reconciliation cost grows monotonically and the durable half — a probe for branches ahead of
-   `main` with no lane file — is cheap. `DOC-SSOT-1` **closed** and vacated this slot.
+   `main` with no lane file — is cheap.
    Owner: [`ROADMAP.md`](ROADMAP.md) `STRAND-1`.
 
 8. **Security follow-through — the `SEC-W4` hygiene residual.** The serving path is no longer a capability question: HTTPS from operator PEM or hot-rotating ACME material,
