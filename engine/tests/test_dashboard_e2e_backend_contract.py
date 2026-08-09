@@ -74,9 +74,20 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from dataclasses import dataclass
 import re
 import sys
 from pathlib import Path
+
+CONTRACT_MODULE_DIR = Path(__file__).resolve().parent
+if str(CONTRACT_MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(CONTRACT_MODULE_DIR))
+
+from dashboard_backend_shell import (  # noqa: E402 - path is established above
+    BACKEND_LAUNCH_RE,
+    active_shell_commands,
+    collect_prefix_env,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
@@ -85,24 +96,22 @@ CONTRACT_PATH = DASHBOARD_DIR / "tests" / "e2e_backend_contract.json"
 PACKAGE_JSON_PATH = DASHBOARD_DIR / "package.json"
 WEBSERVER_PATH = DASHBOARD_DIR / "scripts" / "playwright-webserver.mjs"
 
-# The backend is always launched by invoking the binary with an explicit data dir.
-# Matching that, rather than the binary path, keeps this working across the three
-# different paths the workflows use (`/tmp/flapjack/flapjack`,
-# `engine/target/debug/flapjack`, `$PWD/engine/target/release/flapjack`).
-BACKEND_LAUNCH_RE = re.compile(r"\bflapjack\s+--data-dir\b")
-
 # `npm run <script>` / `npm run <script> -- ...`, the only way these workflows enter
 # the dashboard test suite.
 NPM_RUN_RE = re.compile(r"\bnpm\s+run\s+([A-Za-z0-9:_-]+)")
 
-# `KEY=value` used as a command prefix. Anchored to a token boundary so a value
-# containing `=` (an advertise URL, for instance) cannot be mistaken for a new
-# assignment.
-ENV_ASSIGNMENT_RE = re.compile(r"(?:^|\s)([A-Z][A-Z0-9_]*)=(\S*)")
-
-
 class Finding(Exception):
     """A contract violation, carried with enough detail to act on without re-deriving it."""
+
+
+@dataclass(frozen=True)
+class DashboardBackendContext:
+    """The effective environment and test entry points for one workflow backend."""
+
+    job_id: str
+    step_name: str
+    environment: dict[str, str]
+    selected_scripts: tuple[str, ...]
 
 
 def load_yaml(path: Path):
@@ -120,24 +129,103 @@ def load_yaml(path: Path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def collect_prefix_env(run_body: str) -> dict[str, str]:
-    """Environment set as a command prefix on the backend launch.
+def test_report_missing_workflow_exports_fails_when_backend_context_is_absent(
+    tmp_path: Path, capsys
+) -> None:
+    contract_path = tmp_path / "contract.json"
+    workflow_path = tmp_path / "workflow.yml"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "npm_script_spec_scopes": {
+                    "playwright_entry_points": ["test:pages"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    workflow_path.write_text(
+        """
+name: fixture
+jobs:
+  dashboard:
+    steps:
+      - name: Run dashboard pages
+        run: npm run test:pages
+""",
+        encoding="utf-8",
+    )
 
-    The workflows write the launch as a backslash-continued run of `KEY=value`
-    assignments ending in the binary invocation. Joining continuations first means a
-    multi-line prefix reads as one command, which is how the shell sees it.
-    """
-    joined = re.sub(r"\\\s*\n\s*", " ", run_body)
-    env: dict[str, str] = {}
-    for line in joined.splitlines():
-        if not BACKEND_LAUNCH_RE.search(line):
-            continue
-        # Only assignments to the LEFT of the binary are a command prefix; anything
-        # after it is an argument, so slicing at the match keeps flags out.
-        prefix = line[: BACKEND_LAUNCH_RE.search(line).start()]
-        for name, value in ENV_ASSIGNMENT_RE.findall(prefix):
-            env[name] = value
-    return env
+    result = report_missing_workflow_exports(
+        [
+            str(contract_path),
+            "ci.yml",
+            str(workflow_path),
+            "FLAPJACK_AI_ALLOW_LOCAL_URLS",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert (
+        captured.err
+        == "ci.yml: no dashboard backend launch context found for workflow export check\n"
+    )
+
+
+def test_report_missing_workflow_exports_ignores_unrelated_backend_launch(
+    tmp_path: Path, capsys
+) -> None:
+    contract_path = tmp_path / "contract.json"
+    workflow_path = tmp_path / "workflow.yml"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "npm_script_spec_scopes": {
+                    "playwright_entry_points": ["test:pages"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    workflow_path.write_text(
+        """
+name: fixture
+jobs:
+  dashboard:
+    steps:
+      - name: Run dashboard pages
+        run: npm run test:pages
+  unrelated:
+    steps:
+      - name: Start unrelated backend
+        run: engine/target/debug/flapjack --data-dir /tmp/unrelated-data
+""",
+        encoding="utf-8",
+    )
+
+    result = report_missing_workflow_exports(
+        [
+            str(contract_path),
+            "ci.yml",
+            str(workflow_path),
+            "FLAPJACK_AI_ALLOW_LOCAL_URLS",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert (
+        captured.err
+        == "ci.yml: no dashboard backend launch context found for workflow export check\n"
+    )
+
+
+def active_shell_run_body(run_body: str) -> str:
+    """The executable shell text of a run block, one logical command per line."""
+    return "\n".join(active_shell_commands(run_body))
 
 
 def step_env(step: dict) -> dict[str, str]:
@@ -207,51 +295,81 @@ def script_selects(spec_path: str, script_body: str) -> bool:
     )
 
 
+def dashboard_backend_contexts(
+    document: dict, entry_points: set[str]
+) -> list[DashboardBackendContext]:
+    """Resolve dashboard backend launches using GitHub's environment precedence."""
+    contexts = []
+    workflow_env = {str(k): str(v) for k, v in (document.get("env") or {}).items()}
+
+    for job_id, job in (document.get("jobs") or {}).items():
+        job_env = {str(k): str(v) for k, v in (job.get("env") or {}).items()}
+        backend_env: dict[str, str] | None = None
+        backend_step_name = ""
+        selected_scripts = []
+
+        for step in job.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            run_body = step.get("run") or ""
+            active_run_body = active_shell_run_body(run_body)
+            if BACKEND_LAUNCH_RE.search(active_run_body):
+                backend_step_name = step.get("name") or "<unnamed step>"
+                backend_env = {
+                    **workflow_env,
+                    **job_env,
+                    **step_env(step),
+                    **collect_prefix_env(run_body),
+                }
+                continue
+            selected_scripts.extend(
+                name
+                for name in NPM_RUN_RE.findall(active_run_body)
+                if name in entry_points
+            )
+
+        if backend_env is not None and selected_scripts:
+            contexts.append(
+                DashboardBackendContext(
+                    job_id=str(job_id),
+                    step_name=backend_step_name,
+                    environment=backend_env,
+                    selected_scripts=tuple(selected_scripts),
+                )
+            )
+    return contexts
+
+
+def has_inactive_dashboard_backend_launch(document: dict, entry_points: set[str]) -> bool:
+    """A dashboard-testing job contains backend launch text that is not executable."""
+    for job in (document.get("jobs") or {}).values():
+        has_raw_launch = False
+        selected_scripts = []
+
+        for step in job.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            run_body = step.get("run") or ""
+            active_run_body = active_shell_run_body(run_body)
+            has_raw_launch = has_raw_launch or BACKEND_LAUNCH_RE.search(run_body) is not None
+            selected_scripts.extend(
+                name
+                for name in NPM_RUN_RE.findall(active_run_body)
+                if name in entry_points
+            )
+
+        if has_raw_launch and selected_scripts:
+            return True
+    return False
+
+
 def check_workflows(contract: dict, scripts: dict[str, str]) -> list[str]:
     findings: list[str] = []
     entry_points = set(contract["npm_script_spec_scopes"]["playwright_entry_points"])
 
     for workflow_path in sorted(WORKFLOW_DIR.glob("*.yml")):
         document = load_yaml(workflow_path)
-        # GitHub resolves env as workflow < job < step, and a `KEY=value` command prefix is
-        # applied by the shell on top of all three. Reading only the step and the prefix
-        # made the gate FAIL a job that correctly supplied the variable at job level — a
-        # false positive confirmed by probe. Merging in GitHub's own precedence order is
-        # what makes the gate agree with the runtime.
-        workflow_env = {str(k): str(v) for k, v in (document.get("env") or {}).items()}
-
-        for job_id, job in (document.get("jobs") or {}).items():
-            steps = job.get("steps") or []
-            job_env = {str(k): str(v) for k, v in (job.get("env") or {}).items()}
-
-            backend_env: dict[str, str] = {}
-            backend_step_name = None
-            selected_scripts: list[str] = []
-
-            for step in steps:
-                if not isinstance(step, dict):
-                    continue
-                run_body = step.get("run") or ""
-
-                if BACKEND_LAUNCH_RE.search(run_body):
-                    backend_step_name = step.get("name") or "<unnamed step>"
-                    backend_env = {
-                        **workflow_env,
-                        **job_env,
-                        **step_env(step),
-                        **collect_prefix_env(run_body),
-                    }
-                    # A later launch in the same job replaces the earlier one, which
-                    # matches the shell: the last backend started is the one serving.
-                    continue
-
-                for script_name in NPM_RUN_RE.findall(run_body):
-                    if script_name in entry_points:
-                        selected_scripts.append(script_name)
-
-            if backend_step_name is None or not selected_scripts:
-                continue
-
+        for context in dashboard_backend_contexts(document, entry_points):
             for requirement in contract["requirements"]:
                 # A base requirement is one assertBackendReadiness enforces itself, so it
                 # applies to every job that starts a backend and runs any dashboard entry
@@ -264,23 +382,29 @@ def check_workflows(contract: dict, scripts: dict[str, str]) -> list[str]:
                 needed_by = [
                     spec
                     for spec in requirement["required_by"]
-                    for script in selected_scripts
+                    for script in context.selected_scripts
                     if script_selects(spec, scripts.get(script, ""))
                 ]
                 if not is_base and not needed_by:
                     continue
                 # `.get`, not `[...]`: a requirement may declare only `env_absent`.
-                missing = [k for k in requirement.get("env", {}) if k not in backend_env]
+                missing = [
+                    key
+                    for key in requirement.get("env", {})
+                    if key not in context.environment
+                ]
                 if not missing:
                     continue
                 if is_base:
                     findings.append(
-                        f"{workflow_path.name} job '{job_id}' step '{backend_step_name}' "
+                        f"{workflow_path.name} job '{context.job_id}' step "
+                        f"'{context.step_name}' "
                         f"starts a backend without BASE requirement '{requirement['id']}' "
                         f"(missing {', '.join(sorted(missing))}). A base requirement is "
                         "enforced by assertBackendReadiness on every backend the harness "
                         "accepts or spawns, so it applies no matter which specs the job "
-                        f"selects — this job runs {sorted(set(selected_scripts))}, and the "
+                        "selects — this job runs "
+                        f"{sorted(set(context.selected_scripts))}, and the "
                         "harness refuses at webServer startup before any spec executes "
                         f"({requirement.get('why_base', '')!r}). Symptom when missing: "
                         f"{requirement['symptom_if_missing']!r}. The env must be on the "
@@ -289,16 +413,49 @@ def check_workflows(contract: dict, scripts: dict[str, str]) -> list[str]:
                     )
                 else:
                     findings.append(
-                        f"{workflow_path.name} job '{job_id}' step '{backend_step_name}' "
+                        f"{workflow_path.name} job '{context.job_id}' step "
+                        f"'{context.step_name}' "
                         f"starts a backend without requirement '{requirement['id']}' "
                         f"(missing {', '.join(sorted(missing))}), but the job runs "
-                        f"{sorted(set(selected_scripts))} which selects "
+                        f"{sorted(set(context.selected_scripts))} which selects "
                         f"{sorted(set(needed_by))}. Symptom when missing: "
                         f"{requirement['symptom_if_missing']!r}. The env must be on the "
                         f"backend startup step — Playwright reuses an already-listening "
                         f"backend, so env on the test step never reaches it."
                     )
     return findings
+
+
+def report_missing_workflow_exports(arguments: list[str]) -> int:
+    """Print required exports absent from any dashboard backend launch context."""
+    if len(arguments) < 4:
+        print(
+            "usage: --missing-workflow-exports CONTRACT WORKFLOW_LABEL WORKFLOW EXPORT...",
+            file=sys.stderr,
+        )
+        return 2
+
+    contract_path, workflow_label, workflow_path, *required_exports = arguments
+    contract = json.loads(Path(contract_path).read_text(encoding="utf-8"))
+    document = load_yaml(Path(workflow_path))
+    entry_points = set(contract["npm_script_spec_scopes"]["playwright_entry_points"])
+    contexts = dashboard_backend_contexts(document, entry_points)
+
+    if not contexts:
+        if has_inactive_dashboard_backend_launch(document, entry_points):
+            for export in required_exports:
+                print(f"{workflow_label}:{export}")
+            return 0
+        print(
+            f"{workflow_label}: no dashboard backend launch context found for workflow export check",
+            file=sys.stderr,
+        )
+        return 2
+
+    for export in required_exports:
+        if any(export not in context.environment for context in contexts):
+            print(f"{workflow_label}:{export}")
+    return 0
 
 
 def check_spawn_backend_server(_contract: dict) -> list[str]:
@@ -549,4 +706,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--missing-workflow-exports"]:
+        raise SystemExit(report_missing_workflow_exports(sys.argv[2:]))
     raise SystemExit(main())

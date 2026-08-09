@@ -1,7 +1,16 @@
-use regex::Regex;
+// The workflow-parsing helpers live in ONE place, shared with union_recurring_gate_test.rs.
+// Included by path rather than through `mod common;` because the `common` facade pulls in
+// fixtures and HTTP helpers that a workflow-text assertion has no use for.
+#[path = "common/workflow.rs"]
+mod workflow;
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use workflow::{
+    job_has_dispatch_only_condition, job_has_run_command, workflow_has_schedule_trigger,
+    workflow_job,
+};
 
 const WORKFLOW_PATH_OVERRIDE_ENV: &str = "FLAPJACK_NIGHTLY_WORKFLOW_PATH_UNDER_TEST";
 const MIGRATION_JOB: &str = "migration-import-contract";
@@ -37,60 +46,6 @@ fn workflow_path() -> PathBuf {
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/nightly.yml")
         })
-}
-
-fn workflow_has_schedule_trigger(workflow: &str) -> bool {
-    workflow
-        .lines()
-        .skip_while(|line| *line != "on:")
-        .skip(1)
-        .take_while(|line| {
-            line.is_empty() || line.starts_with(char::is_whitespace) || line.starts_with('#')
-        })
-        .any(|line| line == "  schedule:")
-}
-
-fn workflow_job<'a>(workflow: &'a str, job_name: &str) -> &'a str {
-    let job_header =
-        Regex::new(&format!(r"^  {}:$", regex::escape(job_name))).expect("job regex must compile");
-    let next_job_header =
-        Regex::new(r"^  [A-Za-z0-9_-]+:$").expect("job header regex must compile");
-    let start = workflow
-        .lines()
-        .scan(0, |offset, line| {
-            let line_start = *offset;
-            *offset += line.len() + 1;
-            Some((line_start, line))
-        })
-        .find_map(|(offset, line)| job_header.is_match(line).then_some(offset))
-        .unwrap_or_else(|| panic!("nightly workflow must contain the {job_name} job"));
-    let remainder = &workflow[start..];
-    let end = remainder
-        .lines()
-        .scan(0, |offset, line| {
-            let line_start = *offset;
-            *offset += line.len() + 1;
-            Some((line_start, line))
-        })
-        .skip(1)
-        .find_map(|(offset, line)| next_job_header.is_match(line).then_some(offset))
-        .unwrap_or(remainder.len());
-
-    &remainder[..end]
-}
-
-fn job_has_dispatch_only_condition(job: &str) -> bool {
-    job.lines()
-        .filter_map(|line| line.trim().strip_prefix("if:"))
-        .any(|condition| condition.contains("workflow_dispatch"))
-}
-
-fn job_has_run_command(job: &str, command: &str) -> bool {
-    job.lines()
-        .map(str::trim)
-        .map(|line| line.strip_prefix("- ").unwrap_or(line))
-        .filter_map(|line| line.strip_prefix("run:"))
-        .any(|configured_command| configured_command.trim() == command)
 }
 
 #[test]

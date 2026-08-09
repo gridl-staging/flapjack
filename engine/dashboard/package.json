@@ -9,6 +9,7 @@
     "server": "bash scripts/start-stable-server.sh",
     "build": "tsc && vite build",
     "check": "tsc --noEmit",
+    "check:join-manifest": "node scripts/check_join_manifest.mjs",
     "check:tests": "tsc -p tests/tsconfig.json --noEmit",
     "preview": "vite preview",
     "lint": "eslint 'src/**/*.{ts,tsx}' --max-warnings 0",
