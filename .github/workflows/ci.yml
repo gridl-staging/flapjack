@@ -42,6 +42,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Public-ledger citation contract tests
+        run: bash engine/tests/validate_public_ledger_citations_test.sh
+
+      - name: Public-ledger citation oracle
+        run: bash engine/tests/validate_public_ledger_citations.sh --mode mirror
+
       - name: Release workflow structure contract
         run: bash engine/tests/test_release_workflow_structure.sh
 
@@ -322,6 +328,9 @@ jobs:
       - name: Validate JOIN proof manifest
         working-directory: engine/dashboard
         run: npm run check:join-manifest
+      - name: Test production audit policy
+        working-directory: engine/dashboard
+        run: bash scripts/audit_gate_fixture_test.sh
       - name: Audit production dependencies
         working-directory: engine/dashboard
         run: bash scripts/audit_gate.sh
@@ -635,10 +644,19 @@ jobs:
           cache-dependency-path: engine/sdk_test/package-lock.json
       - name: Install dependencies
         working-directory: engine/sdk_test
-        run: npm install
+        run: npm ci
       - name: Run contract tests
         working-directory: engine/sdk_test
         run: npm run test:contract
+        env:
+          FLAPJACK_URL: http://localhost:7700
+      - name: SDK real-client conformance
+        working-directory: engine/sdk_test
+        run: |
+          npm run test:real_clients:wiring
+          npm run lint:real_clients
+          npx playwright install --with-deps chromium
+          npm run test:real_clients
         env:
           FLAPJACK_URL: http://localhost:7700
 

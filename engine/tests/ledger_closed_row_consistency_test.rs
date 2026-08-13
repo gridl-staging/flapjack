@@ -67,19 +67,21 @@ const LANDED_DATA_RECEIPT: &str =
     "engine/docs2/4_EVIDENCE/2026_08_03_aug03_11am_5_competitor_migration_lands_data_receipt.md";
 const LANDED_DATA_MERGE: &str = "2c05776c7b9d8f60bae89c34ad819ece084fa2e4";
 
-const NAMED_OPEN_ROWS: &[&str] = &["SEC-W4", "JOIN-1", "PL-10"];
+const NAMED_OPEN_ROWS: &[&str] = &["JOIN-1", "PL-10"];
 const NAMED_CLOSED_ROWS: &[&str] = &[
     "BUILD-1",
     "DUR-1",
     "DUR-2",
+    "SEC-W4",
     "SEC-G3",
     "SEC-W2A",
     "HA-MEMBERSHIP-UI",
     "MIG-17R",
+    "MIG-22",
 ];
 const NAMED_SHIPPED_ROWS: &[&str] = &["INFRA-1"];
 const NAMED_CROSS_OWNER_FACTS: &[&str] = &["SEC-G9", "PR-13"];
-const NAMED_DENOMINATOR: usize = 13;
+const NAMED_DENOMINATOR: usize = 14;
 
 fn repo_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is `engine/` for tests in this directory.
@@ -393,7 +395,13 @@ fn record_measured_owner_conflicts(roadmap: &str, features: &str, findings: &mut
         findings,
         "ROADMAP.md row `SEC-W4`",
         sec_w4_row,
-        "`SEC-G9` residuals closed",
+        "e26f06804bbb7911266b8ed442d7440440a857e1",
+    );
+    require_text(
+        findings,
+        "ROADMAP.md row `SEC-W4`",
+        sec_w4_row,
+        "no residual open item",
     );
     let pr13_row = table_row(features, "PR-13").unwrap_or_default();
     require_text(findings, "FEATURES.md row `PR-13`", pr13_row, "✅ Done");
@@ -458,22 +466,59 @@ fn record_migration_attribution_conflicts(
     );
 }
 
-#[test]
-fn named_reconciliation_rejects_reopened_build_capacity_row() {
+/// `ROADMAP.md` with one named row's closure marker softened back to `**OPEN`.
+///
+/// Mutating the real ledger rather than a fixture is deliberate: a fixture would
+/// keep passing after the live row was reworded, which is the drift this file
+/// exists to catch. The mutation is asserted to have actually landed, because a
+/// row that already lacked `CLOSED_MARKER` would leave the ledger untouched and
+/// the caller's finding would then appear for the wrong reason — a mutation test
+/// that cannot tell those two cases apart is not a guard.
+fn roadmap_with_row_reopened(roadmap: &str, id: &str) -> String {
+    let row =
+        table_row(roadmap, id).unwrap_or_else(|| panic!("ROADMAP.md has no `{id}` row to reopen"));
+    let reopened_row = row.replacen(CLOSED_MARKER, "**OPEN", 1);
+    assert_ne!(
+        row, reopened_row,
+        "`{id}` does not declare {CLOSED_MARKER:?}, so reopening it changed nothing and the \
+         reconciliation finding below would not be attributable to this mutation"
+    );
+    roadmap.replacen(row, &reopened_row, 1)
+}
+
+fn assert_reopening_row_is_rejected(id: &str) {
     let roadmap = read_ledger("ROADMAP.md");
-    let build_row = table_row(&roadmap, "BUILD-1").expect("ROADMAP.md has a BUILD-1 row");
-    let reopened_build_row = build_row.replacen(CLOSED_MARKER, "**OPEN", 1);
-    let reopened_roadmap = roadmap.replacen(build_row, &reopened_build_row, 1);
     let mut findings = Vec::new();
 
-    record_roadmap_state_conflicts(&reopened_roadmap, &mut findings);
+    record_roadmap_state_conflicts(&roadmap_with_row_reopened(&roadmap, id), &mut findings);
 
+    let expected = format!("  - `{id}` must be closed in ROADMAP.md");
     assert!(
-        findings
-            .iter()
-            .any(|finding| finding == "  - `BUILD-1` must be closed in ROADMAP.md"),
-        "reopening BUILD-1 must fail the named batch-row reconciliation"
+        findings.iter().any(|finding| finding == &expected),
+        "reopening {id} must fail the named batch-row reconciliation with {expected:?}, got:\n{}",
+        findings.join("\n")
     );
+}
+
+#[test]
+fn named_reconciliation_rejects_reopened_build_capacity_row() {
+    assert_reopening_row_is_rejected("BUILD-1");
+}
+
+/// `MIG-22` closed on 2026-08-10 by *retiring* a clause rather than satisfying it,
+/// which is the closure shape most likely to be quietly reopened later: the
+/// retirement reads like an admission that something is unfinished, so a future
+/// reader may soften the marker back rather than argue with the reasoning. The
+/// row's own falsifiable exit names this test as one of its three red specimens,
+/// so that promise has to be executable rather than prose.
+#[test]
+fn named_reconciliation_rejects_reopened_migration_loopback_row() {
+    assert_reopening_row_is_rejected("MIG-22");
+}
+
+#[test]
+fn named_reconciliation_rejects_reopened_security_wave_4_row() {
+    assert_reopening_row_is_rejected("SEC-W4");
 }
 
 #[test]

@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { readFileSync } from 'node:fs'
+import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import packageJson from './package.json'
@@ -9,6 +11,7 @@ import playwrightConfig from './playwright.config'
 
 import {
   assertBackendReadiness,
+  acquireStartupLease,
   backendContractEnv,
   ensureServer,
   forwardShutdownSignals,
@@ -44,6 +47,14 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
+async function createLeaseFixture() {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flapjack-playwright-lease-test-'))
+  return {
+    lockPath: path.join(directory, 'startup.lock'),
+    cleanup: () => fs.rm(directory, { recursive: true, force: true }),
+  }
+}
+
 function createFakeChild() {
   return {
     once: vi.fn(),
@@ -71,6 +82,105 @@ function jsonResponse(status: number, body: Record<string, unknown>) {
     text: async () => JSON.stringify(body),
   }
 }
+
+describe('acquireStartupLease', () => {
+  it('publishes owner metadata and leaves a live owner in control', async () => {
+    const fixture = await createLeaseFixture()
+    try {
+      const release = await acquireStartupLease(fixture.lockPath, {
+        pid: 41,
+        hostname: 'test-host',
+        token: 'live-owner',
+        isProcessAlive: vi.fn().mockReturnValue(true),
+      })
+
+      expect(release).toBeTypeOf('function')
+      await expect(fs.readFile(fixture.lockPath, 'utf8')).resolves.toBe(
+        `${JSON.stringify({
+          version: 1,
+          pid: 41,
+          hostname: 'test-host',
+          token: 'live-owner',
+        })}\n`,
+      )
+
+      await expect(acquireStartupLease(fixture.lockPath, {
+        pid: 42,
+        hostname: 'test-host',
+        token: 'contender',
+        isProcessAlive: vi.fn().mockImplementation((pid) => pid === 41),
+      })).resolves.toBeNull()
+
+      await release?.()
+      await expect(fs.stat(fixture.lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  it('reclaims a lease whose same-host owner is dead', async () => {
+    const fixture = await createLeaseFixture()
+    try {
+      await fs.writeFile(fixture.lockPath, `${JSON.stringify({
+        version: 1,
+        pid: 41,
+        hostname: 'test-host',
+        token: 'dead-owner',
+      })}\n`)
+
+      const release = await acquireStartupLease(fixture.lockPath, {
+        pid: 42,
+        hostname: 'test-host',
+        token: 'replacement-owner',
+        isProcessAlive: vi.fn().mockImplementation((pid) => pid === 42),
+      })
+
+      expect(release).toBeTypeOf('function')
+      await expect(fs.readFile(fixture.lockPath, 'utf8')).resolves.toContain(
+        '"token":"replacement-owner"',
+      )
+      await release?.()
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  it('elects only one owner when contenders race to reclaim a dead lease', async () => {
+    const fixture = await createLeaseFixture()
+    try {
+      await fs.writeFile(fixture.lockPath, `${JSON.stringify({
+        version: 1,
+        pid: 40,
+        hostname: 'test-host',
+        token: 'dead-owner',
+      })}\n`)
+
+      const contenders = await Promise.all([
+        acquireStartupLease(fixture.lockPath, {
+          pid: 41,
+          hostname: 'test-host',
+          token: 'contender-a',
+          isProcessAlive: (pid) => pid !== 40,
+        }),
+        acquireStartupLease(fixture.lockPath, {
+          pid: 42,
+          hostname: 'test-host',
+          token: 'contender-b',
+          isProcessAlive: (pid) => pid !== 40,
+        }),
+      ])
+
+      const owners = contenders.filter((release) => release !== null)
+      expect(owners).toHaveLength(1)
+      const metadata = JSON.parse(await fs.readFile(fixture.lockPath, 'utf8'))
+      expect(['contender-a', 'contender-b']).toContain(metadata.token)
+
+      await owners[0]?.()
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+})
 
 describe('ensureServer', () => {
   it('reuses an already healthy server without spawning', async () => {

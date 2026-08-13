@@ -35,6 +35,13 @@ public_ledger_strip_markdown_link_title() {
   printf '%s\n' "$1" | sed -E 's/[[:space:]]+("[^"]*"|'\''[^'\'']*'\''|\([^()]*\))[[:space:]]*$//'
 }
 
+# A #fragment or ?query suffix identifies a location within a target, not a
+# separate file; resolve the citation by its base repository path so an
+# unsynced path cannot evade the gate simply by carrying an anchor.
+public_ledger_strip_fragment_query() {
+  printf '%s\n' "${1%%[#?]*}"
+}
+
 public_ledger_path_stays_within_repo() {
   local raw_path="${1#/}"
   local depth=0
@@ -76,6 +83,8 @@ public_ledger_resolve_markdown_target() {
   local target="$2"
   local link_path
   link_path="$(public_ledger_strip_markdown_link_title "$target")"
+  link_path="$(public_ledger_strip_fragment_query "$link_path")"
+  [ -n "$link_path" ] || return 1
 
   public_ledger_reference_shape_is_concrete "$link_path" || return 1
 
@@ -111,7 +120,7 @@ public_ledger_extract_prose_references() {
   fi
 
   local grep_status=0
-  grep -oE '(^|[^#[:alnum:]_./-])((engine/docs2/(4_EVIDENCE|evidence)/|docs2/evidence/|4_EVIDENCE/|docs/|chats/|chatting/|implemented/|pp/)[[:alnum:]_./-]*\.md[#?]?)' "$prose_file" > "$matches_file" || grep_status=$?
+  grep -oE '(^|[^#[:alnum:]_./-])((engine/docs2/(4_EVIDENCE|evidence)/|docs2/evidence/|4_EVIDENCE/|docs/|chats/|chatting/|implemented/|pp/)[[:alnum:]_./-]*\.md([#?][[:alnum:]_./%~=&-]*)?)' "$prose_file" > "$matches_file" || grep_status=$?
   if [ "$grep_status" -gt 1 ]; then
     rm -f "$prose_file" "$matches_file"
     return "$grep_status"
@@ -119,6 +128,7 @@ public_ledger_extract_prose_references() {
 
   while IFS= read -r literal; do
     literal="$(printf '%s\n' "$literal" | sed -E 's/^[^[:alnum:]_./-]//')"
+    literal="$(public_ledger_strip_fragment_query "$literal")"
     [ -n "$literal" ] || continue
     public_ledger_reference_shape_is_concrete "$literal" || continue
 
@@ -223,7 +233,7 @@ public_ledger_collect_synced_ledgers() {
 
   local ledger
   for ledger in "${PUBLIC_LEDGER_CANDIDATES[@]}"; do
-    doc_sync_path_is_synced "$ledger" || continue
+    public_ledger_path_is_published "$ledger" || continue
     if [ ! -f "$REPO_DIR/$ledger" ]; then
       printf 'ERROR: synced public ledger is missing: %s\n' "$ledger" >&2
       return 1
@@ -235,6 +245,98 @@ public_ledger_collect_synced_ledgers() {
     printf 'ERROR: no synced public ledger candidates found\n' >&2
     return 1
   fi
+}
+
+public_ledger_collect_mirror_published_paths() {
+  local tracked_file="$1"
+  local published_file="$2"
+  : > "$tracked_file"
+  : > "$published_file"
+
+  if ! git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf 'ERROR: mirror mode requires REPO_DIR to be a git checkout: %s\n' "$REPO_DIR" >&2
+    return 1
+  fi
+
+  local tracked_nul
+  tracked_nul="$(mktemp "${TMPDIR:-/tmp}/flapjack-public-mirror-tracked-z.XXXXXX")"
+  if ! git -C "$REPO_DIR" ls-files -z > "$tracked_nul"; then
+    rm -f "$tracked_nul"
+    printf 'ERROR: mirror mode failed to read tracked files from git checkout: %s\n' "$REPO_DIR" >&2
+    return 1
+  fi
+
+  local tracked_path
+  local invalid_tracked_filename=0
+  while IFS= read -r -d '' tracked_path; do
+    case "$tracked_path" in
+      *$'\n'*|*$'\r'*)
+        invalid_tracked_filename=1
+        break
+        ;;
+    esac
+    [ -n "$tracked_path" ] || continue
+    printf '%s\n' "$tracked_path" >> "$tracked_file"
+  done < "$tracked_nul"
+  if [ "$invalid_tracked_filename" -ne 0 ]; then
+    rm -f "$tracked_nul"
+    printf 'ERROR: mirror mode tracked filename contains unsupported line break\n' >&2
+    return 1
+  fi
+
+  if ! sort -u -o "$tracked_file" "$tracked_file"; then
+    rm -f "$tracked_nul"
+    printf 'ERROR: mirror mode failed to normalize tracked file inventory: %s\n' "$REPO_DIR" >&2
+    return 1
+  fi
+  rm -f "$tracked_nul"
+  if [ ! -s "$tracked_file" ]; then
+    printf 'ERROR: mirror mode tracked file set is empty: %s\n' "$REPO_DIR" >&2
+    return 1
+  fi
+
+  while IFS= read -r tracked_path; do
+    [ -n "$tracked_path" ] || continue
+    [ -f "$REPO_DIR/$tracked_path" ] || continue
+    printf '%s\n' "$tracked_path" >> "$published_file"
+  done < "$tracked_file"
+  sort -u -o "$published_file" "$published_file"
+}
+
+public_ledger_path_is_published() {
+  local path="$1"
+  case "$PUBLIC_LEDGER_MODE" in
+    dev-predictive)
+      doc_sync_path_is_synced "$path"
+      ;;
+    mirror)
+      local normalized_path
+      normalized_path="$(doc_sync_normalize_repo_path "$path")"
+      normalized_path="${normalized_path%/}"
+      [ -n "$normalized_path" ] || return 1
+      grep -Fxq -- "$normalized_path" "$PUBLIC_LEDGER_MIRROR_PUBLISHED_LOG"
+      ;;
+    *)
+      printf 'ERROR: unhandled ownership mode: %s\n' "$PUBLIC_LEDGER_MODE" >&2
+      return 1
+      ;;
+  esac
+}
+
+public_ledger_unpublished_reason() {
+  local path="$1"
+  case "$PUBLIC_LEDGER_MODE" in
+    mirror)
+      if grep -Fxq -- "$path" "$PUBLIC_LEDGER_MIRROR_TRACKED_LOG"; then
+        printf 'tracked_file_missing'
+      else
+        printf 'untracked'
+      fi
+      ;;
+    *)
+      printf 'outside_sync_surface'
+      ;;
+  esac
 }
 
 public_ledger_validate_one() {
@@ -255,12 +357,12 @@ public_ledger_validate_one() {
     if ! public_ledger_path_stays_within_repo "$reference"; then
       unresolvable=$((unresolvable + 1))
       printf 'reference ledger=%s result=UNRESOLVABLE reason=above_repository_root path=%s\n' "$ledger" "$reference"
-    elif doc_sync_path_is_synced "$reference"; then
+    elif public_ledger_path_is_published "$reference"; then
       resolvable=$((resolvable + 1))
       printf 'reference ledger=%s result=RESOLVABLE path=%s\n' "$ledger" "$reference"
     else
       unresolvable=$((unresolvable + 1))
-      printf 'reference ledger=%s result=UNRESOLVABLE reason=outside_sync_surface path=%s\n' "$ledger" "$reference"
+      printf 'reference ledger=%s result=UNRESOLVABLE reason=%s path=%s\n' "$ledger" "$(public_ledger_unpublished_reason "$reference")" "$reference"
     fi
   done < "$references_file"
 
@@ -277,16 +379,23 @@ validate_public_ledger_citations() {
   local references_file
   ledgers_file="$(mktemp "${TMPDIR:-/tmp}/flapjack-public-ledgers.XXXXXX")"
   references_file="$(mktemp "${TMPDIR:-/tmp}/flapjack-public-references.XXXXXX")"
-  trap 'rm -f "$ledgers_file" "$references_file"; doc_sync_cleanup' RETURN
+  PUBLIC_LEDGER_MIRROR_TRACKED_LOG="$(mktemp "${TMPDIR:-/tmp}/flapjack-public-mirror-tracked.XXXXXX")"
+  PUBLIC_LEDGER_MIRROR_PUBLISHED_LOG="$(mktemp "${TMPDIR:-/tmp}/flapjack-public-mirror-published.XXXXXX")"
+  trap 'rm -f "${ledgers_file:-}" "${references_file:-}" "${PUBLIC_LEDGER_MIRROR_TRACKED_LOG:-}" "${PUBLIC_LEDGER_MIRROR_PUBLISHED_LOG:-}"; doc_sync_cleanup' RETURN
 
-  doc_sync_init "$REPO_DIR"
-  doc_sync_collect_sync_surface || return 1
+  DOC_SYNC_REPO_DIR="$REPO_DIR"
+  if [ "$PUBLIC_LEDGER_MODE" = mirror ]; then
+    public_ledger_collect_mirror_published_paths "$PUBLIC_LEDGER_MIRROR_TRACKED_LOG" "$PUBLIC_LEDGER_MIRROR_PUBLISHED_LOG" || return 1
+  else
+    doc_sync_init "$REPO_DIR"
+    doc_sync_collect_sync_surface || return 1
 
-  local sync_entry_count
-  sync_entry_count=$(( $(doc_sync_count_log_lines "$DOC_SYNC_FILES_LOG") + $(doc_sync_count_log_lines "$DOC_SYNC_DIRS_LOG") ))
-  if [ "$sync_entry_count" -eq 0 ]; then
-    printf 'ERROR: parsed sync surface is empty: %s\n' "$DOC_SYNC_CONFIG_FILE" >&2
-    return 1
+    local sync_entry_count
+    sync_entry_count=$(( $(doc_sync_count_log_lines "$DOC_SYNC_FILES_LOG") + $(doc_sync_count_log_lines "$DOC_SYNC_DIRS_LOG") + $(doc_sync_count_log_lines "$DOC_SYNC_REMAPS_LOG") ))
+    if [ "$sync_entry_count" -eq 0 ]; then
+      printf 'ERROR: parsed sync surface is empty: %s\n' "$DOC_SYNC_CONFIG_FILE" >&2
+      return 1
+    fi
   fi
 
   public_ledger_collect_synced_ledgers "$ledgers_file" || return 1
@@ -308,6 +417,51 @@ validate_public_ledger_citations() {
   return "$overall_status"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+public_ledger_usage() {
+  printf 'usage: %s [--mode dev-predictive|mirror]\n' "$(basename -- "${BASH_SOURCE[0]}")" >&2
+}
+
+# Parse CLI arguments into PUBLIC_LEDGER_MODE. Unknown flags, a --mode with no
+# value, an unrecognized --mode value, and stray positionals are all argument
+# errors: print a named usage message and return 2 (distinct from the exit-1
+# setup/validation failures the validator itself reports).
+public_ledger_parse_args() {
+  PUBLIC_LEDGER_MODE=dev-predictive
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --mode)
+        if [ "$#" -lt 2 ]; then
+          printf 'ERROR: --mode requires a value\n' >&2
+          public_ledger_usage
+          return 2
+        fi
+        PUBLIC_LEDGER_MODE="$2"
+        shift 2
+        ;;
+      *)
+        printf 'ERROR: unrecognized argument: %s\n' "$1" >&2
+        public_ledger_usage
+        return 2
+        ;;
+    esac
+  done
+
+  case "$PUBLIC_LEDGER_MODE" in
+    dev-predictive|mirror) ;;
+    *)
+      printf 'ERROR: unrecognized --mode value: %s\n' "$PUBLIC_LEDGER_MODE" >&2
+      public_ledger_usage
+      return 2
+      ;;
+  esac
+}
+
+public_ledger_main() {
+  public_ledger_parse_args "$@" || return $?
+  printf 'ownership_mode=%s\n' "$PUBLIC_LEDGER_MODE"
   validate_public_ledger_citations
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  public_ledger_main "$@"
 fi

@@ -80,6 +80,7 @@ const MIGRATION_CANCEL_TOO_LATE_MESSAGE: &str =
 const SOURCE_PROVIDER_UNSUPPORTED_CODE: &str = "source_provider_unsupported";
 const SOURCE_PROVIDER_UNSUPPORTED_MESSAGE: &str = "Source provider is not supported";
 const SOURCE_PROVIDER_PAYLOAD_MISMATCH_CODE: &str = "source_provider_payload_mismatch";
+pub(super) const TYPESENSE_WRITE_FREEZE_REQUIRED_MESSAGE: &str = "Public export exposes no stable capture marker. Require an external write freeze/attestation and refuse capture when it cannot be established; pre/post count and creation time are only diagnostics.";
 /// Upstream Meilisearch error code for a key that lacks the requested action.
 const MEILISEARCH_INVALID_API_KEY_CODE: &str = "invalid_api_key";
 const PRIVACY_SCRUB_UNKNOWN_TARGET_CODE: &str = "privacy_scrub_unknown_target";
@@ -164,6 +165,9 @@ pub struct MigrateFromTypesenseRequest {
     /// imports still refuse overwrite requests.
     #[serde(default)]
     pub overwrite: bool,
+
+    #[serde(rename = "sourceWriteFrozen", default)]
+    pub source_write_frozen: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -2325,6 +2329,7 @@ fn typesense_source_reader(
         &payload.node,
         &payload.api_key,
         &payload.source_index,
+        payload.source_write_frozen,
     );
     admitted.or_else(|vendor_refusal| {
         typesense_loopback_source_reader(payload).map_err(|_| vendor_refusal)
@@ -2351,6 +2356,7 @@ fn typesense_loopback_source_reader(
     Ok(source_reader::TypesenseSourceReader::from_source(
         &payload.source_index,
         source,
+        payload.source_write_frozen,
     ))
 }
 
@@ -2365,6 +2371,7 @@ fn preview_typesense_source_reader(
     Ok(source_reader::TypesenseSourceReader::from_source(
         &payload.source_index,
         source,
+        payload.source_write_frozen,
     ))
 }
 
@@ -2473,6 +2480,12 @@ fn validate_typesense_migration_request(
         return Err(json_error_parts(
             StatusCode::BAD_REQUEST,
             "node, apiKey, and sourceIndex are required",
+        ));
+    }
+    if !payload.source_write_frozen {
+        return Err(json_error_parts(
+            StatusCode::BAD_REQUEST,
+            TYPESENSE_WRITE_FREEZE_REQUIRED_MESSAGE,
         ));
     }
 

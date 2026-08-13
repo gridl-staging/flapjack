@@ -547,6 +547,15 @@ const integrationStepNames = workflowSteps().filter((step) => (
   && npmScriptFromCommand(runCommandFromStep(step))
 ));
 const migrationSelectingSteps = workflowSteps().filter((step) => stepSelectsMigrationSpec(step, migrationOwners, migrationSpec));
+const dashboardBuildSteps = workflowJobSteps(ciWorkflowPath, 'dashboard-build');
+const auditFixtureStepIndex = dashboardBuildSteps.findIndex((step) => (
+  runCommandFromStep(step) === 'bash scripts/audit_gate_fixture_test.sh'
+  && step.lines.some((line) => line.trim() === 'working-directory: engine/dashboard')
+));
+const liveAuditStepIndex = dashboardBuildSteps.findIndex((step) => (
+  runCommandFromStep(step) === 'bash scripts/audit_gate.sh'
+  && step.lines.some((line) => line.trim() === 'working-directory: engine/dashboard')
+));
 const dashboardFullE2eJob = workflowJobBlock(ciWorkflowPath, 'dashboard-full-e2e');
 const nightlyPageStep = workflowSteps().find((step) => (
   step.workflow === 'nightly.yml' && step.name === 'Run page tests'
@@ -603,6 +612,12 @@ check(
 check(
   migrationSelectingSteps.length > 0 && migrationSelectingSteps.every(stepHasAlgoliaEnv),
   'every workflow step selecting migrate-algolia.spec.ts carries ALGOLIA_APP_ID and ALGOLIA_ADMIN_KEY',
+);
+check(
+  auditFixtureStepIndex !== -1
+    && liveAuditStepIndex !== -1
+    && auditFixtureStepIndex < liveAuditStepIndex,
+  'dashboard-build runs the deterministic audit fixture suite before the live production audit',
 );
 check(
   nightlyPageReportDirectory !== '' && nightlyPageReportDirectory !== 'playwright-report',

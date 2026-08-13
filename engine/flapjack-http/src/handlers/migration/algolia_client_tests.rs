@@ -1,12 +1,12 @@
 use super::*;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::convert::Infallible;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 #[derive(Debug)]
@@ -672,7 +672,25 @@ fn dedupe_targets(targets: Vec<String>) -> Vec<String> {
 }
 
 fn spawn_loopback_sink(max_hits: usize) -> (SocketAddr, Arc<AtomicUsize>, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback sink should bind");
+    // A cancelled reqwest connect task can finish after its owning test returns.
+    // Never recycle a sink port in this process: otherwise a late connection for
+    // the previous specimen can be accepted by the next specimen's listener and
+    // falsely reported as a pin bypass without a lookup on its resolver.
+    static USED_SINK_PORTS: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
+    let listener = loop {
+        let candidate = TcpListener::bind("127.0.0.1:0").expect("loopback sink should bind");
+        let candidate_port = candidate
+            .local_addr()
+            .expect("loopback sink address")
+            .port();
+        let mut used_ports = USED_SINK_PORTS
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .expect("loopback sink port registry mutex poisoned");
+        if used_ports.insert(candidate_port) {
+            break candidate;
+        }
+    };
     listener
         .set_nonblocking(true)
         .expect("loopback sink should become nonblocking");
@@ -680,15 +698,27 @@ fn spawn_loopback_sink(max_hits: usize) -> (SocketAddr, Arc<AtomicUsize>, thread
     let sink_hits = Arc::new(AtomicUsize::new(0));
     let server_hits = Arc::clone(&sink_hits);
     let server = thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_millis(900);
+        // Budget ~900ms per specimen so the sink stays alive for the whole loop.
+        // A fixed deadline would let later specimens' connect attempts land after
+        // the listener already exited, leaving sink_hits at 0 whether the policy
+        // blocked the connect or leaked it — a false green under load.
+        let deadline =
+            std::time::Instant::now() + Duration::from_millis(900) * max_hits.max(1) as u32;
         while std::time::Instant::now() < deadline && server_hits.load(Ordering::SeqCst) < max_hits
         {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    server_hits.fetch_add(1, Ordering::SeqCst);
                     let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
                     let mut buffer = [0_u8; 1024];
-                    let _ = stream.read(&mut buffer);
+                    let read = stream.read(&mut buffer).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]).to_ascii_lowercase();
+                    // This suite runs on a shared host where unrelated health
+                    // probes can reach ephemeral loopback ports. Count only a
+                    // request carrying this specimen's Algolia credential;
+                    // anonymous TCP connects are not evidence about this client.
+                    if request.contains("x-algolia-api-key: key") {
+                        server_hits.fetch_add(1, Ordering::SeqCst);
+                    }
                     let _ = write!(
                         stream,
                         "HTTP/1.1 200 OK\r\ncontent-length: 2\r\ncontent-type: application/json\r\n\r\n{{}}"

@@ -148,6 +148,44 @@ describe('migrateHelpers', () => {
     });
   });
 
+  it('includes a write-freeze attestation only for checked Typesense requests', () => {
+    const sharedRequest = {
+      firstCredentialValue: 'credential',
+      apiKey: 'key',
+      sourceIndex: 'products',
+      targetIndex: '',
+      overwrite: false,
+    };
+
+    expect(buildMigrationRequestBody({
+      ...sharedRequest,
+      provider: MIGRATION_PROVIDER_DESCRIPTORS[2],
+    })).not.toHaveProperty('sourceWriteFrozen');
+    expect(buildMigrationRequestBody({
+      ...sharedRequest,
+      provider: MIGRATION_PROVIDER_DESCRIPTORS[2],
+      sourceWriteFrozen: false,
+    })).not.toHaveProperty('sourceWriteFrozen');
+    expect(buildMigrationRequestBody({
+      ...sharedRequest,
+      provider: MIGRATION_PROVIDER_DESCRIPTORS[2],
+      sourceWriteFrozen: true,
+    })).toEqual({
+      node: 'credential',
+      apiKey: 'key',
+      sourceIndex: 'products',
+      sourceWriteFrozen: true,
+    });
+
+    for (const provider of MIGRATION_PROVIDER_DESCRIPTORS.slice(0, 2)) {
+      expect(buildMigrationRequestBody({
+        ...sharedRequest,
+        provider,
+        sourceWriteFrozen: true,
+      })).not.toHaveProperty('sourceWriteFrozen');
+    }
+  });
+
   it('builds discovery credentials from the same provider descriptors as submit', () => {
     expect(
       MIGRATION_PROVIDER_DESCRIPTORS.map((provider) => (

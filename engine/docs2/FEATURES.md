@@ -3,7 +3,67 @@
 Canonical shipped capability and production-readiness snapshot for Flapjack.
 Open and future work is owned only by [`ROADMAP.md`](../../ROADMAP.md).
 
-**Last updated: 2026-08-07 evening.** **The console now migrates from all three source providers,
+**Last updated: 2026-08-12.** The combined local integration adds a closed, executable bounded-ingress
+contract to the already-shipped Events / Insights API. Tenant authorization remains enforced; the configured
+allowance accepts exactly two requests, the first excess request returns exact HTTP 429, and the rejected
+event appears in neither debug output nor analytics. The synchronized owners are
+`engine/tests/test_tenant_isolation.rs` and `engine/tests/events_rate_limit_http_probe.sh`; the complete
+tenant-isolation target is now 11 passed / 0 failed. **Bounded ingress closed 2026-08-12 as `SEC-EVENTS-2`.**
+The existing shared limiter was sufficient, so no production limiter/code repair was required. This work is
+merged locally but unreleased; public distribution remains owned by `ROADMAP.md` row `SYNC-1`.
+`TEST-FLAKE-1` remains open: its signal-based repair and three later specimen passes are real, the historical
+deterministic pre-fix reproducer is absent, and the disposition remains `keep_open`. *The 2026-08-10 entry
+follows for historical context.*
+
+**Last updated: 2026-08-10 evening.** **No product capability shipped in the 36 hours to this entry, and
+the headline claim in the 2026-08-09 entry below has since been falsified by measurement.** Four things
+are true right now and each was measured, not recalled. **(1) The staging scheduled nightly green did NOT
+recur.** The 2026-08-08 `success` was real, but the two scheduled runs after it — 2026-08-09 and
+2026-08-10 — both concluded `failure`, as did a 2026-08-09 dispatch. The 2026-08-10 failure is one job,
+`Rust all tests`, on one test:
+`ledger_closed_row_consistency_test::no_closed_roadmap_row_is_still_listed_as_open_work`, reporting two
+findings that are both the closed row `TEST-FLAKE-2` still named as open work. **That is a
+documentation-consistency gate, not a product defect, and it is already green on `main`** (4 passed
+locally) — it was repaired on 2026-08-09, four hours *after* the staging mirror was published at its
+pinned source SHA. Staging has therefore been red for two nights on a defect this repository fixed two
+days ago; the repair reaches it through a sync, not through code. **(2) Mirror lag grew on both sides:**
+staging `70`, prod `591` with `0/8` workflow exports — the `539` and `484` figures earlier entries carry
+are superseded. Prod's scheduled nightly streak is now **34** consecutive failures (2026-07-08 through
+2026-08-10), not the 31 the ledger states. **(3) The full-workspace `nextest` liveness red is diagnosed
+and it is NOT a product defect.** Under a matched 18-way/12-way admission experiment at one tree, the
+specimen's `RequestStart` p99 is **0 ms** while its `ScheduledDeadline` p99 is 278–430 ms: once a request
+starts it is served instantly, and the tail is time spent waiting for a Tokio worker on an oversubscribed
+host. The repair is in flight and unmerged. **(4) Two consecutive measurement lanes produced VOID
+results** — see `Testing & Quality Assurance`. **One previously-untracked launch blocker is filed in this
+entry rather than left in a handoff:** `/1/events` and `/1/events/debug` require only the `search` ACL and
+their handlers receive no key extension at all, so a browser-embedded search key can write events tagged
+with any index and read every tenant's buffered events including `user_token`. It is now `PR-17` in
+Tier 1 and `SEC-EVENTS-1` in [`ROADMAP.md`](../../ROADMAP.md). Nobody is exposed today because nobody runs
+Flapjack; it must be closed before anyone can be asked to. **Superseded later the same evening: the repair
+landed at `561cce36b` and `SEC-EVENTS-1` closed 2026-08-10** — see the `PR-17` Tier 1 row and the
+`Insights-route tenant authorization` security row, both now recording the close. The customer-ingress
+abuse-rate contract was still open on 2026-08-10; the later 2026-08-12 local close supersedes that historical
+state. *2026-08-09 entry follows, still accurate for
+its own subject except where the four findings above supersede it.*
+
+**Last updated: 2026-08-09.** Three things shipped since the 2026-08-07 entry below, and none of them
+is a new product capability — all three are distribution or proof surfaces, which is what
+[`PROJECT_OVERVIEW.md`](../../PROJECT_OVERVIEW.md) says the remaining work is. **(1) The Go SDK's
+credential leak is fixed for consumers.** `github.com/flapjackhq/flapjack-search-go/v4` `v4.0.1` is
+published with `v4.0.0` retracted; a clean-room `go get @latest` resolves `v4.0.1`, and a
+request-counting proof observed two Flapjack hosts and **zero** Algolia host attempts. Three GitHub
+Security Advisories are published (`GHSA-jc2w-7wq6-r5w7` Go, `GHSA-jhcc-64c6-pfq2` Python,
+`GHSA-q67x-w5fw-5mw2` Ruby). **The PyPI and RubyGems packages are still unfixed and still leak** —
+read the SDK table's published-artifact rows below, not the per-language smoke-test rows, before
+telling anyone a language is safe. **(2) The in-process workspace union is now a recurring CI reader**
+(`.github/workflows/union.yml`, scheduled 06:00 UTC), so the ~2.5-hour `cargo test --workspace` that
+only ever ran on one contended developer Mac runs on a free runner instead. **(3) The dashboard
+join manifest has a wired validator** (`npm run check:join-manifest`, run by `ci.yml`'s
+`dashboard-build` job). **One gate is red at the time of writing:** the full-workspace
+`cargo nextest run --workspace` fails one load-sensitive specimen,
+`flapjack-http::write_runtime_isolation::single_worker_runtime_serves_count_during_injected_two_second_commit`
+— see **Testing & Quality Assurance** below. Mirror parity is unchanged for prod: staging carries
+this state, prod does not. *2026-08-07 entry follows, still current for its own subject:* **The console now migrates from all three source providers,
 offers a translation-report dry-run before any write, and that whole flow is browser-proven** — locally
 against real containerised sources and, for the first time, remotely on Linux CI. `engine/dashboard/src/pages/migrateHelpers.ts`
 carries a three-entry `MIGRATION_PROVIDER_DESCRIPTORS` array (`algolia`, `meilisearch`, `typesense`) driving
@@ -34,8 +94,20 @@ the scheduled `migration-import-contract` job, alongside a release-profile const
 was chosen over widening the developer flag set because the contract's measured wall-clock is `171.13`s cold and it
 starts Docker containers. This supersedes the standing residual here, which said the contract was an explicit
 `engine/_dev/s/test --migration-release-loopback` selector absent from `--all`, `--ci`, and every workflow.
-**`ROADMAP.md` row `MIG-22` stays open on its second clause only** — the console migration's joined proof keys
-`P30`/`P31`, which are `JOIN-1`'s re-run and not a defect in this capability.
+**`ROADMAP.md` row `MIG-22` closed 2026-08-10 on both clauses.**
+Clause (1), the recurring gate, is **met**: `.github/workflows/nightly.yml:242` runs
+`engine/tests/migration_release_loopback_contract.sh` in the scheduled `migration-import-contract`
+job, measured at 171.13 s cold, with `engine/tests/migration_release_loopback_recurring_gate_test.rs`
+reding if that invocation is removed. Clause (2) — the console migration's joined proof keys
+`P30`/`P31` — was **retired explicitly on 2026-08-10 rather than met**, because its declared closing
+partner evaporated: it was to close alongside `JOIN-1`, and `JOIN-1` was retargeted 2026-08-08 away
+from producing any numerator, so the aggregate join-report is no longer a valid owner. The capability
+the clause protected is covered by the shipped-profile contract above, re-measured 2026-08-10 at
+**26/26 arms, exit 0, 488 s wall clock**, whose four positive arms drive discovery, submit, terminal
+polling, acknowledgement, and landed search for both providers against a real containerised source on
+a `--release` binary. The browser half of that story closed under `MIG-21` on 2026-08-07 and is not
+re-derived here. **Do not satisfy or revive this by re-running the join proof, and do not read the
+retirement as claiming a new joined-proof numerator** — none is claimed.
 
 **`v1.0.11` published 2026-08-06** — the first release since 2026-06-09 and the first time any engine change
 reaches a user by either the OSS installer or the Flapjack Cloud engine AMI, which bakes from the same
@@ -46,8 +118,9 @@ bulk-replace upload with `413` before the spool is touched (`MIG-18`); deletion 
 snapshot helpers, leaving `FLAPJACK_SNAPSHOT_KEY_FILE` / `FJSNAPE1` as the single snapshot-encryption scheme
 (`SEC-G5`); and the loadtest readiness ownership guard reaching every live caller (`PL-15`). Static PEM
 startup, ACME-backed hot rotation, mandatory replication-peer credentials, and credentialed-cleartext refusal
-remain shipped. The React dashboard is a maintained, first-class surface; earlier "deferred to the Svelte
-console" dispositions are superseded.
+remain shipped. The React dashboard remains the shipping UI and must still receive fixes, but new routes are
+frozen while ADR 0006's Svelte console proceeds toward a parity-gated cutover; shipped capability in this
+tree is not evidence that the replacement decision was superseded.
 
 **A full `Nightly Tests` run went green on 2026-08-07 for the first time since 2026-07-07 — and it was a
 manual dispatch, not a scheduled run, which is the only reading this file will support.** Staging run
@@ -73,7 +146,7 @@ as carrying current *prod* nightly proof. Open work remains canonical in [`ROADM
 
 - **Backend API:** 197/197 complete (as of 2026-03-13). The full parity verification is retained in the dev repo's internal audit history.
 - **Dashboard UI:** `dashboard/src/App.tsx` defines 24 derived user-facing route patterns from 24 raw `path=` attributes and two attribute-less index routes, backed by 22 lazy page components; the wildcard has no lazy component and `Overview` serves two patterns. No scaffolded stubs remain.
-- **E2E Browser Tests:** The `JOIN-1` denominator is manifest-derived rather than recalled: **96 backend rows, 69 dashboard routes, 65 joinable rows, and 34 proof keys, with 0 unresolved mappings**. **`JOIN-1` remains OPEN with no current numerator.** The 2026-08-07 receipt [`4_EVIDENCE/2026_08_07_aug07_8pm_2_join_proof_receipt.md`](4_EVIDENCE/2026_08_07_aug07_8pm_2_join_proof_receipt.md) records that the only artifact on disk was an explicitly labelled subset proxy, whose report output was 60 passed / 1 red / 0 skipped / 4 not-run / 0 unresolved over 65 joinable rows. That is proxy attribution, **not full-suite proof**: within it `P29` and `P34` are not-run and `P35` is red. The `59 / 59` numerator and the `61` rows / `30` keys figures this bullet used to carry are superseded — **do not copy `59`, `61`, or `65` forward as a numerator**, and a capability-gated skip is never counted toward one. The closure predicate and the live joined-proof claim are canonical in [`ROADMAP.md`](../../ROADMAP.md) row `JOIN-1`; the spec-file inventory and harness state are owned by the `E2E Browser Tests (Playwright)` section below.
+- **E2E Browser Tests:** The `JOIN-1` denominator is manifest-derived rather than recalled: **96 backend rows, 69 dashboard routes, 65 joinable rows, and 34 proof keys, with 0 unresolved mappings**. **Updated 2026-08-08: `JOIN-1` is OPEN and RETARGETED — there is no joined-proof numerator and none is being produced**, because ADR 0006 deletes this tree at cutover. The manifest survives as the console port map and now has a wired validator (`npm run check:join-manifest`, green at `96 checked / 90 resolved / 0 mismatched / 6 shape-exempt`, run by `ci.yml`'s `dashboard-build`). The `59 / 59` numerator and the `61` rows / `30` keys figures this bullet used to carry are superseded — **do not copy `59`, `61`, or `65` forward as a numerator**, do not read the absence of one as a failing score, and a capability-gated skip is never counted toward one. Historical subset-proxy attribution (60 passed / 1 red / 0 skipped / 4 not-run over 65 joinable rows, with `P29`/`P34` not-run and `P35` red *inside the proxy*) is preserved in the 2026-08-07 `aug07_8pm_2` join-proof receipt, a dev-repo evidence artifact not cited by path here because it is outside the public sync surface. The closure predicate is canonical in [`ROADMAP.md`](../../ROADMAP.md) row `JOIN-1`; the spec-file inventory and harness state are owned by the `E2E Browser Tests (Playwright)` section below.
 - **Tour Video Walkthroughs:** Removed 2026-07-30 — the system depended on an external tool at a local path that no longer exists and had been unrunnable since 2026-04-14. Dashboard end-to-end proof is the Playwright e2e-ui suite.
 - **Load & Stress Testing:** k6 suite in `engine/loadtest/` — smoke, search throughput, write throughput, mixed workload, spike, memory-pressure, plus the long-running `mixed-soak` / `write-soak` scenarios and `soak_proof.sh` restart harness. PL-10's post-fix 60-minute Stage 3 mixed-soak gate (run date 2026-05-27) is classified `failure`, while the public write contract remained intact (no write `5xx`, no unexpected write `4xx`). Keep detailed lane status in [`ROADMAP.md`](../../ROADMAP.md), with measured verdict/evidence paths retained in private stage artifacts. Large-dataset benchmarking (100k docs): deterministic generator (`generate_dataset.mjs`), import throughput (`import_benchmark.sh`), search latency by query type (`search_benchmark.sh`), k6 concurrent load (`benchmark_k6.sh`), and dashboard large-index perf test (`large-index-perf.spec.ts`).
 - **Architecture decisions:** `3_IMPLEMENTATION/decisions/active/`
@@ -81,6 +154,23 @@ as carrying current *prod* nightly proof. Open work remains canonical in [`ROADM
 ## Public Sync Lineage Ledger (Canonical)
 
 This is the detailed public-sync lineage ledger. Current strategic priority order is owned by [`PROJECT_OVERVIEW.md`](../../PROJECT_OVERVIEW.md), current open-work state is owned by [`ROADMAP.md`](../../ROADMAP.md), and release truth is owned by [`CHANGELOG.md`](../../CHANGELOG.md); v1.0.11, published 2026-08-06 by prod `release.yml` run `31096713795`, is the latest ship in the v1.0 line and supersedes v1.0.10 (2026-06-09). **Flapjack has no users and no customers** — see [`PROJECT_OVERVIEW.md`](../../PROJECT_OVERVIEW.md). Corrected 2026-08-03: this sentence previously overstated the release's commercial adoption.
+
+**Historical mirror snapshot, measured 2026-08-09 by `bash engine/_dev/s/mirror_lag_probe.sh` — never by a
+commit range, and never inferred from `.debbie.toml`.** This table preserves that dated measurement;
+[`ROADMAP.md`](../../ROADMAP.md) owns live mirror state. The two public mirrors were in very different
+states, and conflating them repeatedly produced false product verdicts:
+
+| Mirror | State | Consequence |
+|---|---|---|
+| `gridl-staging/flapjack` | **Published snapshot.** Published 2026-08-08 at pinned dev source `83234fa9c`; `workflow_exports=8/8`; lag reduced from 80 to 18. | Staging push CI and a **scheduled** staging nightly were green end to end, the latter being the first scheduled green anywhere since 2026-07-07. |
+| `flapjackhq/flapjack` (prod) | **Stale in this snapshot.** `dev_sha=1b32cf727`, lag `539`, `workflow_exports=0/8`. Byte-identical `dev_sha` before and after the 2026-08-08 publish attempt — prod was **not** mutated. | Prod CI and prod nightly were re-running a harness that was missing all eight `FLAPJACK_*` backend-start exports. **Their red was a stale-mirror artifact, not a product defect**, and must not be read as one: `ROADMAP.md` rows `NIGHT-1` and `CI-E2E-1` were both blocked on this sync and neither needed code. |
+
+The 2026-08-08 publish took its `no_publish` arm from a four-clause gate that recorded
+`a=true b=false c=false d=false`. **The refusal was the gate working**, and its two evaluable
+failures were a ledger-consistency assertion already repaired on dev at `a3bc39047` plus a charter
+that named a non-existent artifact — neither a product defect. Owner:
+[`ROADMAP.md`](../../ROADMAP.md) row `SYNC-1`. Every `debbie sync` and every publication requires
+explicit operator authorization; local branches, worktrees, validation, and dispatch do not.
 
 May 22 OSS polish wave status facts (lanes A-F) and the v1.0.3 public-beta cut remain canonical historical lineage in the existing rows below; they are preserved as lineage, not as the current release baseline.
 
@@ -264,8 +354,8 @@ All shipped capability status lives in the feature tables below (Search, Indexin
 |---|---|---|
 | Search query logs | ✅ | |
 | Analytics API (top queries, no-results, no-clicks) | ✅ | |
-| Events / Insights API | ✅ | click, conversion, view events with position tracking |
-| Event Debugger | ✅ | Per-index event stream inspection |
+| Events / Insights API | ✅ | click, conversion, view events with position tracking. **Authorization enforced since 2026-08-10 (`561cce36b`, closed as `SEC-EVENTS-1` / `PR-17`):** both insights handlers take the key/app-id extensions and authorize every event target through the shared analytics index-access enforcement before recording any item; mixed-index batches fail atomically, and a search-only or index-restricted key posting outside its scope receives `403`. **Bounded ingress closed 2026-08-12 as `SEC-EVENTS-2`:** the configured allowance accepts two requests, the first excess returns exact 429, and the rejected event is absent from debug and analytics. Synchronized executable owners: `engine/tests/test_tenant_isolation.rs` and `engine/tests/events_rate_limit_http_probe.sh`; the whole target is 11 passed, 0 failed. The existing shared limiter was sufficient; no production limiter/code repair was required. Merged locally, unreleased. |
+| Event Debugger | ✅ | Per-index event stream inspection, tenant-scoped since 2026-08-10 (`561cce36b`): `GET /1/events/debug` requires the `analytics` ACL, reads are filtered to indexes the caller's key may access, and filtered reads cannot expose another tenant's events or `user_token`; a search-only key receives `403`. Same close: `SEC-EVENTS-1` / `PR-17`. |
 | A/B Testing (experiments) | ✅ | Traffic split, variant tracking, winner selection. List filtering uses exact `indexName` matching separately from `indexPrefix`/`indexSuffix`; owner: `engine/flapjack-http/src/handlers/experiments/mod.rs::list_experiments`. |
 | Usage metering | ✅ | Per-key, per-index operation counts |
 | Analytics retention cleanup | ✅ | Partition-based retention cleanup is configurable with `FLAPJACK_ANALYTICS_RETENTION_DAYS`, defaults to 90 days, skips malformed/non-partition paths, and is covered by deterministic cutoff tests. |
@@ -293,6 +383,7 @@ All shipped capability status lives in the feature tables below (Search, Indexin
 | Security Sources / Vault | ✅ | Secrets injection for external sources |
 | Secured API keys (signed) | ✅ | Malformed/non-UTF-8-boundary secured keys are rejected as `400`, not a parser panic (2026-07-31). |
 | Route authorization default | ✅ | Fail-closed: a path matching no ACL rule is denied rather than allowed through (`RouteAcl::Unmapped`, 2026-07-31). |
+| Insights-route tenant authorization | ✅ | **Fixed 2026-08-10 at `561cce36b`; filed and closed the same day as `SEC-EVENTS-1` / `PR-17`.** The original defect: `extract_index_name` matched only `/1/indexes/<name>/…`, so `/1/events` was never authorized, and both insights handlers took only `State(collector)`, so neither could enforce anything even in principle. The repair follows the exit as named: both handlers take the key/app-id extensions and call the shared analytics index-access enforcement before any side effect, `/1/events/debug` is raised above `search` to the `analytics` ACL with the debug buffer filtered by tenant, and the pinning test `acl_events_search` was re-pointed rather than extended. Current combined-tree regression proof: `(cd engine && timeout 1200 cargo test --no-fail-fast -p flapjack --test test_tenant_isolation)` → 11 passed, 0 failed. |
 | Admin credential transport | ✅ | Admin-ACL routes accept the key only in the `x-algolia-api-key` header; the query-string form is refused so admin keys stay out of logs, shell history, and proxy access logs. Search-scoped keys keep query-string support for browser clients (2026-07-31). |
 | Analytics client-IP minimization | ✅ | Persisted analytics coarsen the client IP before write (IPv4 → /24, IPv6 → /48); the full address is never stored (2026-07-31). |
 | Container runtime posture | ✅ | The image runs as non-root `flapjack:flapjack` at fixed UID/GID `10001:10001`, and refuses to start with an actionable non-zero exit when `/data` is not writable (2026-07-31). |
@@ -300,7 +391,7 @@ All shipped capability status lives in the feature tables below (Search, Indexin
 | Server-side TLS | ✅ | Static PEM startup plus ACME-backed hot rotation are shipped. Startup fails closed for unreadable, malformed, incomplete, or mismatched material. A valid renewed generation updates the next TLS handshake without rebinding the listener or restarting the process; malformed publication keeps serving the last valid certificate. Plaintext HTTP-01 challenges remain reachable while other plaintext API requests stay rejected. Receipts: `4_EVIDENCE/2026_08_03_aug03_11am_3_acme_material_lifecycle_receipt.md` and `2026_08_03_aug03_11am_7_tls_hot_reload_receipt.md`. |
 | Security audit event coverage | ✅ | Eleven audited actions — `authenticate`, `create_key`, `update_key`, `delete_key`, `restore_key`, `generate_secured_key`, `delete_index`, `set_settings`, `import_snapshot`, `restore_snapshot_from_s3`, `rotate_admin_key` — over two outcomes (`success`, `failure`), each carrying actor / action / target / outcome. Targets are mapped through a bounded route-template vocabulary, so no key material, header value, or query payload reaches an event. Emission is consolidated in one owner, `engine/flapjack-http/src/security_audit.rs` (2026-08-01). Per `SD-006` the engine emits a structured stream and does **not** own durable retention — this does not close fjcloud's audit-trail control. |
 | Snapshot server-side encryption (S3) | ✅ | S3 snapshot uploads set server-side encryption rather than relying on bucket defaults: `AES256` when `FLAPJACK_S3_SSE` is unset, or `aws:kms` with an optional `FLAPJACK_S3_SSE_KMS_KEY_ID`; any other value is a startup-time error. The response SSE header is verified rather than assumed. Source: `engine/src/index/s3.rs`; probe: `engine/tests/s3_sse_http_probe.sh` (2026-08-01). |
-| Snapshot at-rest encryption (local export) | ⚠️ | `export_to_bytes` / `import_from_bytes` support optional AES-256-GCM-SIV encryption through `FLAPJACK_SNAPSHOT_KEY_FILE`; the pinned four-case producer/consumer symmetry probe passed. `export_to_tarball` / `import_from_tarball` remain plaintext helpers, so the surviving helper scope stays open as `SEC-G5`. |
+| Snapshot at-rest encryption (local export) | ✅ | `export_to_bytes` / `import_from_bytes` support optional AES-256-GCM-SIV encryption through `FLAPJACK_SNAPSHOT_KEY_FILE`; the pinned four-case producer/consumer symmetry probe passed. The unused plaintext `export_to_tarball` / `import_from_tarball` helpers were deleted in `98b4790838dc9c090a0dd3cc9b054a858bef3ffc`, closing `SEC-G5`; the canonical security control register owns the terminal disposition. |
 | S3 failure propagation | ✅ | Upload, delete, **and list** reject non-success HTTP responses, and retention call sites propagate or log those failures. `list_snapshots` checks the ListObjectsV2 status before parsing the body and returns `S3("S3 list: HTTP <status>")` instead of a downstream XML parse error (2026-08-02). All three focused regressions exist — `upload_snapshot_fails_loudly_when_bucket_rejects_the_put`, `delete_snapshot_fails_loudly_when_bucket_rejects_delete`, `list_snapshots_fails_loudly_when_bucket_rejects_list` — and `cargo test -p flapjack --lib -- index::s3::tests` reported `14 passed`. Closes `ROADMAP.md` row `DUR-2`. Source: `engine/src/index/s3.rs`; receipt: [`4_EVIDENCE/2026_08_02_aug02_11am_3_s3_list_failure_propagation_receipt.md`](4_EVIDENCE/2026_08_02_aug02_11am_3_s3_list_failure_propagation_receipt.md). |
 | Replication peer authentication | ⚠️ | A distinct configured peer credential serves replication and is provably refused on `add_cluster_peer`, `remove_cluster_peer`, and `rotate_admin_key` by `engine/tests/replication_peer_auth_http_probe.sh`; receipt: the reviewed private replication peer auth receipt. **Both `SEC-G9` residuals closed 2026-08-02.** The credential is no longer optional: `startup.rs::validate_replication_peer_credential` refuses to start a node that configures replication peers without `FLAPJACK_REPLICATION_API_KEY`. Cleartext peer transport is refused by default: `flapjack-replication/src/config.rs::NodeConfig::validate_credentialed_peer_transport` rejects an `http://` peer origin that would carry a credential — across static, persisted, bootstrap, and runtime `POST /internal/cluster/peers` paths — unless `FLAPJACK_ALLOW_CLEARTEXT_REPLICATION_PEERS=1` is set explicitly. Background rollup fan-out (`analytics_cluster.rs::push_rollup_to_peers`) now authenticates with the peer credential instead of running unauthenticated. Receipts: [`4_EVIDENCE/2026_08_02_aug02_11am_4_replication_peer_identity_receipt.md`](4_EVIDENCE/2026_08_02_aug02_11am_4_replication_peer_identity_receipt.md), [`4_EVIDENCE/2026_08_03_aug03_5am_0_runtime_peer_transport_regression_receipt.md`](4_EVIDENCE/2026_08_03_aug03_5am_0_runtime_peer_transport_regression_receipt.md). Operator upgrade path: [`3_IMPLEMENTATION/OPERATIONS.md`](3_IMPLEMENTATION/OPERATIONS.md) rolling-upgrade runbook. |
 | Dashboard session credential storage | ✅ | **Shipped 2026-08-03, closing `ROADMAP.md` row `SEC-G3`.** The console no longer keeps admin credentials where a same-origin script can read them. It exchanges the key once at `POST /1/dashboard/session` for a server-owned `HttpOnly; SameSite=Strict; Path=/` cookie (`Secure` when served over TLS); `DELETE /1/dashboard/session` revokes server-side. `engine/dashboard/src/hooks/useAuth.ts` persists **only** `appId` through its zustand `partialize`, with a `migrate` that drops legacy persisted key material on upgrade, so an authenticated reload survives without the key ever returning to browser storage. The durable store is `engine/flapjack-http/src/auth/session.rs`: it mints, validates, revokes, and survives restart, persisting only a keyed fingerprint plus salted HMAC-SHA256 verifiers in a `0o600` `dashboard_sessions.json`, and the plaintext token and the admin key each appear **zero** times in the persisted bytes (17/17 focused tests green). Header-key auth is unchanged for SDKs, InstantSearch, and HTTP probes — only the browser console switched. **Fail-capability is proven at both tiers, not asserted:** with `HttpOnly` deliberately removed, `auth::tests::session_transport_tests` went `4 passed / 4 failed` and the browser probe failed at `session_auth.spec.ts:44`; restored, engine `8/8` and browser `3/3`. User contract: [`docs/screen_specs/login.md`](../../docs/screen_specs/login.md). Receipts: [`4_EVIDENCE/2026_08_03_aug03_5am_1_dashboard_session_store_foundation_receipt.md`](4_EVIDENCE/2026_08_03_aug03_5am_1_dashboard_session_store_foundation_receipt.md), [`4_EVIDENCE/2026_08_02_aug02_11am_8_dashboard_session_auth_receipt.md`](4_EVIDENCE/2026_08_02_aug02_11am_8_dashboard_session_auth_receipt.md). The private SD-009 security decision is superseded by this work. |
@@ -345,27 +436,51 @@ Env-var details for operational behavior are canonical in
 
 ## SDK & Widget Compatibility
 
+**Read this before the table.** The per-language rows below describe **wire compatibility of this
+repository's `sdks/` sources against a running Flapjack server**. They do not describe what a user
+gets from a package registry, and for two languages those are different things. The published
+Python and Ruby packages named `flapjack-search` still resolve **Algolia's** production hosts, so a
+caller's Flapjack admin key is transmitted to another vendor, rejected, and burned in that vendor's
+logs. The source correction has been in `sdks/` since 2026-07-16; only publication is outstanding.
+Per-channel state, measured 2026-08-09:
+
+| Published artifact | Consumer-safe? | State |
+|---|---|---|
+| `github.com/flapjackhq/flapjack-search-go/v4` | ✅ Yes, since `v4.0.1` | `v4.0.0` retracted with reason `Flapjack credentials could be sent to Algolia hosts`; clean-room `go get @latest` resolves `v4.0.1`; request-counting proof observed zero Algolia host attempts. Advisory `GHSA-jc2w-7wq6-r5w7`. |
+| PyPI `flapjack-search` | ❌ **No — do not use** | No fixed package is live. Advisory `GHSA-jhcc-64c6-pfq2` published with key-rotation guidance. Blocked on a registry credential, not on code: no `~/.pypirc` and no `TWINE_*` environment exist on the release host, and the inherited Algolia-owned release workflow was removed with no proven Flapjack-owned publish path. |
+| RubyGems `flapjack-search` | ❌ **No — do not use** | Same disposition as PyPI. Advisory `GHSA-q67x-w5fw-5mw2` published. Blocked on a missing `~/.gem/credentials` / `GEM_HOST_*`. |
+| Live owner source refs (Go, Python, Ruby) | ✅ Clean | Zero-hit outbound-host scan across Go 349 files / 1 branch, Python 759 / 1, Ruby 1457 / 2, against a starting inventory of 23 hits over 4 branches and 2,568 tree files. |
+
+Owner: [`ROADMAP.md`](../../ROADMAP.md) row `SDK-1`, open on clause `(d)` only. Public receipt:
+[`4_EVIDENCE/2026_08_08_aug08_9pm_2_sdk_receipt.md`](4_EVIDENCE/2026_08_08_aug08_9pm_2_sdk_receipt.md).
+Clause `(d)` needs an operator with registry credentials, not an engineer.
+
 | Client | Status | Verification |
 |---|---|---|
 | JavaScript / TypeScript (algoliasearch v5) | ✅ | 32 contract + 13 full-compat tests |
 | SDK contract CI gate | ✅ | Public CI runs `engine/sdk_test/contract_tests.js` against a built Flapjack server, protecting Algolia-compatible client behavior outside local-only scripts. |
 | PHP | ✅ | Smoke test |
-| Python | ✅ | Smoke test |
-| Ruby | ✅ | Smoke test |
-| Go | ✅ | Smoke test |
+| Python | ✅ source / ❌ **published package unfixed** | Smoke test against `sdks/` source. The PyPI artifact is not consumer-safe — see the published-artifact table above. |
+| Ruby | ✅ source / ❌ **published package unfixed** | Smoke test against `sdks/` source. The RubyGems artifact is not consumer-safe — see the published-artifact table above. |
+| Go | ✅ source and published | Smoke test; published `v4.0.1` verified consumer-safe from a clean room. |
 | Java | ✅ | Smoke test |
 | Swift | ✅ | Smoke test |
-| InstantSearch.js v5 | ✅ | 15 instantsearch contract tests |
-| React InstantSearch | ✅ | Via instantsearch.js proxy |
-| Vue InstantSearch | ✅ | Via instantsearch.js proxy |
-| Angular InstantSearch | ✅ | Via instantsearch.js proxy |
-| InstantSearch Android | ✅ | Via Kotlin client + Java smoke |
-| InstantSearch iOS | ✅ | Via Swift client + Swift smoke |
-| Autocomplete.js | ✅ | |
+| InstantSearch.js 4.111.0 | ✅ | Official package rendered in Chromium through `algoliasearch/lite` and an index-scoped search key; distinct exact query, facet, and pagination results |
+| React InstantSearch 7.44.0 | ✅ | Official React 18 package rendered in Chromium with the same scoped-key proof |
+| Vue InstantSearch 4.29.2 | ✅ | Official Vue 3 package rendered in Chromium with the same scoped-key proof |
+| Angular InstantSearch | ⚠️ | No rendered-client proof |
+| InstantSearch Android | ⚠️ | Kotlin/Java protocol smoke only; no rendered-client proof |
+| InstantSearch iOS | ⚠️ | Swift protocol smoke only; no rendered-client proof |
+| Autocomplete.js | ⚠️ | Multi-index API contract only; no rendered-client proof |
+
+The recurring real-client owner is
+`engine/sdk_test/browser_tests_unmocked/real_client_conformance.spec.mjs`; evidence and
+scope limits are recorded in
+[`4_EVIDENCE/2026_08_12_real_instantsearch_clients_receipt.md`](4_EVIDENCE/2026_08_12_real_instantsearch_clients_receipt.md).
 
 ## Source migration — PROVIDER-NEUTRAL CORE + ALGOLIA RESUME SHIPPED
 
-**Status as of 2026-08-06: node-local source discovery and preview ship for Algolia, Meilisearch, and Typesense; authenticated async migration supports all three source adapters, while interrupted-job resume remains Algolia-only. The console reaches all three providers and **all three are browser-proven** as of 2026-08-07 — corrected from an earlier "Algolia only" reading, which the `MIG-21` receipt and the 21-passed targeted three-provider run had already falsified. See the `Dashboard Migrate page` row below and [`ROADMAP.md`](../../ROADMAP.md) row `MIG-22`, which as of 2026-08-07 stays open only on its joined-proof clause (`P30`/`P31`, owned by `JOIN-1`) — its release-profile loopback contract reached a recurring scheduled gate in `nightly.yml` and the "runs in no recurring gate" reading is superseded.** Create-only import and `overwrite=true` replacement use the fenced publication owner. Successful async status projects the durable settings/synonym/rule outcome and warnings; non-success states omit that outcome rather than fabricating zeroes. HA-converging import remains refused by design in [`ROADMAP.md`](../../ROADMAP.md) row `MIG-7`. `MIG-4` is a separate publication-repair proof row, not part of this migration capability.
+**Status as of 2026-08-06: node-local source discovery and preview ship for Algolia, Meilisearch, and Typesense; authenticated async migration supports all three source adapters, while interrupted-job resume remains Algolia-only. The console reaches all three providers and **all three are browser-proven** as of 2026-08-07 — corrected from an earlier "Algolia only" reading, which the `MIG-21` receipt and the 21-passed targeted three-provider run had already falsified. See the `Dashboard Migrate page` row below and [`ROADMAP.md`](../../ROADMAP.md) row `MIG-22`, which **closed 2026-08-10**: its release-profile loopback contract reached a recurring scheduled gate in `nightly.yml` (so the "runs in no recurring gate" reading is superseded) and its joined-proof clause (`P30`/`P31`, formerly owned by `JOIN-1`) was retired explicitly once `JOIN-1` stopped producing a numerator.** Create-only import and `overwrite=true` replacement use the fenced publication owner. Successful async status projects the durable settings/synonym/rule outcome and warnings; non-success states omit that outcome rather than fabricating zeroes. HA-converging import remains refused by design in [`ROADMAP.md`](../../ROADMAP.md) row `MIG-7`. `MIG-4` is a separate publication-repair proof row, not part of this migration capability.
 
 **Operator CLI:** `flapjack migrate` uses one provider-neutral internal adapter/capture seam and one shared submit/status/cancel/acknowledge lifecycle across the public Algolia, Meilisearch, and Typesense route families. Resume remains Algolia-only. The served provider-parity probe proves local landed-data fidelity through real digest-pinned Meilisearch and Typesense containers: Meilisearch `configured_pk` lands two searchable documents with exact `sku`-to-`objectID` projections, and Typesense categories/products land one category plus two products with exact `id`-to-`objectID` projections. Receipt: `engine/docs2/4_EVIDENCE/2026_08_03_aug03_11am_5_competitor_migration_lands_data_receipt.md`; landed merge: `2c05776c7b9d8f60bae89c34ad819ece084fa2e4`. See the [`flapjack migrate` operator configuration](3_IMPLEMENTATION/OPS_CONFIGURATION.md#flapjack-migrate) for provider connections, secret sources, output, and exit behavior.
 
@@ -375,13 +490,16 @@ Env-var details for operational behavior are canonical in
 | Source preview (provider-neutral) | ✅ Shipped 2026-08-03 | `POST /1/migrations/{provider}/preview` is mounted and published in OpenAPI for all three public providers by the same router and lifecycle-macro owners. Typesense has a served `200` proof with its provider-specific request schema and settings translation report, recorded in a reviewed private Typesense preview-and-translation receipt. |
 | Meilisearch source adapter | ✅ Shipped | `engine/flapjack-http/src/handlers/migration/{meilisearch_client,meilisearch_source_reader,meilisearch_settings}.rs`; shared lifecycle owner `handlers/migration/mod.rs::define_source_migration_openapi_lifecycle!` |
 | Typesense source adapter | ✅ Shipped | `engine/flapjack-http/src/handlers/migration/{typesense_client,typesense_source_reader,typesense_settings}.rs`; reviewed private M2ET adapter receipt |
+| Typesense export stream traversal | ✅ Shipped 2026-08-11 | `TYPESENSE_EXPORT_STREAM_CONTRACT` in `engine/tests/typesense_migration_contract.sh` proves a 137-document export traverses the complete stream with exact IDs, one export request, no query pagination, and no discovery export request. |
+| Typesense write-freeze admission | ✅ Shipped 2026-08-12 | `TYPESENSE_WRITE_FREEZE_CONTRACT` in `engine/tests/typesense_migration_contract.sh` proves preview and submit refuse missing or false `sourceWriteFrozen` before source traffic, accept the explicit attestation, and keep Typesense resume unsupported without source requests. |
+| Typesense dashboard-to-source join | ✅ Browser-proven 2026-08-12 | `migrate-typesense.spec.ts` uses the real `e2e-ui` browser/server project and a real pinned Typesense source, asserts the attestation starts unchecked with preview and submit disabled, then drives discovery → preview → submit → terminal success → Browse and verifies the seeded `prod_1` Espresso record. This is path-specific joined proof; it does not create or revive a portfolio-wide `JOIN-1` numerator. |
 | Source export: Algolia → durable on-disk spool (checkpointed, resumable) | ✅ Shipped | `engine/flapjack-http/src/handlers/migration/{algolia_client,source_reader,export,spool}.rs` |
 | Translation: spool → Flapjack documents/settings/synonyms/rules | ✅ Shipped | `engine/flapjack-http/src/handlers/migration/translation.rs` |
 | Import: translated content → target index via staged publication | ✅ Shipped for create-only plus synchronous and async overwrite | `engine/flapjack-http/src/handlers/migration/import.rs`; `engine/flapjack-http/src/handlers/migration/mod.rs` |
 | Staged publication primitive (crash-safe, node-local) | ✅ Shipped | `engine/src/index/manager/publication.rs` |
 | Interrupted-job resume (pre-publication export) | ✅ Shipped — Algolia only | `POST /1/migrations/{provider}/{job_id}/resume`; `engine/flapjack-http/src/handlers/migration/{spool_lifecycle,export,job_runner,mod}.rs`; restart proof `engine/flapjack-server/tests/crash_durability_test.rs::interrupted_async_migration_resumes_exactly_once_after_process_restart` |
 | Dashboard `Migrate` page | ✅ All three providers reachable, dry-run before any write, and **all three browser-proven** as of 2026-08-07 (`86b143724`) — 21 passed targeted, 411 passed / 5 skipped full `e2e-ui`, and `migrate-{meilisearch,typesense}.spec.ts` executed on Linux CI in staging nightly `31176417863`. Synchronous create-only mutation; no console job-status or resume surface. **Not in any release:** `63cd2c54d`, `86b143724` and `5c7e5fc8b` are all non-ancestors of the `v1.0.11` cut `1b32cf727`, so the only installable binary still has an Algolia-only console and no dry-run. | `engine/dashboard/src/pages/{Migrate.tsx,MigrateSections.tsx,migrateHelpers.ts}`; specs `engine/dashboard/tests/e2e-ui/full/migrate-{algolia,meilisearch,typesense}.spec.ts`. Re-measure rather than cite: `cd engine/dashboard && npm run test:e2e-ui`. Screen contract: the private migrate screen contract. |
-| **Backend ↔ frontend joined end-to-end** | **`JOIN-1` remains OPEN with no current numerator.** The manifest-derived denominator is 65 joinable rows over 34 proof keys, within 96 backend rows and 69 dashboard routes, with 0 unresolved mappings. The receipt [`4_EVIDENCE/2026_08_07_aug07_8pm_2_join_proof_receipt.md`](4_EVIDENCE/2026_08_07_aug07_8pm_2_join_proof_receipt.md) records that the only 2026-08-07 artifact on disk was an explicitly labelled subset proxy, not an admissible full-suite artifact: its raw report output of 60 passed / 1 red / 0 skipped / 4 not-run / 0 unresolved over 65 joinable rows is proxy attribution only, with `P29` and `P34` not-run and `P35` red inside that proxy. The `59 / 59` measurement at `05c546ca5ba3b8dc92b0cb83e6604f09a7c6c433`, the `61`-row figure, and any copied `65` are superseded by this no-current-numerator verdict; do not copy any of them forward as a result. The closure predicate is owned by [`ROADMAP.md`](../../ROADMAP.md) row `JOIN-1`. | `migrate_from_algolia`; manifest and denominator owner `engine/dashboard/tests/e2e-ui/join_proof_manifest.json`; outcome classifier `engine/dashboard/scripts/join_proof_report.mjs`; receipt: `engine/docs2/4_EVIDENCE/2026_08_07_aug07_8pm_2_join_proof_receipt.md` |
+| **Backend ↔ frontend joined end-to-end** | **`JOIN-1` is OPEN and was RETARGETED 2026-08-08. There is no joined-proof numerator and one is no longer being pursued — do not read that as a failing score, and do not dispatch a lane to produce one.** Why the target changed rather than the measurement: ADR 0006 (`engine/docs2/3_IMPLEMENTATION/decisions/active/0006_console_source_home.md`, Accepted 2026-07-18 — dev-tree path, deliberately not linked because it is outside the public sync surface; [`PROJECT_OVERVIEW.md`](../../PROJECT_OVERVIEW.md) owns this policy) deletes `engine/dashboard` at the console-unification cutover, so a numerator proving that tree works has a scheduled expiry. Six dedicated lanes in nine days produced six receipts and zero admissible numerators, which is a predicate defect rather than six execution failures. **What survives is the manifest as the console port map:** 96 backend rows, 69 dashboard routes, 65 joinable rows, 34 proof keys, 0 unresolved mappings — the answer to *which screens exist and therefore must be ported*, consumed cross-repo as the OSS-console column of `fjcloud_dev`'s capability matrix. **That map is now validated by a wired gate, new 2026-08-08:** `npm run check:join-manifest` is green at `96 checked / 90 resolved / 0 mismatched / 6 shape-exempt` and runs in `ci.yml`'s `dashboard-build` job; falsifiability was proven by mutation, a single line token changed on one row reding as `stored-line-drift, drift=1, validator_rc=1` with a byte-identical revert restoring green. The row closes when `engine/dashboard` is deleted. The superseded `59 / 59` at `05c546ca5ba3b8dc92b0cb83e6604f09a7c6c433`, the `61`-row figure, and any copied `65` must not be carried forward as results. Full predicate: [`ROADMAP.md`](../../ROADMAP.md) row `JOIN-1`. | Manifest owner `engine/dashboard/tests/e2e-ui/join_proof_manifest.json`; validator `engine/dashboard/scripts/check_join_manifest.mjs` (+ `check_join_manifest.test.mjs`, 25/25 green), wired at `engine/dashboard/package.json` and `.github/workflows/ci.yml:324`; outcome classifier `engine/dashboard/scripts/join_proof_report.mjs`, which still hard-exits `1` with `results not found` when Playwright JSON is absent. Retired-numerator diagnosis is recorded in the 2026-08-07 `aug07_8pm_2` join-proof receipt, a dev-repo evidence artifact deliberately not cited by path here because it is outside the public sync surface (`DOC-PUBLIC-1`). **Known cross-repo gap:** flapjack CI does not detect `fjcloud_dev` failing to re-pin `engine_snapshot.sha256`, so that desync is silent here. |
 
 Replica translation detects topology from the source primary, fetches every named replica's own settings, and carries the derived virtual topology plus translated per-replica settings in the create-only migration bundle. Materialization then creates each derived replica as a settings-only virtual sidecar (no physical copy, by design) whose sort order resolves at query time. This contract is live-proven: on 2026-07-19 a real Algolia application with one `virtual(...)` relevance replica and one standard replica migrated end-to-end with a passing machine-verified receipt (jul18_11am batch) covering fixture seeding, import, sort-order proofs on the primary and both replica indexes, sidecar structure, and exact source cleanup. Remaining fidelity limits stay owned by `ROADMAP.md` MIG-11 and surface as documented migration warnings: standard-replica exhaustive sorting is approximated as a virtual replica, and Algolia `relevancyStrictness` semantics differ from Flapjack's deterministic ranking.
 
@@ -399,13 +517,104 @@ Migration warnings expose the remaining replica fidelity limits:
 `dashboard/src/App.tsx` defines 24 derived user-facing route patterns from 24 raw `path=` attributes and two attribute-less index routes, backed by 22 lazy page components. No stub pages remain.
 The route inventory spans overview, search/browse, settings, analytics, relevancy controls, security tooling, and migration workflows with no placeholder pages.
 
-**Caveat — route shipped ≠ backend capability joined.** `JOIN-1` is OPEN with no current numerator; a shipped route is not a joined-proof pass. The manifest-derived denominator, the subset-proxy caveat, and the closure predicate are canonical in [`ROADMAP.md`](../../ROADMAP.md) row `JOIN-1` and the **E2E Browser Tests** bullet above — re-run `dashboard/scripts/join_proof_report.mjs` against a fresh full-suite artifact rather than copying any integer forward, and never count a capability-gated skip toward the numerator. Console migration for Meilisearch and Typesense is browser-reachable, and its joined proof is **unmeasured rather than red** — [`ROADMAP.md`](../../ROADMAP.md) row `MIG-22`'s surviving clause is `P30`/`P31` in a join-proof report that has not been re-run since the specs went green. Do not restate an unrun key as a failing one. Console-absent backend modes include async `overwrite=true`, migration status/cancel/acknowledge/resume, bulk-replace cancellation, and auto-heal lifecycle. **Runtime HA peer add/remove left this list on 2026-08-03:** the Cluster screen now drives the internal add/remove endpoints, with served mutations confirmed through `/internal/cluster/status`. Receipts: the reviewed private join1 sweep receipt and the reviewed private cluster peer screen receipt.
+Playwright webserver startup now reclaims stale startup leases before acquiring the shared server slot. The repair shipped at `89df8543d`; `engine/dashboard/scripts/playwright-webserver.mjs::acquireStartupLease` is the behavior owner.
+
+**Caveat — route shipped ≠ backend capability joined.** A shipped route is not a joined-proof pass, and as of 2026-08-08 **no joined-proof numerator exists and none is being produced**: `JOIN-1` was retargeted to manifest accuracy because ADR 0006 deletes this tree at cutover. **Do not re-run `dashboard/scripts/join_proof_report.mjs` to "refresh the numerator" — that is the exact lane shape the retarget forbids** (six of them produced zero admissible results). The manifest map, the wired `npm run check:join-manifest` validator, and the closure predicate are canonical in [`ROADMAP.md`](../../ROADMAP.md) row `JOIN-1` and the joined-proof row in the **Source migration** table above. Where a numerator is ever wanted again, it is for the *Svelte* console, not this tree. Console migration for Meilisearch and Typesense is browser-reachable, and its joined proof is **unmeasured rather than red**: `P30`/`P31` sit in a join-proof report that has not been re-run since the specs went green, and no re-run is planned. Do not restate an unrun key as a failing one. [`ROADMAP.md`](../../ROADMAP.md) row `MIG-22` no longer waits on those two keys — it **closed 2026-08-10** by retiring that clause explicitly, against the shipped-profile loopback contract rather than any joined-proof numerator. Console-absent backend modes include async `overwrite=true`, migration status/cancel/acknowledge/resume, bulk-replace cancellation, and auto-heal lifecycle. **Runtime HA peer add/remove left this list on 2026-08-03:** the Cluster screen now drives the internal add/remove endpoints, with served mutations confirmed through `/internal/cluster/status`. Receipts: the reviewed private join1 sweep receipt and the reviewed private cluster peer screen receipt.
 
 | Status | Features |
 |---|---|
 | ✅ Built | Overview, Search & Browse (including Hybrid Search mode), Settings (all tabs, including Vector Search settings), Analytics (7 tabs), Synonyms, Rules, Merchandising Studio, API Keys (with `restrictSources`), Search Logs, Query Suggestions, Personalization, Recommendations, Experiments, Event Debugger, Metrics, System, Migrate, Dictionaries, Security Sources, Chat/RAG |
 
 ## Testing & Quality Assurance
+
+### Rust suite: two runners, deliberately, and one of them is expected red
+
+This repository runs the Rust workspace **two different ways** and the difference is load-bearing, so
+neither result may be quoted as "the test suite" without saying which one produced it.
+
+| Runner | Command | Wall clock | Expectation | Why it exists |
+|---|---|---|---|---|
+| `nextest` (process-per-test) | `cargo nextest run --workspace` | ~16 min | **Green**, and it is the gate `nightly.yml`'s `Rust all tests` job asserts | Fast, and CI-affordable |
+| In-process union | `cargo test --workspace --no-fail-fast` | ~2.5 h | **Evidence reader; may pass or fail while `TEST-FLAKE-1` remains open. A green union satisfies only the broad-run clause and does not manufacture the missing historical pre-fix reproducer.** | It is the *only* runner structurally capable of seeing one test corrupt another through process-global state. With one process per test there is no shared process to leak through — so a green `nextest` run over ~5,800 process-isolated tests does **not** refute an in-process union red. |
+
+**New 2026-08-08: the union became a recurring reader instead of a hand-run on one developer Mac.**
+`.github/workflows/union.yml` runs it on a schedule (06:00 UTC) on a free runner. It is deliberately
+**not** a job inside `nightly.yml` and deliberately **not** `continue-on-error`: an expected-red job
+inside `nightly.yml` would flip that workflow's conclusion and thereby reset `NIGHT-1`'s
+two-consecutive-green exit and fail `SYNC-1`'s publish gate, holding the release hostage to a flake
+investigation — while `continue-on-error` would make it a gate that cannot fail, which this
+repository has already caught three times as an inert contract. Non-removability is asserted by
+`engine/tests/union_recurring_gate_test.rs`. It reaches CI only once a mirror sync carries it
+(`SYNC-1`).
+
+**Current state, 2026-08-09 — read both runners:**
+
+- **Two complete unions ran at byte-identical `main` `5487e725f`. The first exited `101` with one
+  failure; the second exited `0`, 86 binaries, 6,069 passed, 0 failed.** Same SHA, same tree, same
+  command, so the pair is a controlled repetition rather than a re-measurement. **A green that
+  follows no repair is not proof of repair** — nothing changed between the runs. It closed
+  `TEST-FLAKE-2` on that row's own single-clause exit and met one of `TEST-FLAKE-1`'s two clauses
+  (its exit says *plus*, so that row stays open). Receipt:
+  [`4_EVIDENCE/2026_08_08_second_postmerge_union_recurrence_receipt.md`](4_EVIDENCE/2026_08_08_second_postmerge_union_recurrence_receipt.md).
+- **`nextest --workspace` is RED on one specimen**, reproduced by three complete clean-worktree runs:
+  `flapjack-http::write_runtime_isolation::single_worker_runtime_serves_count_during_injected_two_second_commit`,
+  1,210 run / 1,209 passed / 1 failed / 7 skipped, observing health and count p99 of 402/392, 448/438
+  and 528/537 ms against an asserted 250 ms ceiling. Three same-HEAD **focused** repetitions pass in
+  ~2.3 s each, so this is a load-sensitive full-workspace failure. Repair lane in flight; the
+  standing constraint is that it may not be closed by raising the ceiling, adding Tokio workers,
+  `#[ignore]`, or narrowing the gate to focused-only.
+- **Attribution added 2026-08-10, and it changes what this red means: the product is live; the
+  harness is oversubscribed.** A matched experiment at one clean tree held the selection, binaries,
+  profile, source, injected write delay, thresholds and Tokio worker count fixed and varied only
+  `--test-threads`: 18-way (the capture host's logical CPU count) FAILS, 12-way PASSES. In every
+  failing run the specimen's `RequestStart` p99 is **0 ms** while its `ScheduledDeadline` p99 is
+  278–430 ms. Once the request starts it is served immediately; the tail is entirely time waiting to
+  be scheduled onto a worker while ~13–18 sibling test processes contend for the same CPUs. That
+  rules out the production write-queue seam as the owner. **The repair is still unmerged and its
+  current shape is host-dependent** — a relative `test-threads` cap resolves to 12 on the
+  18-logical-CPU capture host but to **1 thread** on a 4-vCPU mirror runner, where every
+  `cargo nextest run` in `ci.yml` and `nightly.yml` would then run serially under a 45-minute job
+  timeout. Read the cap's resolved value on the target runner before landing it.
+
+### Measurement lanes can be void, and two consecutive ones were
+
+Two lanes on 2026-08-10 attempted the same repo-local compile-share measurement and **both produced
+no admissible ratio**. Recorded here because a void measurement is a real outcome that must not be
+mistaken for an un-run one, and because the second void was not the first void's cause repeating.
+The first lane's test-execution input was invalid (`cargo nextest run -P ci` exited `100` on the
+`ledger_correction_gate_test` overdue-receipt gate — a documentation gate, since cleared) **and** its
+run was voided by after-bracket host load of `42.57` against a ceiling of `24`. The second lane
+cleared cause one, added a held-quiet-window protocol that reported `OPEN` after six consecutive
+samples at or below `20`, and still voided on load: `26.45` mid-build and `36.52` after the cold
+compile. Cold compile itself was sound both times (`302.52 s`, `361.41 s`, both exit `0`). **The
+unexamined assumption both lanes share is that a full-throttle `cargo test --workspace --no-run` can
+finish on an 18-core host without driving the 1-minute load average past 24** — the first lane's own
+figures report `user 2726.27 s` over `real 302.52 s`, roughly nine-way average parallelism from the
+measured command alone. Both receipts are dev-repo reference artifacts dated 2026-08-10, deliberately
+not cited by path here because they sit outside the public sync surface.
+
+### Test-harness defects are tracked as defects, not absorbed as flakes
+
+**`TEST-SINK-1`, repaired 2026-08-08, is the reference example of why a red name must not be trusted
+over a red mechanism.** `non_json_failure_redacts_api_key_from_stderr` failed in a union with
+`failed to connect to sink: Connection refused (os error 61)`. The name reads like a credential leak;
+it was not one, and nothing about redaction was being measured when it reds — the CLI never reached
+the sink. `FakeBatchSink::start` served exactly `responses.len()` connections and then closed its
+port, while `HttpSink::send` retries up to 3 times, so a retry met a dead port. **Renaming the test
+would have been the wrong repair**: the name is accurate about what the test checks; the defect was
+that the test could die before checking anything and still fail under that name.
+
+The repair was **measured against a baseline rather than asserted** — full-file
+`cargo test -p flapjack-server --test ingest_cli_test`, same host: unmodified `main` was clean in
+**1 of 5** runs with 3–4 failures per bad run; after the repair, **8 of 8** clean, 39/39, longest
+8.31 s. Falsifiability proven by mutation: reverting only the replay reds both new tests with the
+union's exact error string. Two further defects were found by the first repair's own guard —
+unbounded replay let a looping client take 101 requests on a sink scripted for 2 and **hang for 15
+minutes instead of failing** (replay is now capped at 256 connections and the drain carries a 20 s
+deadline naming what it saw), and the sink's `unwrap()`s panicked a detached thread, killing the
+listener and re-emitting the cause as `Connection refused` somewhere unrelated (faults are now
+recorded and failed by `Drop`). Owner: `engine/flapjack-server/tests/ingest_cli_test.rs`;
+[`ROADMAP.md`](../../ROADMAP.md) row `TEST-SINK-1`.
 
 ### E2E Browser Tests (Playwright)
 
@@ -501,7 +710,17 @@ Production-readiness checklist organized by priority tier. Tier 1 items were lau
 
 v1.0.11, published 2026-08-06, is the current shipped baseline; nobody is running it (see [`PROJECT_OVERVIEW.md`](../../PROJECT_OVERVIEW.md)). Corrected 2026-08-03: this sentence previously overstated the release's commercial adoption. This section remains the canonical readiness snapshot while strategic priority order is routed to [`PROJECT_OVERVIEW.md`](../../PROJECT_OVERVIEW.md) and ongoing lane-state/post-ship sequencing is routed to [`ROADMAP.md`](../../ROADMAP.md) to avoid duplicate live-status prose in this owner.
 
-**Last updated: 2026-08-08** — baseline is still the published `v1.0.11`; `REL-11`, `MIG-15`, `MIG-18`, `MIG-20`, `DUR-3`, and `SEC-G5` closed. **The `JOIN-1` remeasured at `56 / 59` with zero skips` claim this line used to carry is superseded and was wrong to keep: `JOIN-1` is OPEN with no current numerator**, per [`4_EVIDENCE/2026_08_07_aug07_8pm_2_join_proof_receipt.md`](4_EVIDENCE/2026_08_07_aug07_8pm_2_join_proof_receipt.md) and the three other entries in this file that already said so — `56 / 59` was a fourth, contradicting owner inside one document. Do not copy `56`, `59`, `61`, or `65` forward as a numerator. Reconciled again 2026-08-08 against the merged `aug07_8pm` batch: `CI-STAGING-1` closed, `MIG-21` closed, and `MIG-22`'s release-profile loopback contract reached a recurring scheduled gate (`nightly.yml:242`), so any remaining "no recurring gate" wording in this file is superseded. **Distribution status, stated once because three rows depend on it:** staging carries every repair and is green end to end — push CI `31245623596` 35/35 and a **scheduled** nightly `31236784281` `success`, the first scheduled green since 2026-07-07 — while **prod is 484 commits behind and carries none of them**, which is why prod CI and prod nightly are still red and why neither red is evidence about the code. Earlier reconciliation (2026-08-04) against `SEC-G3`, ACME hot rotation, `PR-13`, and runtime HA membership stands.
+**Last updated: 2026-08-12.** The published baseline remains `v1.0.11`; the Typesense stream and
+write-freeze capabilities described above are merged but unreleased. Tier 1's tenant-authorization defect
+and its separate event-ingress bounded-abuse acceptance is closed locally as `SEC-EVENTS-2`.
+The full-workspace liveness defect is repaired and re-proved; `TEST-FLAKE-1` remains open only because its
+historical deterministic pre-fix reproducer is absent. Distribution state is deliberately not restated
+here: staging and prod currency, CI observation, and scheduled-nightly exits change independently and are
+owned by `ROADMAP.md` rows `SYNC-1`, `CI-E2E-1`, and `NIGHT-1`.
+
+Historical readiness context remains in Git and in the evidence-linked rows below; it is not retained here
+as a second live distribution ledger. In particular, superseded join numerators and dated mirror-lag counts
+must not be copied forward as current readiness facts.
 
 ### Tier 1 — Launch Blockers
 
@@ -514,6 +733,7 @@ These must be complete before any customer-facing deployment or open-source rele
 | PR-3 | Tour video completion (Phases 2–5) | ✅ Done (2026-03-20); refreshed 2026-03-30 | Original closure shipped 22/24 archived MP4 artifacts. The former vector/chat blockers (05/06) were later closed with dedicated specs plus default-build/vector+AI runtime wiring, bringing archived per-feature MP4 coverage to 24/24. Branch: `batman/mar19_3_tour_videos_phases_2_5`. |
 | PR-4 | UI/UX audit, polish & Tour Phase 6 | ✅ Done (2026-03-21) | Two parts that must happen together: (1) **Tour Phase 6** — watch all 22 recorded tour videos and identify every moment of confusion, awkward flow, or unclear labeling; (2) **Fix + re-record** — address identified issues across the shipped dashboard route set, re-record final polished videos, create index video. Scope includes error message quality (are failure states helpful and actionable?), empty states, loading states, workflow coherence, information hierarchy. Known issues: (a) API Keys layout "feels chaotic", (b) System > Index Health "too much info at once", (c) sidebar index list clutter. The tour videos are the no-manual-QA equivalent of a human QA pass — watching them *is* the human-perspective walkthrough. |
 | PR-9 | Security audit | ✅ Done (2026-03-21) | Stage 1 closed targeted evidence gaps: malformed-request rejection without panic plus sanitized invalid-credential bodies (`engine/tests/test_security_audit.rs`), restricted-key cross-index denial using shared `key_allows_index()` (`engine/tests/test_tenant_isolation.rs`, `engine/flapjack-http/src/handlers/search/batch.rs`), and API-key entropy coverage near `generate_hex_key()` (`engine/flapjack-http/src/auth_tests/key_store_tests.rs`, `engine/flapjack-http/src/auth/key_store.rs`). Full OWASP top-10 pass complete (2026-05-25). |
+| PR-17 | Insights-route tenant authorization | ✅ Done (2026-08-10) | **Filed and closed the same day; Tier 1 has no open row again.** The defect was reproduced against a local served binary before repair, not inferred from source: a key with ACL `search` and `indexes=["tenant_allowed"]` posted an event whose body named `tenant_forbidden` and received HTTP `200`, then read that same event back through `/1/events/debug` and received HTTP `200`. Fixed at `561cce36b` on every clause of the exit this row named: `/1/events/debug` raised above `search` to the `analytics` ACL; both handlers take the key/app-id extensions and call the shared analytics index-access enforcement; the debug buffer is tenant-filtered; and the current combined-tree `engine/tests/test_tenant_isolation.rs` target covers same-tenant allowed, cross-tenant denied, restricted-key denied, debug tenant-filtering, search-only-key rejection, and bounded ingress — 11 passed, 0 failed. Ledger row: `SEC-EVENTS-1`, closed. Customer-ingress abuse limits were still open on 2026-08-10; the later 2026-08-12 local `SEC-EVENTS-2` close in [`ROADMAP.md`](../../ROADMAP.md) supersedes that historical state. |
 | PR-14 | First-run experience audit | ✅ Done (2026-03-21) | Follow the root quickstart in `../../README.md` from a blank machine with fresh eyes. Time how long it takes to go from binary download → first index → first working search. Document every friction point, confusing error, or missing step. Fix and update docs until the experience is under 5 minutes with zero head-scratching. This is the single highest-impact thing for open-source adoption — a frustrated developer who can't get started in 5 minutes closes the tab. |
 
 ### Tier 2 — Production Confidence

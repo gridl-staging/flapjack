@@ -458,9 +458,9 @@ assert_meilisearch_migration() {
 
 assert_typesense_migration() {
   run_served_migration typesense release_typesense_categories \
-    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_CATEGORIES}\"}"
+    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_CATEGORIES}\",\"sourceWriteFrozen\":true}"
   run_served_migration typesense release_typesense_products \
-    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_PRODUCTS}\"}"
+    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_PRODUCTS}\",\"sourceWriteFrozen\":true}"
   served_search release_typesense_categories_search "$TYPESENSE_CATEGORIES" ''
   assert_typesense_categories_landed_documents "$TMP/release_typesense_categories_search.json" \
     'positive_search_mismatch provider=typesense collection=categories'

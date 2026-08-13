@@ -10220,6 +10220,9 @@
           "sourceIndex": {
             "type": "string"
           },
+          "sourceWriteFrozen": {
+            "type": "boolean"
+          },
           "targetIndex": {
             "type": [
               "string",

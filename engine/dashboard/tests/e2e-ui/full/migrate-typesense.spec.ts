@@ -58,6 +58,30 @@ async function discoverAndSelectTypesenseSource(
   await sourceOption.click();
 }
 
+async function attestTypesenseWriteFreeze(page: Page): Promise<void> {
+  const attestation = page.getByTestId('typesense-source-write-frozen');
+  await expect(attestation).toBeVisible();
+  await expect(attestation).not.toBeChecked();
+  await attestation.check();
+}
+
+async function requireWriteFreezeControl(page: Page) {
+  const previewButton = page.getByRole('button', { name: /preview migration/i });
+  const attestation = page.getByTestId('typesense-source-write-frozen');
+  if (await attestation.count() === 0) {
+    const previewResponse = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && response.url().endsWith('/1/migrations/typesense/preview')
+    ));
+    await previewButton.click();
+    await previewResponse;
+    console.error('WRITE_FREEZE_BROWSER_RED=unchecked_control_sent_request');
+    throw new Error('Typesense preview dispatched without a write-freeze control');
+  }
+
+  return { attestation, previewButton };
+}
+
 test.describe('Typesense migration (real browser)', () => {
   let source: SourceProviderContext | undefined;
 
@@ -81,6 +105,22 @@ test.describe('Typesense migration (real browser)', () => {
     }
   });
 
+  test('does not dispatch preview while the Typesense write freeze is unchecked', async ({ page }) => {
+    const typesenseSource = requireSource();
+
+    await page.goto('/migrate');
+    await fillTypesenseCredentials(page, typesenseSource);
+    await discoverAndSelectTypesenseSource(page, typesenseSource);
+    await page.getByLabel(/Target Index \(Flapjack\)/).fill(dryRunTargetIndex);
+
+    const { attestation, previewButton } = await requireWriteFreezeControl(page);
+    await expect(attestation).toHaveAccessibleName(
+      /I have paused writes to the selected Typesense collection for the complete migration/i,
+    );
+    await expect(attestation).not.toBeChecked();
+    await expect(previewButton).toBeDisabled();
+  });
+
   test('migrate Typesense collection via UI: discover → migrate → verify success → browse', async ({ page }) => {
     const typesenseSource = requireSource();
 
@@ -90,6 +130,7 @@ test.describe('Typesense migration (real browser)', () => {
     await discoverAndSelectTypesenseSource(page, typesenseSource);
 
     await page.getByLabel(/Target Index \(Flapjack\)/).fill(targetIndex);
+    await attestTypesenseWriteFreeze(page);
     await page.getByRole('button', { name: /preview migration/i }).click();
     await expectMigrationPreviewReport(page, TYPESENSE_PREVIEW_ORACLE);
     await page.getByRole('button', { name: /^submit migration$/i }).click();
@@ -116,6 +157,7 @@ test.describe('Typesense migration (real browser)', () => {
     await discoverAndSelectTypesenseSource(page, typesenseSource);
 
     await page.getByLabel(/Target Index \(Flapjack\)/).fill(dryRunTargetIndex);
+    await attestTypesenseWriteFreeze(page);
     const previewButton = page.getByRole('button', { name: /preview migration/i });
     await expect(previewButton).toBeVisible();
     await expect(previewButton).toBeEnabled();

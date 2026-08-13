@@ -18,24 +18,15 @@ use std::net::IpAddr;
 const TYPESENSE_PREVIEW_ENDPOINT: &str = "http://127.0.0.1:17748";
 const TYPESENSE_SOURCE_INDEX: &str = "fj_ts_migration_products";
 
+use crate::router_tests::typesense_fixture_test_support::{
+    product_count, products_collection, products_documents,
+};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 fn typesense_m0b_preview_source_reader() -> TypesenseSourceReader<ScriptedTypesenseSource> {
-    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../tests/fixtures/2026_07_26_m0b_typesense_migration/expected_bundle.json");
-    let bundle: Value =
-        serde_json::from_slice(&fs::read(&fixture_path).unwrap_or_else(|error| {
-            panic!("{} must be readable: {error}", fixture_path.display())
-        }))
-        .expect("M0B Typesense fixture must remain valid JSON");
-    let collection = bundle["source"]["collections"]
-        .as_array()
-        .expect("M0B fixture collections must be an array")
-        .iter()
-        .find(|collection| collection["name"] == TYPESENSE_SOURCE_INDEX)
-        .expect("M0B fixture must contain the products collection");
-    let documents = collection["documents"]
-        .as_array()
-        .expect("M0B products documents must be an array")
-        .clone();
+    let collection = products_collection();
+    let documents = products_documents().to_vec();
+    let source_record_count = documents.len() as u64;
     let mut settings = collection
         .as_object()
         .expect("M0B products collection must be an object")
@@ -43,14 +34,31 @@ fn typesense_m0b_preview_source_reader() -> TypesenseSourceReader<ScriptedTypese
     settings.remove("name");
     settings.remove("documents");
     let source = ScriptedTypesenseSource::with_passes(
-        typesense_observation(TYPESENSE_SOURCE_INDEX, 3),
+        typesense_observation(TYPESENSE_SOURCE_INDEX, source_record_count),
         Value::Object(settings),
         vec![vec![documents]],
     );
-    TypesenseSourceReader::from_source(TYPESENSE_SOURCE_INDEX, source)
+    TypesenseSourceReader::from_source(TYPESENSE_SOURCE_INDEX, source, true)
 }
 
 fn typesense_preview_body(api_key: &str) -> Value {
+    typesense_preview_body_with_attestation(api_key, true)
+}
+
+fn typesense_preview_body_with_attestation(api_key: &str, source_write_frozen: bool) -> Value {
+    let mut body = json!({
+        "node": TYPESENSE_PREVIEW_ENDPOINT,
+        "apiKey": api_key,
+        "sourceIndex": TYPESENSE_SOURCE_INDEX,
+        "targetIndex": "shop"
+    });
+    if source_write_frozen {
+        body["sourceWriteFrozen"] = json!(true);
+    }
+    body
+}
+
+fn typesense_unattested_preview_body(api_key: &str) -> Value {
     json!({
         "node": TYPESENSE_PREVIEW_ENDPOINT,
         "apiKey": api_key,
@@ -59,13 +67,21 @@ fn typesense_preview_body(api_key: &str) -> Value {
     })
 }
 
-fn typesense_preview_router(tmp: &TempDir) -> axum::Router {
+fn typesense_preview_router_with_factory_calls(
+    tmp: &TempDir,
+    factory_calls: Arc<AtomicUsize>,
+) -> axum::Router {
     let key_store = Arc::new(KeyStore::load_or_create(tmp.path(), "admin-key"));
-    let source_factory = TestMigrationSourceReaderFactory::new(|source_provider| {
+    let source_factory = TestMigrationSourceReaderFactory::new(move |source_provider| {
+        factory_calls.fetch_add(1, Ordering::SeqCst);
         assert_eq!(source_provider, AsyncMigrationSourceProvider::Typesense);
         Ok(Box::new(typesense_m0b_preview_source_reader()))
     });
     build_test_router(tmp, Some(key_store)).layer(Extension(source_factory))
+}
+
+fn typesense_preview_router(tmp: &TempDir) -> axum::Router {
+    typesense_preview_router_with_factory_calls(tmp, Arc::new(AtomicUsize::new(0)))
 }
 
 async fn assert_typesense_preview_rejection(
@@ -109,7 +125,84 @@ async fn typesense_preview_report_matches_translation_owner_and_exact_source_cou
         body["report"]["summary"],
         json!({"totalEntries": 12, "hardRejections": 0, "warnings": 7, "scopeGaps": 5})
     );
-    assert_eq!(body["sourceCounts"], json!({"indexes": 1, "records": 3}));
+    assert_eq!(
+        body["sourceCounts"],
+        json!({"indexes": 1, "records": product_count()})
+    );
+}
+
+#[tokio::test]
+async fn typesense_write_freeze_missing_and_false_are_refused_before_io() {
+    let tmp = TempDir::new().unwrap();
+    let factory_calls = Arc::new(AtomicUsize::new(0));
+    let app = typesense_preview_router_with_factory_calls(&tmp, Arc::clone(&factory_calls));
+    let rejected_bodies = [
+        typesense_unattested_preview_body("missing-freeze-key"),
+        {
+            let mut body = typesense_unattested_preview_body("false-freeze-key");
+            body["sourceWriteFrozen"] = json!(false);
+            body
+        },
+        {
+            let mut body = typesense_unattested_preview_body("wrong-type-freeze-key");
+            body["sourceWriteFrozen"] = json!("true");
+            body
+        },
+    ];
+
+    for body in rejected_bodies {
+        let before = factory_calls.load(Ordering::SeqCst);
+        let preview_response = post_provider_preview(&app, "typesense", body.clone()).await;
+        if preview_response.status() != StatusCode::BAD_REQUEST
+            || factory_calls.load(Ordering::SeqCst) != before
+        {
+            println!("WRITE_FREEZE_RED_ROUTE=missing_or_false_reached_transport");
+            panic!("preview request without literal sourceWriteFrozen=true reached source I/O");
+        }
+
+        let before = factory_calls.load(Ordering::SeqCst);
+        let submit_response = post_provider_submit(&app, "typesense", body).await;
+        if submit_response.status() != StatusCode::BAD_REQUEST
+            || factory_calls.load(Ordering::SeqCst) != before
+        {
+            println!("WRITE_FREEZE_RED_ROUTE=missing_or_false_reached_transport");
+            panic!("submit request without literal sourceWriteFrozen=true reached source I/O");
+        }
+    }
+
+    let before = factory_calls.load(Ordering::SeqCst);
+    let preview_response = post_provider_preview(
+        &app,
+        "typesense",
+        typesense_preview_body_with_attestation("attested-preview-key", true),
+    )
+    .await;
+    assert_ne!(
+        factory_calls.load(Ordering::SeqCst),
+        before,
+        "literal sourceWriteFrozen=true must reach the existing preview source-reader factory"
+    );
+    assert!(
+        preview_response.status().is_success(),
+        "attested Typesense preview should enter the existing capture path"
+    );
+
+    let before = factory_calls.load(Ordering::SeqCst);
+    let submit_response = post_provider_submit(
+        &app,
+        "typesense",
+        typesense_preview_body_with_attestation("attested-submit-key", true),
+    )
+    .await;
+    assert_ne!(
+        factory_calls.load(Ordering::SeqCst),
+        before,
+        "literal sourceWriteFrozen=true must reach the existing submit source-reader factory"
+    );
+    assert!(
+        submit_response.status().is_success(),
+        "attested Typesense submit should enter the existing capture path"
+    );
 }
 
 #[tokio::test]
@@ -122,7 +215,7 @@ async fn typesense_preview_discriminates_route_body_before_translation() {
     assert_eq!(accepted.status(), StatusCode::OK);
     assert_eq!(
         body_json(accepted).await["sourceCounts"],
-        json!({"indexes": 1, "records": 3})
+        json!({"indexes": 1, "records": product_count()})
     );
 
     assert_typesense_preview_rejection(
@@ -271,6 +364,7 @@ fn typesense_submit_accepts_vetted_cloud_endpoint_without_loopback_opt_in() {
         source_index: TYPESENSE_SOURCE_INDEX.to_string(),
         target_index: Some("shop".to_string()),
         overwrite: false,
+        source_write_frozen: true,
     };
 
     super::super::typesense_source_reader(&payload)
@@ -331,7 +425,8 @@ async fn typesense_submit_opt_in_does_not_admit_non_loopback_hosts() {
             "node": NON_LOOPBACK_NODE,
             "apiKey": API_KEY_CANARY,
             "sourceIndex": TYPESENSE_SOURCE_INDEX,
-            "targetIndex": "shop"
+            "targetIndex": "shop",
+            "sourceWriteFrozen": true
         }),
     )
     .await;
@@ -371,7 +466,8 @@ async fn typesense_preview_non_loopback_refusal_hides_loopback_opt_in() {
             "node": NON_LOOPBACK_NODE,
             "apiKey": API_KEY_CANARY,
             "sourceIndex": TYPESENSE_SOURCE_INDEX,
-            "targetIndex": "shop"
+            "targetIndex": "shop",
+            "sourceWriteFrozen": true
         }),
     )
     .await;
@@ -413,6 +509,7 @@ fn typesense_preview_accepts_cloud_endpoint_without_loopback_opt_in() {
         source_index: TYPESENSE_SOURCE_INDEX.to_string(),
         target_index: Some("shop".to_string()),
         overwrite: false,
+        source_write_frozen: true,
     };
 
     let client = preview_typesense_client(&payload)

@@ -502,9 +502,9 @@ probe_served_migrated_data() {
   run_served_migration meilisearch meilisearch_configured_pk \
     "{\"endpoint\":\"http://127.0.0.1:${MEILI_PORT}\",\"apiKey\":\"${MEILI_KEY}\",\"sourceIndex\":\"configured_pk\"}"
   run_served_migration typesense typesense_categories \
-    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_CATEGORIES}\"}"
+    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_CATEGORIES}\",\"sourceWriteFrozen\":true}"
   run_served_migration typesense typesense_products \
-    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_PRODUCTS}\"}"
+    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_PRODUCTS}\",\"sourceWriteFrozen\":true}"
 
   served_search meilisearch_all configured_pk ''
   assert_meilisearch_landed_documents "$TMP/meilisearch_all.json" \
@@ -627,7 +627,7 @@ probe_served_discovery() {
 
 probe_served_typesense_preview() {
   served_preview_request typesense_preview '/1/migrations/typesense/preview' \
-    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_PRODUCTS}\",\"targetIndex\":\"shop\"}" 200
+    "{\"node\":\"http://127.0.0.1:${TYPESENSE_PORT}\",\"apiKey\":\"${TYPESENSE_KEY}\",\"sourceIndex\":\"${TYPESENSE_PRODUCTS}\",\"targetIndex\":\"shop\",\"sourceWriteFrozen\":true}" 200
   jq -e '
     keys == ["report","sourceCounts"] and
     .sourceCounts == {"indexes":1,"records":2} and
@@ -658,7 +658,7 @@ probe_served_typesense_preview() {
   [ -z "$leaks" ] || fail_red 'served_typesense_preview_credential_leak'
   printf 'PASS: served Typesense preview response contains no source or admin credentials\n' \
     >>"$TMP/credential_leak_scan.txt"
-  printf 'PREVIEW request={"node":"http://127.0.0.1:%s","apiKey":"[REDACTED_TYPESENSE_KEY]","sourceIndex":"%s","targetIndex":"shop"}\n' \
+  printf 'PREVIEW request={"node":"http://127.0.0.1:%s","apiKey":"[REDACTED_TYPESENSE_KEY]","sourceIndex":"%s","targetIndex":"shop","sourceWriteFrozen":true}\n' \
     "$TYPESENSE_PORT" "$TYPESENSE_PRODUCTS"
   printf 'PREVIEW status=%s\n' "$(cat "$TMP/typesense_preview_status.txt")"
   printf 'PREVIEW sourceCounts=%s\n' "$(jq -c .sourceCounts "$TMP/typesense_preview.json")"

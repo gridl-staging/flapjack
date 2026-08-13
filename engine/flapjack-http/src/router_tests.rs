@@ -39,6 +39,12 @@ use crate::test_helpers::{
     SharedLogBuffer, TestStateBuilder, ENV_MUTEX,
 };
 
+#[path = "handlers/migration/typesense_fixture_test_support.rs"]
+pub(crate) mod typesense_fixture_test_support;
+
+#[cfg(debug_assertions)]
+use typesense_fixture_test_support::product_count as m0b_typesense_product_count;
+
 fn build_auth_test_app() -> (TempDir, axum::Router) {
     build_auth_test_app_with_dashboard_policy(false)
 }
@@ -1469,7 +1475,12 @@ async fn list_source_indexes_returns_typesense_known_answer() {
     // uses the source-contract probe's recorded stable marker; response position,
     // not a fabricated timestamp, owns the newest-first ordering assertion.
     let expected = [
-        ("fj_ts_migration_products", 3, 1_785_020_400, "price"),
+        (
+            "fj_ts_migration_products",
+            m0b_typesense_product_count() as u64,
+            1_785_020_400,
+            "price",
+        ),
         ("fj_ts_migration_categories", 2, 1_785_020_400, "priority"),
     ];
     let full_upstream = start_discovery_upstream(
@@ -1549,7 +1560,7 @@ async fn list_source_indexes_returns_typesense_known_answer() {
         &[
             ExpectedNeutralDiscoveryMetadata::typesense(
                 "fj_ts_migration_products",
-                3,
+                m0b_typesense_product_count() as u64,
                 1_785_020_400,
                 "price",
             ),
@@ -1579,7 +1590,7 @@ async fn list_source_indexes_returns_typesense_known_answer() {
         &limit1_document,
         &[ExpectedNeutralDiscoveryMetadata::typesense(
             "fj_ts_migration_products",
-            3,
+            m0b_typesense_product_count() as u64,
             1_785_020_400,
             "price",
         )],

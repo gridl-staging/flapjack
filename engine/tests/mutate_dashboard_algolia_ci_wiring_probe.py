@@ -75,6 +75,57 @@ def build_credential_mutants(tmp_dir: Path) -> list[tuple[str, dict[str, Path]]]
     return mutants
 
 
+def build_audit_wiring_mutants(
+    tmp_dir: Path,
+) -> list[tuple[str, dict[str, Path]]]:
+    """Build cases that remove or reorder the deterministic audit policy suite."""
+    mutants = []
+
+    paths = copy_inputs(tmp_dir, "ci-audit-fixture-removed")
+    write_text(
+        paths["ci"],
+        replace_once(
+            paths["ci"].read_text(encoding="utf-8"),
+            """      - name: Test production audit policy
+        working-directory: engine/dashboard
+        run: bash scripts/audit_gate_fixture_test.sh
+""",
+            "",
+            "dashboard audit fixture step removed",
+        ),
+    )
+    mutants.append(("dashboard audit fixture step removed", paths))
+
+    paths = copy_inputs(tmp_dir, "ci-audit-fixture-after-live")
+    ci_text = paths["ci"].read_text(encoding="utf-8")
+    fixture_step = """      - name: Test production audit policy
+        working-directory: engine/dashboard
+        run: bash scripts/audit_gate_fixture_test.sh
+"""
+    ci_text = replace_once(
+        ci_text,
+        fixture_step,
+        "",
+        "dashboard audit fixture step moved",
+    )
+    ci_text = replace_once(
+        ci_text,
+        """      - name: Audit production dependencies
+        working-directory: engine/dashboard
+        run: bash scripts/audit_gate.sh
+""",
+        """      - name: Audit production dependencies
+        working-directory: engine/dashboard
+        run: bash scripts/audit_gate.sh
+""" + fixture_step,
+        "dashboard audit fixture step placed after live audit",
+    )
+    write_text(paths["ci"], ci_text)
+    mutants.append(("dashboard audit fixture step placed after live audit", paths))
+
+    return mutants
+
+
 def build_report_artifact_mutants(
     tmp_dir: Path,
 ) -> list[tuple[str, dict[str, Path]]]:
@@ -379,6 +430,7 @@ def build_mutants(tmp_dir: Path) -> list[tuple[str, dict[str, Path]]]:
     """Compose every independently owned mutation family."""
     builders = (
         build_credential_mutants,
+        build_audit_wiring_mutants,
         build_report_artifact_mutants,
         build_direct_report_command_mutants,
         build_multi_report_command_mutants,

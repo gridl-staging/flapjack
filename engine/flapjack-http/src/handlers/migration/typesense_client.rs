@@ -11,25 +11,21 @@ use std::time::Duration;
 
 pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-pub(super) const DOCUMENT_PAGE_LIMIT: usize = 100;
-pub(super) const MAX_DOCUMENT_PAGES: usize = 10_000;
 pub(super) const MAX_DOCUMENT_ITEMS: usize = 1_000_000;
 pub(super) const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const TYPESENSE_PREVIEW_LOOPBACK_ENV: &str = "FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK";
 
+/// Typesense 30.2 answers document export with one unpaginated stream, so the
+/// only traversal budget is the item ceiling applied to that stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TraversalLimits {
-    pub(super) max_pages: usize,
     pub(super) max_items: usize,
-    pub(super) page_size: usize,
 }
 
 impl Default for TraversalLimits {
     fn default() -> Self {
         Self {
-            max_pages: MAX_DOCUMENT_PAGES,
             max_items: MAX_DOCUMENT_ITEMS,
-            page_size: DOCUMENT_PAGE_LIMIT,
         }
     }
 }
@@ -253,6 +249,13 @@ impl TypesenseClient {
         self.source_collection.as_deref()
     }
 
+    /// The single production transport constructor. Test decorators wrap this
+    /// instead of re-implementing reqwest behavior, so byte-limit enforcement,
+    /// error-kind mapping, and `resolve_to_addrs` pinning keep one owner.
+    pub(super) fn transport(&self) -> ReqwestTransport<'_> {
+        ReqwestTransport { owner: self }
+    }
+
     pub(super) fn build_http_request(
         &self,
         request: TypesenseRequest,
@@ -294,7 +297,7 @@ impl TypesenseClient {
         F: FnMut(Vec<Value>) -> Result<(), TypesenseClientError>,
     {
         let source_collection = self.require_source_collection()?.to_string();
-        let mut transport = ReqwestTransport { owner: self };
+        let mut transport = self.transport();
         capture_source_with_transport(&mut transport, &source_collection, consume_page).await
     }
 
@@ -303,20 +306,20 @@ impl TypesenseClient {
         &self,
     ) -> Result<TypesenseSourceObservation, TypesenseClientError> {
         let source_collection = self.require_source_collection()?.to_string();
-        let mut transport = ReqwestTransport { owner: self };
+        let mut transport = self.transport();
         observe_source_with_transport(&mut transport, &source_collection).await
     }
 
     pub(super) async fn read_source_settings(&self) -> Result<Value, TypesenseClientError> {
         let source_collection = self.require_source_collection()?.to_string();
-        let mut transport = ReqwestTransport { owner: self };
+        let mut transport = self.transport();
         read_settings_with_transport(&mut transport, &source_collection).await
     }
 
     #[allow(dead_code)]
     pub(super) async fn require_read_access(&self) -> Result<(), TypesenseClientError> {
         let source_collection = self.require_source_collection()?.to_string();
-        let mut transport = ReqwestTransport { owner: self };
+        let mut transport = self.transport();
         require_read_access_with_transport(&mut transport, &source_collection).await
     }
 
@@ -329,7 +332,7 @@ impl TypesenseClient {
         offset: Option<u64>,
         limit: Option<u64>,
     ) -> Result<Vec<TypesenseCollectionSummary>, TypesenseClientError> {
-        let mut transport = ReqwestTransport { owner: self };
+        let mut transport = self.transport();
         list_collections_with_transport(&mut transport, offset, limit).await
     }
 }
@@ -415,13 +418,6 @@ impl fmt::Debug for TypesenseClient {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct DocumentPage {
-    pub(super) documents: Vec<Value>,
-    pub(super) page: usize,
-    pub(super) found: usize,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(super) struct TypesenseCollection {
     pub(super) name: String,
@@ -501,7 +497,7 @@ pub(super) trait TypesenseTransport {
     ) -> Pin<Box<dyn Future<Output = Result<TypesenseResponse, TypesenseClientError>> + Send + 'a>>;
 }
 
-struct ReqwestTransport<'a> {
+pub(super) struct ReqwestTransport<'a> {
     owner: &'a TypesenseClient,
 }
 
@@ -536,10 +532,7 @@ impl TypesenseTransport for ReqwestTransport<'_> {
                 )
             })? {
                 if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                    return Err(TypesenseClientError::new(
-                        TypesenseErrorKind::Limit,
-                        "Typesense response exceeded the byte limit",
-                    ));
+                    return Err(response_byte_limit_error());
                 }
                 body.extend_from_slice(&chunk);
             }
@@ -552,39 +545,31 @@ pub(super) fn encoded_collection_name(collection: &str) -> String {
     urlencoding::encode(collection).into_owned()
 }
 
-pub(super) fn decode_document_page(body: &[u8]) -> Result<DocumentPage, TypesenseClientError> {
-    decode_document_page_with_limit(body, DOCUMENT_PAGE_LIMIT)
+/// Typesense 30.2 export is one unpaginated stream, so the whole response body
+/// is the export's only page, bounded by the default item ceiling.
+pub(super) fn decode_document_page(body: &[u8]) -> Result<Vec<Value>, TypesenseClientError> {
+    decode_exported_documents(body, MAX_DOCUMENT_ITEMS)
 }
 
-fn decode_document_page_with_limit(
+/// Decode one bounded export stream: the byte ceiling first, then the JSONL
+/// values, with the item ceiling applied as values arrive so an oversized stream
+/// is refused before it is fully materialized.
+fn decode_exported_documents(
     body: &[u8],
-    page_size: usize,
-) -> Result<DocumentPage, TypesenseClientError> {
+    max_items: usize,
+) -> Result<Vec<Value>, TypesenseClientError> {
     if body.len() > MAX_RESPONSE_BYTES {
-        return Err(TypesenseClientError::new(
-            TypesenseErrorKind::Limit,
-            "Typesense response exceeded the byte limit",
-        ));
+        return Err(response_byte_limit_error());
     }
-
-    let documents = decode_exported_documents(body)?;
-    if page_size == 0 || documents.len() > page_size {
-        return Err(document_progress_error());
-    }
-    Ok(DocumentPage {
-        found: documents.len(),
-        documents,
-        page: 1,
-    })
-}
-
-fn decode_exported_documents(body: &[u8]) -> Result<Vec<Value>, TypesenseClientError> {
     let stream = serde_json::Deserializer::from_slice(body).into_iter::<Value>();
     let mut documents = Vec::new();
     for item in stream {
         let document = item.map_err(|_| document_progress_error())?;
         if !document.is_object() {
             return Err(document_progress_error());
+        }
+        if documents.len() == max_items {
+            return Err(document_limit_error());
         }
         documents.push(document);
     }
@@ -628,6 +613,11 @@ where
     .await
 }
 
+/// Typesense 30.2 answers `GET /collections/<name>/documents/export` with one
+/// unpaginated JSONL stream and ignores `page`/`per_page`, so a complete capture
+/// is exactly one request whose whole body is decoded once. Fabricating query
+/// pagination silently truncated every export to the first response and then
+/// failed progress validation, which is the defect this owner replaces.
 async fn fetch_document_pages_with_expected_count<T, F>(
     transport: &mut T,
     collection: &str,
@@ -639,79 +629,35 @@ where
     T: TypesenseTransport,
     F: FnMut(Vec<Value>) -> Result<(), TypesenseClientError>,
 {
-    let encoded = encoded_collection_name(collection);
-    let mut expected_page = 1usize;
-    let mut observed_items = 0usize;
-
-    loop {
-        if page_exceeds_traversal_budget(expected_page, limits, expected_items, observed_items) {
-            return Err(document_limit_error());
-        }
-        let response = transport
-            .send(TypesenseRequest {
-                method: TypesenseMethod::Get,
-                path: format!(
-                    "/collections/{encoded}/documents/export?page={expected_page}&per_page={}",
-                    limits.page_size
-                ),
-                body: None,
-            })
-            .await?;
-        validate_response_status(response.status)?;
-        let page = decode_document_page_with_limit(&response.body, limits.page_size)?;
-        validate_page_progress(&page, expected_page)?;
-
-        let page_items = page.documents.len();
-        if page_items == 0 {
-            return if expected_items == Some(observed_items) {
-                Ok(())
-            } else {
-                Err(document_progress_error())
-            };
-        }
-        if expected_items.is_some_and(|expected| observed_items >= expected) {
-            return Err(document_progress_error());
-        }
-        observed_items = observed_items
-            .checked_add(page_items)
-            .ok_or_else(document_progress_error)?;
-        if expected_items.is_some_and(|expected| observed_items > expected) {
-            return Err(document_progress_error());
-        }
-        if page.found > limits.max_items || observed_items > limits.max_items {
-            return Err(document_limit_error());
-        }
-
-        expected_page += 1;
-        consume_page(page.documents)?;
-        if page_items < limits.page_size {
-            return Ok(());
-        }
+    if expected_items.is_some_and(|expected| expected > limits.max_items) {
+        return Err(document_limit_error());
     }
-}
-
-pub(super) fn page_exceeds_traversal_budget(
-    expected_page: usize,
-    limits: TraversalLimits,
-    expected_items: Option<usize>,
-    observed_items: usize,
-) -> bool {
-    if expected_page <= limits.max_pages {
-        return false;
-    }
-    let is_counted_completion_probe = expected_items == Some(observed_items)
-        && expected_page.checked_sub(1) == Some(limits.max_pages);
-    !is_counted_completion_probe
-}
-
-fn validate_page_progress(
-    page: &DocumentPage,
-    expected_page: usize,
-) -> Result<(), TypesenseClientError> {
-    if page.page != 1 || expected_page == 0 {
+    let response = transport
+        .send(TypesenseRequest {
+            method: TypesenseMethod::Get,
+            path: document_export_path(collection),
+            body: None,
+        })
+        .await?;
+    validate_response_status(response.status)?;
+    let documents = decode_exported_documents(&response.body, limits.max_items)?;
+    if expected_items.is_some_and(|expected| expected != documents.len()) {
         return Err(document_progress_error());
     }
-    Ok(())
+    if documents.is_empty() {
+        return Ok(());
+    }
+    consume_page(documents)
+}
+
+/// The single export request shape: no query at all. Typesense 30.2 has no
+/// `page`/`per_page` contract on this endpoint, so any such query would be
+/// ignored while making the request look paginated.
+fn document_export_path(collection: &str) -> String {
+    format!(
+        "/collections/{}/documents/export",
+        encoded_collection_name(collection)
+    )
 }
 
 fn validate_response_status(status: u16) -> Result<(), TypesenseClientError> {
@@ -733,9 +679,9 @@ fn validate_response_status(status: u16) -> Result<(), TypesenseClientError> {
 }
 
 /// Collection discovery is `GET /collections` paginated by `offset`/`limit`.
-/// This is NOT the `page`/`per_page` document-export contract used by
-/// `fetch_document_pages_with_expected_count`; the two must not be conflated.
-/// `exclude_fields=fields` keeps the summary response bounded.
+/// It is the only paginated Typesense endpoint this client uses: document
+/// export (`document_export_path`) is a single unpaginated stream, and the two
+/// must not be conflated. `exclude_fields=fields` keeps the summary bounded.
 fn collection_listing_path(offset: Option<u64>, limit: Option<u64>) -> String {
     let mut query = vec!["exclude_fields=fields".to_string()];
     if let Some(offset) = offset {
@@ -782,16 +728,13 @@ pub(super) async fn require_read_access_with_transport<T: TypesenseTransport>(
     let response = transport
         .send(TypesenseRequest {
             method: TypesenseMethod::Get,
-            path: format!(
-                "/collections/{}/documents/export?page=1&per_page={DOCUMENT_PAGE_LIMIT}",
-                encoded_collection_name(collection)
-            ),
+            path: document_export_path(collection),
             body: None,
         })
         .await?;
     validate_response_status(response.status)?;
-    let page = decode_document_page(&response.body)?;
-    if page.documents.is_empty() && collection_metadata.num_documents != 0 {
+    let documents = decode_document_page(&response.body)?;
+    if documents.is_empty() && collection_metadata.num_documents != 0 {
         return Err(document_progress_error());
     }
     Ok(())
@@ -807,25 +750,19 @@ where
     F: FnMut(Vec<Value>) -> Result<(), TypesenseClientError>,
 {
     let before_collection = read_collection(transport, collection_name).await?;
-    let mut observed_documents = 0usize;
-    let mut consume_documents = |documents: Vec<Value>| {
-        observed_documents = observed_documents
-            .checked_add(documents.len())
-            .ok_or_else(document_limit_error)?;
-        consume_page(documents)
-    };
+    // The export-stream owner already refuses any stream whose value count does
+    // not equal the advertised document count, so capture only has to prove the
+    // collection metadata did not move underneath the read.
     fetch_document_pages_with_expected_count(
         transport,
         collection_name,
         TraversalLimits::default(),
         Some(before_collection.num_documents),
-        &mut consume_documents,
+        &mut consume_page,
     )
     .await?;
     let after_collection = read_collection(transport, collection_name).await?;
-    if before_collection != after_collection
-        || observed_documents != before_collection.num_documents
-    {
+    if before_collection != after_collection {
         return Err(source_changed_error());
     }
     let settings = settings_from_collection(&before_collection);
@@ -868,10 +805,7 @@ async fn read_json<T: TypesenseTransport>(
         .await?;
     validate_response_status(response.status)?;
     if response.body.len() > MAX_RESPONSE_BYTES {
-        return Err(TypesenseClientError::new(
-            TypesenseErrorKind::Limit,
-            "Typesense response exceeded the byte limit",
-        ));
+        return Err(response_byte_limit_error());
     }
     serde_json::from_slice(&response.body).map_err(|_| schema_error())
 }
@@ -940,6 +874,13 @@ fn document_progress_error() -> TypesenseClientError {
     TypesenseClientError::new(
         TypesenseErrorKind::Progress,
         "Typesense document pagination is invalid",
+    )
+}
+
+fn response_byte_limit_error() -> TypesenseClientError {
+    TypesenseClientError::new(
+        TypesenseErrorKind::Limit,
+        "Typesense response exceeded the byte limit",
     )
 }
 

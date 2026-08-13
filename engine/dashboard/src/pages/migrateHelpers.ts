@@ -19,9 +19,8 @@ export interface MigrationProviderDescriptor {
   loopbackOptInName?: string;
 }
 
-// MigrateFromAlgoliaRequest, MigrateFromMeilisearchRequest, and
-// MigrateFromTypesenseRequest differ only by the first credential field:
-// appId, endpoint, or node. Keep that provider-varying contract here.
+// Keep dashboard payload construction downstream of the backend's
+// provider-specific migration request schemas.
 export const MIGRATION_PROVIDER_DESCRIPTORS: readonly MigrationProviderDescriptor[] = [
   {
     id: 'algolia',
@@ -167,6 +166,7 @@ interface BuildMigrationRequestBodyInput {
   sourceIndex: string;
   targetIndex: string;
   overwrite: boolean;
+  sourceWriteFrozen?: boolean;
 }
 
 export function buildDashboardAuthHeaders(): Record<string, string> {
@@ -216,6 +216,7 @@ export function buildMigrationRequestBody({
   sourceIndex,
   targetIndex,
   overwrite,
+  sourceWriteFrozen,
 }: BuildMigrationRequestBodyInput): Record<string, unknown> {
   const body: Record<string, unknown> = {
     ...buildProviderCredentialFields(provider, firstCredentialValue, apiKey),
@@ -227,6 +228,9 @@ export function buildMigrationRequestBody({
   }
   if (overwrite) {
     body.overwrite = true;
+  }
+  if (provider.id === 'typesense' && sourceWriteFrozen === true) {
+    body.sourceWriteFrozen = true;
   }
 
   return body;

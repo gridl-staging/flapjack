@@ -239,6 +239,88 @@ describe('Migrate', () => {
     );
   });
 
+  it('requires an explicit Typesense write freeze without changing other providers', async () => {
+    axiosMocks.post.mockResolvedValue({ data: createMigrationPreview() });
+    renderMigrate();
+
+    fireEvent.change(screen.getByLabelText('Application ID'), {
+      target: { value: 'algolia-app' },
+    });
+    fireEvent.change(screen.getByLabelText('Admin API Key'), {
+      target: { value: 'algolia-key' },
+    });
+    fireEvent.change(screen.getByLabelText('Source Index (Algolia)'), {
+      target: { value: 'products' },
+    });
+    expect(screen.getByRole('button', { name: /preview migration/i })).toBeEnabled();
+    expect(screen.queryByTestId('typesense-source-write-frozen')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Meilisearch' }));
+    fireEvent.change(screen.getByLabelText('Endpoint'), {
+      target: { value: 'https://meilisearch.example' },
+    });
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'meilisearch-key' },
+    });
+    fireEvent.change(screen.getByLabelText('Source index'), {
+      target: { value: 'products' },
+    });
+    expect(screen.getByRole('button', { name: /preview migration/i })).toBeEnabled();
+    expect(screen.queryByTestId('typesense-source-write-frozen')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Typesense' }));
+    fireEvent.change(screen.getByLabelText('Node URL'), {
+      target: { value: 'https://typesense.example' },
+    });
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'typesense-key' },
+    });
+    fireEvent.change(screen.getByLabelText('Source collection'), {
+      target: { value: 'products' },
+    });
+
+    const attestation = screen.queryByTestId('typesense-source-write-frozen');
+    if (!attestation) {
+      console.error('WRITE_FREEZE_UI_RED=unchecked_control_did_not_block_preview_or_submit');
+      expect(attestation, 'Typesense write-freeze checkbox must be rendered').not.toBeNull();
+      return;
+    }
+
+    expect(attestation).toHaveAccessibleName(
+      /I have paused writes to the selected Typesense collection for the complete migration/i,
+    );
+    expect(attestation).not.toBeChecked();
+    expect(screen.getByRole('button', { name: /preview migration/i })).toBeDisabled();
+
+    fireEvent.click(attestation);
+    fireEvent.change(screen.getByLabelText('Source collection'), {
+      target: { value: 'products_v2' },
+    });
+    expect(attestation).not.toBeChecked();
+    fireEvent.click(attestation);
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'rotated-typesense-key' },
+    });
+    expect(attestation).not.toBeChecked();
+    fireEvent.click(attestation);
+    fireEvent.change(screen.getByLabelText('Node URL'), {
+      target: { value: 'https://replacement.typesense.example' },
+    });
+    expect(attestation).not.toBeChecked();
+    fireEvent.click(attestation);
+    const previewButton = screen.getByRole('button', { name: /preview migration/i });
+    expect(previewButton).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(previewButton);
+    });
+    const submitButton = await screen.findByRole('button', { name: /^submit migration$/i });
+    expect(submitButton).toBeEnabled();
+
+    fireEvent.click(attestation);
+    expect(screen.queryByRole('button', { name: /^submit migration$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /preview migration/i })).toBeDisabled();
+  });
+
   it('makes editing the source the primary action after preview refusal', async () => {
     axiosMocks.post.mockRejectedValueOnce(
       new Error('Meilisearch preview loopback endpoint is disabled'),

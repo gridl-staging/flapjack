@@ -317,21 +317,18 @@ interface MigrationIndexNamesCardProps {
     targetIndex: string;
     trimmedSourceIndex: string;
     overwrite: boolean;
+    sourceWriteFrozen: boolean;
   };
   controlsLocked: boolean;
   actions: {
     changeSourceIndex: (value: string) => void;
     changeTargetIndex: (value: string) => void;
     changeOverwrite: (value: boolean) => void;
+    changeSourceWriteFrozen: (value: boolean) => void;
   };
 }
 
-export function MigrationIndexNamesCard({
-  provider,
-  values,
-  controlsLocked,
-  actions,
-}: MigrationIndexNamesCardProps) {
+export function MigrationIndexNamesCard({ provider, values, controlsLocked, actions }: MigrationIndexNamesCardProps) {
   return (
     <Card>
       <CardHeader>
@@ -341,9 +338,7 @@ export function MigrationIndexNamesCard({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="source-index">{provider.sourceFieldLabel}</Label>
-            <Input
-              id="source-index"
-              value={values.sourceIndex}
+            <Input id="source-index" value={values.sourceIndex}
               onChange={(event) => actions.changeSourceIndex(event.target.value)}
               placeholder={values.sourcesLoaded ? 'Select above or type name' : 'e.g., products, articles'}
               disabled={controlsLocked}
@@ -355,38 +350,41 @@ export function MigrationIndexNamesCard({
               Target Index (Flapjack)
               <span className="text-muted-foreground font-normal ml-1">- optional</span>
             </Label>
-            <Input
-              id="target-index"
-              value={values.targetIndex}
+            <Input id="target-index" value={values.targetIndex}
               onChange={(event) => actions.changeTargetIndex(event.target.value)}
               placeholder={values.trimmedSourceIndex || 'Same as source'}
               disabled={controlsLocked}
               data-testid="migration-target-index"
             />
-            <p className="text-xs text-muted-foreground">
-              Defaults to the source index name if left blank.
-            </p>
+            <p className="text-xs text-muted-foreground">Defaults to the source index name if left blank.</p>
           </div>
         </div>
 
         <div className="flex items-center gap-3 pt-2">
-          <Switch
-            id="overwrite"
-            checked={values.overwrite}
-            onCheckedChange={actions.changeOverwrite}
-            disabled={controlsLocked}
+          <Switch id="overwrite" checked={values.overwrite}
+            onCheckedChange={actions.changeOverwrite} disabled={controlsLocked}
             aria-label="Overwrite if exists"
             data-testid="migration-overwrite"
           />
           <div>
-            <Label htmlFor="overwrite" className="cursor-pointer">
-              Overwrite if exists
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              If the target index already exists, delete it first and re-import.
-            </p>
+            <Label htmlFor="overwrite" className="cursor-pointer">Overwrite if exists</Label>
+            <p className="text-xs text-muted-foreground">If the target index already exists, delete it first and re-import.</p>
           </div>
         </div>
+
+        {provider.id === 'typesense' && (
+          <div className="flex items-start gap-3 pt-2">
+            <input id="typesense-source-write-frozen" type="checkbox"
+              checked={values.sourceWriteFrozen}
+              onChange={(event) => actions.changeSourceWriteFrozen(event.target.checked)}
+              disabled={controlsLocked} data-testid="typesense-source-write-frozen"
+              className="mt-1 h-4 w-4 rounded border-input accent-primary" />
+            <div>
+              <Label htmlFor="typesense-source-write-frozen" className="cursor-pointer">I have paused writes to the selected Typesense collection for the complete migration.</Label>
+              <p className="text-xs text-muted-foreground">Keep writes paused until the migration reports completion.</p>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

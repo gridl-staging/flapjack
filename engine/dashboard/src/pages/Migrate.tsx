@@ -40,6 +40,7 @@ interface MigrationFormValues {
   sourceIndex: string;
   targetIndex: string;
   overwrite: boolean;
+  sourceWriteFrozen: boolean;
   showKey: boolean;
 }
 
@@ -50,6 +51,7 @@ const INITIAL_FORM_VALUES: MigrationFormValues = {
   sourceIndex: '',
   targetIndex: '',
   overwrite: false,
+  sourceWriteFrozen: false,
   showKey: false,
 };
 
@@ -94,6 +96,7 @@ export function Migrate() {
           targetIndex: form.values.targetIndex,
           trimmedSourceIndex: form.trimmedSourceIndex,
           overwrite: form.values.overwrite,
+          sourceWriteFrozen: form.values.sourceWriteFrozen,
         }}
         controlsLocked={controller.controlsLocked}
         actions={actions.indexNames}
@@ -172,6 +175,8 @@ function useMigrationController() {
   const previewHasBlockers = (previewHardRejections ?? 0) > 0;
   const requestPending = preview.mutation.isPending || migration.mutation.isPending;
   const controlsLocked = discovery.mutation.isPending || requestPending;
+  const hasRequiredWriteFreeze = form.provider.id !== 'typesense'
+    || form.values.sourceWriteFrozen;
 
   return {
     form,
@@ -181,31 +186,49 @@ function useMigrationController() {
     hasCredentials,
     controlsLocked,
     canFetchSources: hasCredentials && !discovery.mutation.isPending,
-    canPreview: Boolean(hasCredentials && form.trimmedSourceIndex) && !requestPending,
+    canPreview: Boolean(hasCredentials && form.trimmedSourceIndex && hasRequiredWriteFreeze)
+      && !requestPending,
     previewHasBlockers,
-    canSubmit: Boolean(preview.mutation.data && previewHardRejections === 0) && !requestPending,
+    canSubmit: Boolean(
+      preview.mutation.data && previewHardRejections === 0 && hasRequiredWriteFreeze,
+    ) && !requestPending,
     actions: {
       credentials: {
         selectProvider: (selectedProviderId: MigrationProviderId) => {
-          form.update({ selectedProviderId, firstCredentialValue: '', apiKey: '', sourceIndex: '' });
+          form.update({
+            selectedProviderId,
+            firstCredentialValue: '',
+            apiKey: '',
+            sourceIndex: '',
+            sourceWriteFrozen: false,
+          });
           resetAllOutput();
         },
         changeFirstCredential: (firstCredentialValue: string) => {
-          form.update({ firstCredentialValue });
+          form.update({ firstCredentialValue, sourceWriteFrozen: false });
           resetAllOutput();
         },
         changeApiKey: (apiKey: string) => {
-          form.update({ apiKey });
+          form.update({ apiKey, sourceWriteFrozen: false });
           resetAllOutput();
         },
         toggleApiKeyVisibility: () => form.update({ showKey: !form.values.showKey }),
         fetchSources: () => discovery.mutation.mutate(),
       },
-      selectSourceIndex: (sourceIndex: string) => changeIndexValue({ sourceIndex }),
+      selectSourceIndex: (sourceIndex: string) => changeIndexValue({
+        sourceIndex,
+        sourceWriteFrozen: false,
+      }),
       indexNames: {
-        changeSourceIndex: (sourceIndex: string) => changeIndexValue({ sourceIndex }),
+        changeSourceIndex: (sourceIndex: string) => changeIndexValue({
+          sourceIndex,
+          sourceWriteFrozen: false,
+        }),
         changeTargetIndex: (targetIndex: string) => changeIndexValue({ targetIndex }),
         changeOverwrite: (overwrite: boolean) => changeIndexValue({ overwrite }),
+        changeSourceWriteFrozen: (sourceWriteFrozen: boolean) => changeIndexValue({
+          sourceWriteFrozen,
+        }),
       },
       preview: () => {
         migration.reset();
@@ -254,7 +277,7 @@ function useSourceDiscovery(form: ReturnType<typeof useMigrationForm>) {
       setResponse(nextResponse);
       setError(null);
       if (nextResponse.indexes.length === 1) {
-        form.update({ sourceIndex: nextResponse.indexes[0].name });
+        form.update({ sourceIndex: nextResponse.indexes[0].name, sourceWriteFrozen: false });
       }
     },
     onError: (requestError) => {
@@ -331,6 +354,7 @@ function buildCurrentMigrationRequestBody(
     sourceIndex: form.trimmedSourceIndex,
     targetIndex: form.trimmedTargetIndex,
     overwrite: form.values.overwrite,
+    sourceWriteFrozen: form.values.sourceWriteFrozen,
   });
 }
 

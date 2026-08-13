@@ -471,6 +471,8 @@ section "Release contracts actually run"
 assert_contains "$CI_WORKFLOW" '^\s*run: bash engine/tests/test_release_workflow_structure\.sh\s*$' "ci.yml runs the release workflow structure contract"
 assert_contains "$CI_WORKFLOW" '^\s*run: bash engine/tests/test_ghcr_publish_preflight\.sh\s*$' "ci.yml runs the GHCR publish preflight contract"
 assert_contains "$CI_WORKFLOW" '^\s*run: bash engine/tests/build_identity_cross_kat_supervision_test\.sh\s*$' "ci.yml runs the cross passthrough KAT supervision contract"
+assert_contains "$CI_WORKFLOW" '^\s*run: bash engine/tests/validate_public_ledger_citations_test\.sh\s*$' "ci.yml runs the public-ledger citation contract tests"
+assert_contains "$CI_WORKFLOW" '^\s*run: bash engine/tests/validate_public_ledger_citations\.sh --mode mirror\s*$' "ci.yml runs the public-ledger citation oracle in mirror mode"
 # The assertions above prove release.yml DECLARES the CI-status preflight job. This one
 # proves the preflight's behavioural contract is executed rather than merely present:
 # engine/tests/test_release_ci_status_preflight.sh shipped with REL-12 and was invoked by

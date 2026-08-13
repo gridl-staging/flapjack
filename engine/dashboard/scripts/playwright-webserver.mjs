@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
@@ -175,24 +176,150 @@ function buildStartupLeasePath(port) {
   return path.join(os.tmpdir(), `flapjack-playwright-webserver-${port}.lock`);
 }
 
-export async function acquireStartupLease(lockPath) {
-  try {
-    const handle = await fs.open(lockPath, 'wx');
-    let released = false;
+function isAlreadyExists(error) {
+  return error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST';
+}
 
-    return async () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      await handle.close().catch(() => {});
-      await fs.unlink(lockPath).catch(() => {});
-    };
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
   } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
+    // EPERM still proves a process owns the PID; only ESRCH proves that it is gone.
+    return !(error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH');
+  }
+}
+
+async function readStartupLease(lockPath) {
+  try {
+    const metadata = JSON.parse(await fs.readFile(lockPath, 'utf8'));
+    if (
+      metadata?.version !== 1
+      || !Number.isSafeInteger(metadata.pid)
+      || metadata.pid <= 0
+      || typeof metadata.hostname !== 'string'
+      || !metadata.hostname
+      || typeof metadata.token !== 'string'
+      || !metadata.token
+    ) {
       return null;
     }
+    return metadata;
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return undefined;
+    }
+    // A legacy empty lock or an interrupted write cannot prove its owner is dead.
+    return null;
+  }
+}
+
+function startupLeaseIsLive(metadata, hostname, checkProcessAlive) {
+  // A shared temporary directory may expose another host's lease. Its PID namespace is
+  // not ours, so inability to prove death must fail closed.
+  return metadata.hostname !== hostname || checkProcessAlive(metadata.pid);
+}
+
+async function linkLease(candidatePath, targetPath) {
+  try {
+    await fs.link(candidatePath, targetPath);
+    return true;
+  } catch (error) {
+    if (isAlreadyExists(error)) {
+      return false;
+    }
     throw error;
+  }
+}
+
+async function unlinkOwnedLease(lockPath, token) {
+  const current = await readStartupLease(lockPath);
+  if (current?.token === token) {
+    await fs.unlink(lockPath).catch((error) => {
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) {
+        throw error;
+      }
+    });
+  }
+}
+
+/**
+ * Atomically acquires the per-port startup lease.
+ *
+ * The old implementation left an empty `wx` file behind when its process died, which
+ * gave successors no safe way to distinguish a live startup from a stale lock. The
+ * published file is now a fully written hard link carrying same-host PID ownership.
+ * A second hard-link guard serializes dead-owner reclamation, while the final link to
+ * `lockPath` remains the single atomic election point for simultaneous contenders.
+ */
+export async function acquireStartupLease(lockPath, {
+  pid = process.pid,
+  hostname = os.hostname(),
+  token = randomUUID(),
+  isProcessAlive: checkProcessAlive = isProcessAlive,
+} = {}) {
+  const metadata = {
+    version: 1,
+    pid,
+    hostname,
+    token,
+  };
+  const candidatePath = `${lockPath}.${pid}.${token}.candidate`;
+  const reclaimGuardPath = `${lockPath}.reclaim`;
+
+  await fs.writeFile(candidatePath, `${JSON.stringify(metadata)}\n`, {
+    flag: 'wx',
+    mode: 0o600,
+  });
+
+  const release = async () => {
+    await unlinkOwnedLease(lockPath, token);
+  };
+
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (await linkLease(candidatePath, lockPath)) {
+        return release;
+      }
+
+      const existing = await readStartupLease(lockPath);
+      if (existing === undefined) {
+        continue;
+      }
+      if (existing === null || startupLeaseIsLive(existing, hostname, checkProcessAlive)) {
+        return null;
+      }
+
+      if (!await linkLease(candidatePath, reclaimGuardPath)) {
+        return null;
+      }
+
+      try {
+        // The owner may have released or another contender may have won between our
+        // first read and guard acquisition. Re-read under the guard before unlinking.
+        const guardedLease = await readStartupLease(lockPath);
+        if (
+          guardedLease?.token !== existing.token
+          || startupLeaseIsLive(guardedLease, hostname, checkProcessAlive)
+        ) {
+          continue;
+        }
+        await fs.unlink(lockPath);
+
+        // Keep the reclaim guard until this contender has either won the atomic link or
+        // observed a winner. Callers that passed the guard check before it existed can
+        // still contend safely at this link; exactly one candidate can become owner.
+        if (await linkLease(candidatePath, lockPath)) {
+          return release;
+        }
+      } finally {
+        await unlinkOwnedLease(reclaimGuardPath, token);
+      }
+    }
+
+    return null;
+  } finally {
+    await fs.unlink(candidatePath).catch(() => {});
   }
 }
 

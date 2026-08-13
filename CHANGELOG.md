@@ -7,8 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-08-12
+
 ### Added
 
+- **Typesense migration now requires an explicit source write-freeze attestation.** Preview and
+  submit reject missing or false `sourceWriteFrozen` before any source request. The CLI and
+  dashboard carry the same contract, the dashboard checkbox is default-unchecked, and successful
+  preview/submit behavior is proven against a real pinned Typesense 30.2 source. Resume remains
+  unsupported for Typesense.
 - **The dashboard `Migrate` screen now reaches all three source providers.** Discovery,
   submit, and status polling drive the real `/1/migrations/{algolia,meilisearch,typesense}`
   routes from one provider descriptor, replacing the Algolia-only compat aliases. A source
@@ -25,6 +32,18 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Official browser search clients now authenticate with the same public contract as direct
+  requests.** The server accepts the Algolia Application ID from
+  `x-algolia-application-id` or the requester's `x-algolia-agent` query parameter while keeping
+  the search API key scoped and public. Recurring real-client tests exercise vanilla
+  `algoliasearch`, React InstantSearch, and Vue InstantSearch against a live Flapjack server and
+  require each client to return its own exact seeded record.
+
+- **Typesense export reads the endpoint's real single-stream contract.** The source client no
+  longer fabricates `page` / `per_page` windows for `/documents/export`; it consumes one bounded
+  JSONL stream, including a final record without a trailing newline, while preserving the existing
+  response-byte and item ceilings. A pinned live contract proves 137 exact IDs are captured once
+  from one query-free export request.
 - **Release binaries now honour the self-hosted-source loopback opt-ins they document.**
   The Meilisearch and Typesense loopback admission seams were `#[cfg(debug_assertions)]`-gated,
   so `FJ_ENABLE_MEILISEARCH_PREVIEW_LOOPBACK=1` / `FJ_ENABLE_TYPESENSE_PREVIEW_LOOPBACK=1`
