@@ -58,8 +58,9 @@ doc_sync_python_with_tomllib() {
   local -a candidates=()
   if [ -n "${DOC_SYNC_PYTHON:-}" ]; then
     candidates+=("$DOC_SYNC_PYTHON")
+  else
+    candidates+=(python3 python3.14 python3.13 python3.12 python3.11)
   fi
-  candidates+=(python3 python3.14 python3.13 python3.12 python3.11)
 
   local -a tried=()
   local candidate
