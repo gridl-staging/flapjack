@@ -68,7 +68,7 @@ This file owns the open-work ledger. Every row names the command, test, or recei
 
 Dispatch sequencing for the next batch. **This section is the sole owner of current ordering and parallelism** — every row's scope, evidence, and owners stay in `Active` or `Planned`, while `PROJECT_OVERVIEW.md` owns only the enduring mission and ordering principles. Reference work by ID here; do not recreate a numbered priority list elsewhere.
 
-**Current prerequisites, refreshed 2026-08-12.** The `aug10_8pm` adoption-debt batch is fully merged and finalized. The `TEST-FLAKE-1` evidence disposition, `SEC-EVENTS-2` build lane, combined SEC-G10 integration, and serial SSOT closeout are complete on the local integration branch; none is released or present on a mirror by this statement. Mirror parity is not a prerequisite for local work: local branches and worktrees, local validation, and local dispatch may continue while staging or prod differs. Divergence blocks only promotion into the affected mirror and downstream release or deploy work that depends on that promotion. Promotion evaluates the candidate SHA and its required promotion checks; it does not require equality with the moving dev `HEAD`. Live state must still be re-probed before promotion: `debbie status --json` currently exits `1`, staging's manifest is at dev `83234fa9c`, and prod's is at `1b32cf727`. Every `debbie sync` and every publication requires explicit operator authorization. `SYNC-1` owns that authorized promotion sequence; do not carry its measured lag counts forward without re-running the probe.
+**Current prerequisites, refreshed 2026-08-13.** v1.0.12 is published, `SYNC-1` and `CI-E2E-1` are closed, and the producer-side PBV1 work is complete. `NIGHT-1` remains observation-only until two consecutive scheduled prod nightlies pass. The fjcloud pin, AMI bake, and deployed PBV1 acceptance are owned in fjcloud and are not dispatch candidates in this repository.
 
 **Current host operating rule:** no workspace union is active for this batch, and the completed `5487e725f` runs are evidence under `TEST-FLAKE-1`, not a live resource reservation. Build-heavy Flapjack proofs still run one at a time because this host's contention has repeatedly invalidated timing and liveness evidence. Before parallel dispatch, prove path disjointness from current Git history and check cross-repo lane ownership; do not infer either from lane titles or an old PID/port snapshot. The shared clone stays path-scoped and clean while any detached measurement is active.
 
@@ -80,9 +80,8 @@ Dispatch sequencing for the next batch. **This section is the sole owner of curr
 
 | ID | Why now |
 |----|---------|
-| `SYNC-1` | **External and sequenced after local green.** Its prior `no_publish` arm was correct. Re-run its own live gate; publish only with explicit operator authorization and only if every clause passes.
 | `SDK-1` | **Operator-only remaining work.** Go `v4.0.1` is published and verified. PyPI and RubyGems remain unfixed because registry credentials / a Flapjack-owned publish path are absent; do not dispatch another source-fix lane.
-| `NIGHT-1`, `CI-E2E-1` | **Observe after `SYNC-1`; do not dispatch code.** Read prod CI at the published SHA, then count two consecutive scheduled prod nightlies.
+| `NIGHT-1` | **Observe only; do not dispatch code.** Count two consecutive scheduled prod nightlies at their exact mirror SHAs.
 | `SURV-1` | Work only residual shapes that still lack a narrower row after the security, harness, strand, and public-doc corrections above.
 
 `JOIN-1` left this table on 2026-08-08 **without closing**: it was RETARGETED to manifest maintenance because ADR 0006 deletes the tree it was measuring, so it is no longer a dispatch candidate. Do not re-add it as a re-run lane; its row carries the surviving exit.
