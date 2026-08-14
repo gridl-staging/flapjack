@@ -365,6 +365,46 @@ All automated SDK tests require a running server (`./s/test --sdk` handles this 
 
 ---
 
+## CI Baselines and Execution Tiers
+
+The workflow YAML remains execution truth. `engine/tests/ci_test_tiers.json` is the machine-readable ownership manifest: `test_ci_test_tiers.py` fails public CI when a workflow job, risk class, or intentional Rust ignore has no explicit minimum tier. This table is the operator-facing summary rather than a second executable definition.
+
+| Surface | Minimum tier | Executable owner |
+|---------|--------------|------------------|
+| Rust core search/index and durability | Candidate | `ci.yml` → `rust-tests-fast`; prebuild then bounded `cargo test -p flapjack --lib` |
+| Authentication, index boundary, API compatibility, startup/wiring | Public fast | `ci.yml` → `integration-smoke` |
+| Rust HTTP, vector, server, TLS, and replication | Public complete | `ci.yml` → `rust-tests-all`, using nextest process isolation |
+| Source quality and test-harness contracts | Public fast | `ci.yml` → `fmt`, `clippy`, and `release-contracts` |
+| Dashboard and SDKs | Public fast | `ci.yml` dashboard and SDK job families; surface details stay in their own READMEs |
+| Installer and migration oracles | Nightly | `nightly.yml` installer and migration jobs |
+| Comprehensive default-feature Rust/dashboard/SDK/integration | Nightly | `nightly.yml` comprehensive job families |
+| Process-global leak detection | Union | `union.yml` → `rust-in-process-union`; never substitute nextest |
+| Packaging, images, and release preflights | Release | manually dispatched `release.yml` and development-image `docker.yml`; never part of candidate feedback |
+| Twenty long-running or live-system ignored Rust evidence harnesses | Manual evidence | exact source/name allowlist in `ci_test_tiers.json` |
+
+### Public-staging baseline (before the candidate split)
+
+These are successful, first-attempt `gridl-staging/flapjack` push-CI specimens. Durations are run/job wall clock from GitHub timestamps; compare jobs within this workflow family only.
+
+| Run | Workflow | Rust fast | Rust all | Integration smoke | Release contracts |
+|-----|----------|-----------|----------|-------------------|-------------------|
+| `31682605708` | 24m27s | 24m17s | 22m18s | 18s | 35s |
+| `31674400217` | 26m02s | 25m55s | 23m43s | 15s | 38s |
+| `31664714337` | 25m41s | 25m34s | 24m07s | 18s | 40s |
+| `31658983027` | 26m14s | 25m59s | 23m34s | 19s | 33s |
+| `31657261952` | 26m12s | 25m58s | 25m38s | 19s | 35s |
+| `31245623596` | 25m51s | 25m40s | 23m10s | 19s | 27s |
+
+Median Rust-fast wall clock was 25m47s. In run `31682605708`, the vector prebuild compiled for 3m11s with step-local `RUSTFLAGS=-C debuginfo=0 -C strip=debuginfo`; nextest then returned to the job profile `-C debuginfo=0`, recompiled for 9m53s, and executed 962 tests in only 62.397s. The complete job showed the same fingerprint mismatch: a 2m53s prebuild, a 9m04s nextest compile, then 5,847 tests in 159.700s. The repaired workflow keeps compilation before the timeout but gives prebuild and nextest one job-level compilation identity.
+
+### Candidate contract and local measurements
+
+The candidate deliberately excludes the two unsafe broad library unions. The vector-feature `flapjack + flapjack-http` library specimen ran 2,434 tests but failed from cross-test vector-save observation interference; the exact test passed alone. The default-feature workspace library specimen ran 2,433 HTTP tests but failed from migration process-state interference; that exact test also passed alone. Both surfaces retain nextest and union owners.
+
+On an uncontended Apple Silicon host with an absent worktree target directory, `cargo test -p flapjack --lib --no-run` took 161.22s. Reusing that artifact, the bounded candidate took 145.64s and passed 2,277 tests with the eight manifest-classified manual-evidence ignores. A focused durability filter completed in 6.89s. Cold compilation and warm behavior are reported separately; the behavioral command has a 300-second cap and streams individual test results.
+
+---
+
 ## Strategy Overview
 
 | Layer | Command | Tests | Time | Purpose |

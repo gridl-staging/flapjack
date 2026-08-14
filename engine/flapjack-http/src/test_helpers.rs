@@ -411,6 +411,9 @@ impl<'tmp> TestStateBuilder<'tmp> {
             idempotency_cache: Arc::new(
                 crate::idempotency::IdempotencyCache::from_env_with_data_dir(self.tmp.path()),
             ),
+            background_task_health: Arc::new(
+                crate::background_tasks::BackgroundTaskHealth::default(),
+            ),
         }
     }
 

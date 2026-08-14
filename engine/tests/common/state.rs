@@ -232,6 +232,9 @@ pub fn make_test_app_state(
         idempotency_cache: Arc::new(flapjack_http::idempotency::IdempotencyCache::new(
             std::time::Duration::from_secs(300),
         )),
+        background_task_health: Arc::new(
+            flapjack_http::background_tasks::BackgroundTaskHealth::default(),
+        ),
     })
 }
 
@@ -1526,7 +1529,6 @@ pub async fn try_spawn_replication_node_on_existing_dir_with_peers(
 mod tests {
     use super::{build_node_router, make_test_app_state};
     use axum::http::{Method, StatusCode};
-    use flapjack::dictionaries::DEFAULT_DICTIONARY_TENANT;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -1538,7 +1540,7 @@ mod tests {
         let response = crate::common::http::send_empty_response(
             &app,
             Method::GET,
-            &format!("/internal/ops?tenant_id={DEFAULT_DICTIONARY_TENANT}&since_seq=0"),
+            "/internal/ops?tenant_id=missing_tenant&since_seq=0",
         )
         .await;
         let status = response.status();
