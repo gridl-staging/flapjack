@@ -32,7 +32,10 @@
       "id": "test_harness_integrity",
       "minimum_tier": "public_fast",
       "owner_jobs": [".github/workflows/ci.yml#release-contracts"],
-      "required_fragments": ["python3 engine/tests/test_ci_test_tiers.py --verify"],
+      "required_fragments": [
+        "python3 engine/tests/test_ci_test_tiers.py --verify",
+        "python3 engine/tests/test_extract_candidate_binary.py"
+      ],
       "risks": ["test_harness_integrity"]
     },
     {
@@ -40,9 +43,10 @@
       "minimum_tier": "candidate",
       "owner_jobs": [".github/workflows/ci.yml#rust-tests-fast"],
       "required_fragments": [
-        "cargo test -p flapjack --lib --no-run",
+        "cargo test -p flapjack --lib --no-run --message-format=json > candidate_build.json",
+        "id: candidate-build",
         "python3 tests/test_ci_test_tiers.py --verify",
-        "timeout --kill-after=60s 300s cargo test -p flapjack --lib"
+        "timeout --kill-after=60s 300s \"${{ steps.candidate-build.outputs.executable }}\""
       ],
       "risks": ["core_search_index", "durability"]
     },

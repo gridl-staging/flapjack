@@ -90,6 +90,9 @@ jobs:
       - name: Test-tier ownership contract
         run: python3 engine/tests/test_ci_test_tiers.py --verify
 
+      - name: Candidate binary handoff contract
+        run: python3 engine/tests/test_extract_candidate_binary.py
+
   # ============================================================================
   # RUST ENGINE TESTS
   # ============================================================================
@@ -166,8 +169,9 @@ jobs:
       # Compile outside the behavioral timeout. If the cache is cold, this step
       # reports cold compilation honestly instead of consuming the test budget.
       - name: Build candidate core test binary
+        id: candidate-build
         timeout-minutes: 30
-        run: cargo test -p flapjack --lib --no-run
+        run: cargo test -p flapjack --lib --no-run --message-format=json > candidate_build.json && python3 tests/extract_candidate_binary.py candidate_build.json "$GITHUB_OUTPUT"
       - name: Candidate test-tier inventory
         timeout-minutes: 10
         run: python3 tests/test_ci_test_tiers.py --verify
@@ -176,7 +180,7 @@ jobs:
       # process-global interference. Those surfaces stay in isolated nextest.
       - name: Candidate core tests
         timeout-minutes: 6
-        run: timeout --kill-after=60s 300s cargo test -p flapjack --lib
+        run: timeout --kill-after=60s 300s "${{ steps.candidate-build.outputs.executable }}"
 
   rust-tests-all:
     name: Rust tests (all)

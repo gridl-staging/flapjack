@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -92,7 +93,84 @@ def ignored_tests(root=ROOT):
     return discovered
 
 
+def local_runner_path(root=ROOT):
+    """Resolve the owned source runner or Debbie's public remap."""
+    root = Path(root)
+    source_runner = root / "engine/_dev/s/test"
+    public_runner = root / "engine/s/test"
+    if source_runner.exists():
+        if not source_runner.is_file():
+            raise ContractError(
+                "local runner layout is unsupported: engine/_dev/s/test is not a file"
+            )
+        return source_runner
+    if public_runner.exists():
+        if not public_runner.is_file():
+            raise ContractError(
+                "local runner layout is unsupported: engine/s/test is not a file"
+            )
+        return public_runner
+    raise ContractError(
+        "local runner is missing from both engine/_dev/s/test and engine/s/test"
+    )
+
+
+def verify_local_runner(root=ROOT, runner_text=None, named_source_text=None):
+    """Keep the documented default gate out of unsafe in-process HTTP unions."""
+    runner_path = local_runner_path(root)
+    runner_text = (
+        runner_path.read_text(encoding="utf-8")
+        if runner_text is None
+        else runner_text
+    )
+    unsafe_http_lines = [
+        line.strip()
+        for line in runner_text.splitlines()
+        if "cargo test" in line and "--lib" in line and "-p flapjack-http" in line
+    ]
+    if unsafe_http_lines:
+        raise ContractError(
+            "local runner contains unsafe in-process flapjack-http lib ownership: "
+            f"{unsafe_http_lines}"
+        )
+
+    core_owner = "cargo test --lib -p flapjack -p flapjack-replication"
+    if runner_text.count(core_owner) != 1:
+        raise ContractError(
+            "local runner must own the flapjack core and replication libs exactly once"
+        )
+    http_owner = "cargo nextest run -P ci -p flapjack-http --lib"
+    if runner_text.count(http_owner) != 1:
+        raise ContractError(
+            "local runner must own the complete process-isolated flapjack-http lib surface "
+            "exactly once"
+        )
+    integration_owner = "cargo nextest run --no-fail-fast"
+    runner_commands = [line.strip() for line in runner_text.splitlines()]
+    if runner_commands.count(integration_owner) != 1:
+        raise ContractError(
+            "local runner must run its integration surface exactly once without fail-fast"
+        )
+
+    named_source_path = (
+        Path(root)
+        / "engine/flapjack-http/src/handlers/migration/async_status_tests.rs"
+    )
+    named_source_text = (
+        named_source_path.read_text(encoding="utf-8")
+        if named_source_text is None
+        else named_source_text
+    )
+    specimen = "stale_generation_cannot_mutate_terminal_or_ack_state_for_any_provider"
+    if named_source_text.count(f"fn {specimen}") != 1:
+        raise ContractError(
+            "named interference specimen is missing or ambiguous; reconcile its "
+            "process-isolated flapjack-http owner"
+        )
+
+
 def verify(root=ROOT, manifest_path=MANIFEST_PATH, jobs=None, actual_ignored=None):
+    verify_local_runner(root)
     manifest = load_manifest(manifest_path)
     if manifest.get("schema_version") != 1:
         raise ContractError("test-tier manifest schema_version must be 1")
@@ -205,6 +283,85 @@ class TestTierContract(unittest.TestCase):
         mutated.add(("engine/src/new_tests.rs", "silently_skipped"))
         with self.assertRaisesRegex(ContractError, "silently_skipped"):
             verify(actual_ignored=mutated)
+
+    def test_local_runner_rejects_flapjack_http_in_the_in_process_lib_union(self):
+        runner = local_runner_path().read_text(encoding="utf-8")
+        mutated = runner.replace(
+            "cargo test --lib -p flapjack -p flapjack-replication",
+            "cargo test --lib -p flapjack -p flapjack-http -p flapjack-replication",
+            1,
+        )
+        self.assertNotEqual(runner, mutated, "runner mutation must change the live command")
+        with self.assertRaisesRegex(ContractError, "unsafe in-process flapjack-http"):
+            verify_local_runner(runner_text=mutated)
+
+    def test_local_runner_requires_complete_isolated_flapjack_http_lib_ownership(self):
+        runner = local_runner_path().read_text(encoding="utf-8")
+        mutated = runner.replace(
+            "cargo nextest run -P ci -p flapjack-http --lib",
+            "true # removed flapjack-http lib owner",
+            1,
+        )
+        self.assertNotEqual(runner, mutated, "runner mutation must remove the live owner")
+        with self.assertRaisesRegex(ContractError, "process-isolated flapjack-http"):
+            verify_local_runner(runner_text=mutated)
+
+    def test_local_runner_named_interference_specimen_remains_owned(self):
+        source = (
+            ROOT
+            / "engine/flapjack-http/src/handlers/migration/async_status_tests.rs"
+        ).read_text(encoding="utf-8")
+        mutated = source.replace(
+            "stale_generation_cannot_mutate_terminal_or_ack_state_for_any_provider",
+            "renamed_without_reconciling_the_runner_contract",
+            1,
+        )
+        self.assertNotEqual(source, mutated, "source mutation must remove the live specimen")
+        with self.assertRaisesRegex(ContractError, "named interference specimen"):
+            verify_local_runner(named_source_text=mutated)
+
+    def test_local_runner_integration_owner_cannot_regress_to_fail_fast(self):
+        runner = local_runner_path().read_text(encoding="utf-8")
+        mutated = runner.replace(
+            "  cargo nextest run --no-fail-fast\n",
+            "  cargo nextest run\n",
+            1,
+        )
+        self.assertNotEqual(runner, mutated, "runner mutation must restore fail-fast")
+        with self.assertRaisesRegex(ContractError, "without fail-fast"):
+            verify_local_runner(runner_text=mutated)
+
+    def test_local_runner_path_prefers_owned_source_runner(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "engine/_dev/s/test"
+            public = Path(temp) / "engine/s/test"
+            source.parent.mkdir(parents=True)
+            public.parent.mkdir(parents=True)
+            source.write_text("#!/bin/bash\n", encoding="utf-8")
+            public.write_text("#!/bin/bash\n", encoding="utf-8")
+            self.assertEqual(local_runner_path(temp), source)
+
+    def test_local_runner_path_accepts_public_mirror_layout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            public = Path(temp) / "engine/s/test"
+            public.parent.mkdir(parents=True)
+            public.write_text("#!/bin/bash\n", encoding="utf-8")
+            self.assertEqual(local_runner_path(temp), public)
+
+    def test_local_runner_path_rejects_missing_layout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(ContractError, "missing from both"):
+                local_runner_path(temp)
+
+    def test_local_runner_path_rejects_unsupported_source_shape(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "engine/_dev/s/test"
+            public = Path(temp) / "engine/s/test"
+            source.mkdir(parents=True)
+            public.parent.mkdir(parents=True, exist_ok=True)
+            public.write_text("#!/bin/bash\n", encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "unsupported"):
+                local_runner_path(temp)
 
 
 def main():
