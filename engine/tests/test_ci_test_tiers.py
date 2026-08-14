@@ -284,6 +284,29 @@ class TestTierContract(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "silently_skipped"):
             verify(actual_ignored=mutated)
 
+    def test_public_complete_owners_cannot_regress_to_fail_fast(self):
+        owner = ".github/workflows/ci.yml#rust-tests-all"
+        commands = (
+            "cargo nextest run -p flapjack -p flapjack-http --features vector-search "
+            "-P ci --no-fail-fast",
+            "cargo nextest run -p flapjack-server -p flapjack-ssl "
+            "-p flapjack-replication -P ci --no-fail-fast",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                jobs = workflow_job_blocks()
+                mutated = jobs[owner].replace(
+                    command,
+                    command.removesuffix(" --no-fail-fast"),
+                    1,
+                )
+                self.assertNotEqual(
+                    jobs[owner], mutated, "mutation must restore fail-fast"
+                )
+                jobs[owner] = mutated
+                with self.assertRaisesRegex(ContractError, "missing required fragment"):
+                    verify(jobs=jobs)
+
     def test_local_runner_rejects_flapjack_http_in_the_in_process_lib_union(self):
         runner = local_runner_path().read_text(encoding="utf-8")
         mutated = runner.replace(

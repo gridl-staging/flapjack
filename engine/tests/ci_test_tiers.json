@@ -58,7 +58,8 @@
         ".github/workflows/nightly.yml#rust-all-tests"
       ],
       "required_fragments": [
-        "cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci",
+        "cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci --no-fail-fast",
+        "cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication -P ci --no-fail-fast",
         "cargo nextest run -P ci"
       ],
       "risks": ["vector_isolation", "process_global_isolation"]
