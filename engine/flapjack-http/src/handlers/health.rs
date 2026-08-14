@@ -36,6 +36,12 @@ impl PublicBuildInfo {
     }
 }
 
+impl From<&flapjack::BuildInfo> for PublicBuildInfo {
+    fn from(build: &flapjack::BuildInfo) -> Self {
+        Self::new(build, ApiProfile::Full)
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     status: &'static str,

@@ -402,6 +402,7 @@ fn build_test_app_for_data_dir_with_analytics(
             cors_mode: CorsMode::LoopbackOnly,
             disable_dashboard: false,
             replication_api_key: None,
+            api_profile: flapjack_http::api_profile::ApiProfile::Full,
         },
     );
 
@@ -906,6 +907,7 @@ fn build_authenticated_replication_router(
             cors_mode: CorsMode::LoopbackOnly,
             disable_dashboard: false,
             replication_api_key: None,
+            api_profile: flapjack_http::api_profile::ApiProfile::Full,
         },
     )
 }
