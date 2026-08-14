@@ -496,6 +496,7 @@ pub(crate) fn build_test_router_for_data_dir(
             cors_mode: crate::startup::CorsMode::LoopbackOnly,
             disable_dashboard: false,
             replication_api_key: None,
+            api_profile: crate::api_profile::ApiProfile::Full,
         },
     )
 }

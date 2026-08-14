@@ -547,6 +547,7 @@ fn initialize_key_store_persists_env_admin_key_with_restrictive_permissions() {
     let server_config = ServerConfig {
         env_mode: "development".to_string(),
         no_auth: false,
+        api_profile: crate::api_profile::ApiProfile::Full,
         disable_dashboard: false,
         allow_no_auth_public_bind: false,
         admin_key_env: Some("  env-admin-key  ".to_string()),

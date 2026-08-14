@@ -2,6 +2,7 @@ use super::{
     bootstrap_join_with_client, build_bootstrap_http_client, merge_bootstrap_membership,
     resolve_advertised_origin,
 };
+use crate::api_profile::ApiProfile;
 use crate::startup::{acquire_data_dir_process_lock, ServerConfig};
 use crate::test_helpers::{EnvVarRestoreGuard, ENV_MUTEX};
 use flapjack::index::oplog::OpLogEntry;
@@ -30,6 +31,7 @@ fn server_config_for_data_dir(
     ServerConfig {
         env_mode: "development".to_string(),
         no_auth: false,
+        api_profile: ApiProfile::Full,
         disable_dashboard: false,
         allow_no_auth_public_bind: false,
         admin_key_env: Some("admin-secret".to_string()),

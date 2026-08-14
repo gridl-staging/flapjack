@@ -10,6 +10,7 @@ use tracing_subscriber::Layer;
 use crate::admin_key_persistence::{
     ensure_admin_key_permissions, persist_admin_key_file, PermissionFailureMode,
 };
+use crate::api_profile::ApiProfile;
 use crate::auth::{generate_admin_key, generate_hex_key, KeyStore};
 use flapjack_replication::config::NodeConfig;
 use std::sync::Arc;
@@ -347,6 +348,7 @@ pub(crate) fn log_memory_configuration() {
 pub(crate) struct ServerConfig {
     pub env_mode: String,
     pub no_auth: bool,
+    pub api_profile: ApiProfile,
     pub disable_dashboard: bool,
     pub allow_no_auth_public_bind: bool,
     pub admin_key_env: Option<String>,
@@ -402,6 +404,10 @@ pub(crate) fn load_server_config() -> Result<ServerConfig, String> {
         .ok()
         .filter(|value| value == "1")
         .is_some();
+    let api_profile = ApiProfile::from_env().map_err(|error| error.to_string())?;
+    api_profile
+        .validate_auth_enabled(!no_auth)
+        .map_err(|error| error.to_string())?;
     let disable_dashboard = std::env::var("FLAPJACK_DISABLE_DASHBOARD")
         .ok()
         .filter(|value| value == "1")
@@ -462,6 +468,7 @@ pub(crate) fn load_server_config() -> Result<ServerConfig, String> {
     Ok(ServerConfig {
         env_mode,
         no_auth,
+        api_profile,
         disable_dashboard,
         allow_no_auth_public_bind,
         admin_key_env,

@@ -112,6 +112,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             cors_mode,
             disable_dashboard: server_config.disable_dashboard,
             replication_api_key: server_config.replication_api_key_env.clone(),
+            api_profile: server_config.api_profile,
         },
     );
 

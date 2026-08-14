@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VALIDATOR="$SCRIPT_DIR/validate_sync_surface.sh"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/flapjack-sync-surface-test.XXXXXX")"
 
@@ -42,6 +43,14 @@ assert_not_contains() {
     printf '%s\n' "--- $context output ---" >&2
     sed -n '1,180p' "$output_file" >&2
     fail "$context: found unexpected text: $unexpected"
+  fi
+}
+
+assert_pbv1_profile_doc_is_publishable() {
+  local doc_path="engine/docs2/3_IMPLEMENTATION/PAID_BETA_V1_API_PROFILE.md"
+  [ -f "$REPO_DIR/$doc_path" ] || fail "PBV1 profile doc is missing: $doc_path"
+  if git -C "$REPO_DIR" check-ignore --no-index -q "$doc_path"; then
+    fail "PBV1 profile doc is ignored and would be omitted from a fresh public mirror: $doc_path"
   fi
 }
 
@@ -328,6 +337,7 @@ main() {
   write_clean_fixture "$repo"
   cp -R "$repo" "$pristine"
 
+  assert_pbv1_profile_doc_is_publishable
   assert_clean_fixture "$repo" clean_fixture
   assert_parser_failure_is_red "$repo"
 
