@@ -3684,6 +3684,7 @@ async fn contention_yield_records_writer_close_reason() {
         WRITE_QUEUE_WRITER_CLOSES_METRIC_NAME,
         &[("tenant", "yield_metric_a"), ("reason", "waiter_yield")],
     );
+    let waiter_registrations_before = shared_budget.writer_waiter_registration_count();
     let task_b = register_task(tasks_b.as_ref(), "yield_metric_b_task", 1, 1);
     enqueue_write(
         &tx_b,
@@ -3696,7 +3697,7 @@ async fn contention_yield_records_writer_close_reason() {
     )
     .await;
     tokio::time::timeout(WRITE_QUEUE_PROGRESS_TIMEOUT, async {
-        while !shared_budget.has_writer_waiters() {
+        while shared_budget.writer_waiter_registration_count() == waiter_registrations_before {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -3775,6 +3776,7 @@ async fn busy_tenant_yields_contended_writer_after_commit() {
     .await;
     wait_for_task_success(tasks_a.as_ref(), &initial_a).await;
 
+    let waiter_registrations_before = shared_budget.writer_waiter_registration_count();
     let task_b = register_task(tasks_b.as_ref(), "busy_tenant_b_task", 1, 1);
     enqueue_write(
         &tx_b,
@@ -3787,7 +3789,7 @@ async fn busy_tenant_yields_contended_writer_after_commit() {
     )
     .await;
     tokio::time::timeout(WRITE_QUEUE_PROGRESS_TIMEOUT, async {
-        while !shared_budget.has_writer_waiters() {
+        while shared_budget.writer_waiter_registration_count() == waiter_registrations_before {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -4867,6 +4869,7 @@ async fn writer_lifetime_metrics_survive_multiple_commits() {
         wait_for_task_success(tasks.as_ref(), &task_id).await;
     }
 
+    let waiter_registrations_before = shared_budget.writer_waiter_registration_count();
     let waiter_task = register_task(waiter_tasks.as_ref(), "writer_lifetime_waiter_task", 1, 1);
     enqueue_write(
         &waiter_tx,
@@ -4879,7 +4882,7 @@ async fn writer_lifetime_metrics_survive_multiple_commits() {
     )
     .await;
     tokio::time::timeout(WRITE_QUEUE_PROGRESS_TIMEOUT, async {
-        while !shared_budget.has_writer_waiters() {
+        while shared_budget.writer_waiter_registration_count() == waiter_registrations_before {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
