@@ -541,6 +541,14 @@ assert_named_step_order_in_job "$CI_WORKFLOW" "ci.yml" "rust-tests-all" "Install
 assert_capped_vector_job_prebuild_binding "$CI_WORKFLOW" "ci.yml" "rust-tests-all" "All tests (vector-search)" "cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci --no-fail-fast"
 assert_step_contract "$NIGHTLY_WORKFLOW" "nightly.yml" "Run all tests" "cargo nextest run -P ci" "45"
 
+section "Playwright browser install timeout contract"
+assert_step_contract "$CI_WORKFLOW" "ci.yml" "Install console Playwright browser" "npx playwright install chromium" "5"
+assert_step_contract "$CI_WORKFLOW" "ci.yml" "Install dashboard page Playwright browser" "npx playwright install chromium" "5"
+assert_step_contract "$CI_WORKFLOW" "ci.yml" "Install dashboard full Playwright browser" "npx playwright install chromium" "5"
+assert_step_contract "$CI_WORKFLOW" "ci.yml" "Install dashboard integration Playwright browser" "npx playwright install chromium" "5"
+assert_step_contract "$CI_WORKFLOW" "ci.yml" "Install SDK Playwright browser" "npx playwright install chromium" "5"
+assert_step_contract "$NIGHTLY_WORKFLOW" "nightly.yml" "Install dashboard nightly Playwright browser" "npx playwright install chromium" "5"
+
 printf '\n\033[1mResults: %d/%d passed\033[0m\n' "$TESTS_PASSED" "$TESTS_RUN"
 if [ "$TESTS_FAILED" -gt 0 ]; then
   printf '\033[0;31m%d test(s) failed\033[0m\n' "$TESTS_FAILED"
