@@ -22,7 +22,7 @@ describe('unmocked browser backend safety', () => {
   });
 
   it('refuses direct invocation without a runner-owned test-instance token', () => {
-    expect(() => requireOwnedTestBackend('http://127.0.0.1:7700', undefined)).toThrow(
+    expect(() => requireOwnedTestBackend('http://127.0.0.1:7700', '')).toThrow(
       /test-instance token/
     );
   });

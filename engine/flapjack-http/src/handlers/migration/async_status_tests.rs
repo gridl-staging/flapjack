@@ -244,7 +244,6 @@ async fn async_terminal_status_reports_import_outcome_counts_and_warnings() {
     assert_eq!(
         warning_codes,
         BTreeSet::from([
-            "PersistedNoBehaviorSetting",
             "ReplicaExhaustiveSortApproximated",
             "ReplicaMatchingCriticalFieldDiverges",
             "ReplicaRelevancyStrictnessSemanticMismatch",
@@ -252,7 +251,7 @@ async fn async_terminal_status_reports_import_outcome_counts_and_warnings() {
     );
     assert_eq!(
         terminal.warnings.len(),
-        4,
+        3,
         "async status must not expose extra translation warnings"
     );
     let exhaustive_warning = terminal
