@@ -1,3 +1,4 @@
+//! Stub summary for engine/src/index/write_queue_tests.rs.
 // These guards intentionally serialize process-environment overrides across
 // complete async specimens; releasing them at awaits would make the tests race.
 #![allow(clippy::await_holding_lock)]
@@ -169,6 +170,7 @@ fn test_batch_flush_decision_uses_resolved_batch_size_snapshot() {
     });
 }
 
+/// TODO: Document test_with_write_queue_batch_size_env_restores_env_after_panic.
 #[test]
 fn test_with_write_queue_batch_size_env_restores_env_after_panic() {
     let _guard = WRITE_QUEUE_ENV_LOCK
@@ -4098,6 +4100,7 @@ fn newest_replacement_drop_keeps_older_queue_metric_labels_registered() {
     );
 }
 
+/// TODO: Document test_acquire_writer_for_queue_returns_writer_contention_error_not_queue_full.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn test_acquire_writer_for_queue_returns_writer_contention_error_not_queue_full() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -4142,6 +4145,7 @@ async fn test_acquire_writer_for_queue_returns_writer_contention_error_not_queue
     );
 }
 
+/// TODO: Document test_write_queue_absorbs_1500_op_burst_without_queue_full.
 #[tokio::test(flavor = "current_thread")]
 async fn test_write_queue_absorbs_1500_op_burst_without_queue_full() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -4187,6 +4191,7 @@ async fn test_write_queue_absorbs_1500_op_burst_without_queue_full() {
     }
 }
 
+/// TODO: Document test_write_queue_close_flush_commits_once.
 #[tokio::test(flavor = "current_thread")]
 async fn test_write_queue_close_flush_commits_once() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -4408,6 +4413,7 @@ async fn test_write_queue_amortizes_commits_under_fast_push() {
     );
 }
 
+/// TODO: Document test_batch_settings_load_failure_marks_all_tasks_failed.
 #[tokio::test]
 async fn test_batch_settings_load_failure_marks_all_tasks_failed() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -4508,6 +4514,7 @@ async fn delete_term_probe_counts_upsert_but_not_add() {
     );
 }
 
+/// TODO: Document test_commit_batch_basic_add.
 #[tokio::test]
 async fn test_commit_batch_basic_add() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -4531,6 +4538,7 @@ async fn test_commit_batch_basic_add() {
     assert_task_succeeded(tasks.as_ref(), &task_id, 2);
 }
 
+/// TODO: Document test_commit_batch_upsert.
 #[tokio::test]
 async fn test_commit_batch_upsert() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -4560,6 +4568,7 @@ async fn test_commit_batch_upsert() {
     assert_task_succeeded(tasks.as_ref(), &task_id_2, 1);
 }
 
+/// TODO: Document test_commit_batch_delete.
 #[tokio::test]
 async fn test_commit_batch_delete() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -4589,6 +4598,7 @@ async fn test_commit_batch_delete() {
     assert_task_succeeded(tasks.as_ref(), &task_id_2, 1);
 }
 
+/// TODO: Document test_write_queue_phase_metrics_records_batch_lifecycle_series.
 #[tokio::test]
 async fn test_write_queue_phase_metrics_records_batch_lifecycle_series() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -5022,6 +5032,7 @@ async fn test_vector_write_context_shares_dashmap() {
     assert_eq!(ctx.vector_indices.len(), 1);
 }
 
+/// TODO: Document test_create_write_queue_with_vector_indices.
 #[cfg(feature = "vector-search")]
 #[tokio::test]
 async fn test_create_write_queue_with_vector_indices() {
