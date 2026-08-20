@@ -225,7 +225,7 @@ assert_capped_vector_job_prebuild_binding() {
   local capped_step_name="$4"
   local capped_step_command="$5"
   local prebuild_step_name="Build vector-search test binaries"
-  local prebuild_command="cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci --no-fail-fast --no-run"
+  local prebuild_command="cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci --no-run"
   local signal_job_block_unique="0"
   local signal_canonical_prebuild_present="0"
   local signal_canonical_capped_present="0"
@@ -330,7 +330,7 @@ jobs:
       - name: Fast tests (vector-search)
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search
       - name: Build vector-search test binaries
-        run: cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci --no-fail-fast --no-run
+        run: cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci --no-run
 YAML
 
   local binding_output
