@@ -289,7 +289,10 @@ def verify(root=ROOT, manifest_path=MANIFEST_PATH, jobs=None, actual_ignored=Non
     all_job = jobs[".github/workflows/ci.yml#rust-tests-all"]
     if "RUSTFLAGS: -C debuginfo=0" not in all_job:
         raise ContractError("rust-tests-all must own one canonical job-level RUSTFLAGS profile")
-    prebuild = "cargo build --tests -p flapjack -p flapjack-http --features vector-search"
+    prebuild = (
+        "cargo nextest run -p flapjack -p flapjack-http "
+        "--features vector-search -P ci --no-fail-fast --no-run"
+    )
     if prebuild not in all_job or "RUSTFLAGS='" + "-C debuginfo=0 -C strip=debuginfo' " + prebuild in all_job:
         raise ContractError("vector prebuild and nextest must share the job-level compilation identity")
 
