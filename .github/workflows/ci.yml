@@ -226,6 +226,11 @@ jobs:
       - name: All tests (vector-search)
         timeout-minutes: 20
         run: cargo nextest run -p flapjack -p flapjack-http --features vector-search -P ci --no-fail-fast
+      - name: Build remaining test binaries
+        timeout-minutes: 30
+        # Preserve the lean/default feature contract, but keep cold compilation
+        # outside the bounded execution step just as the vector lane does.
+        run: cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication -P ci --no-run
       - name: All tests (remaining)
         timeout-minutes: 10
         run: cargo nextest run -p flapjack-server -p flapjack-ssl -p flapjack-replication -P ci --no-fail-fast

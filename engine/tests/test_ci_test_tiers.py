@@ -295,6 +295,12 @@ def verify(root=ROOT, manifest_path=MANIFEST_PATH, jobs=None, actual_ignored=Non
     )
     if prebuild not in all_job or "RUSTFLAGS='" + "-C debuginfo=0 -C strip=debuginfo' " + prebuild in all_job:
         raise ContractError("vector prebuild and nextest must share the job-level compilation identity")
+    remaining_prebuild = (
+        "cargo nextest run -p flapjack-server -p flapjack-ssl "
+        "-p flapjack-replication -P ci --no-run"
+    )
+    if remaining_prebuild not in all_job:
+        raise ContractError("remaining-crates prebuild must share the capped nextest compilation identity")
 
 
 class TestTierContract(unittest.TestCase):
